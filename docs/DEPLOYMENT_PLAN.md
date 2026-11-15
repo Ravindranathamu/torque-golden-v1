@@ -329,9 +329,11 @@ Expected:
 5. Enable MFA for the developer account.
 6. Brand the confirmation and recovery emails if they are used.
 
-> The portal UI currently has no login screen. Gate **G2** is the work needed to
-> make this Auth setup actually protect the portal tables. Until then, keep the
-> portal URL private and treat it as a pilot system.
+> The portal now has an email/password sign-in screen (`/developer`) and requires
+> `app_metadata.role = "ravsoft_admin"` on the Auth user. Gate **G2** is closed in
+> code: anon access to the portal tables is revoked, so an unauthenticated visitor
+> sees the sign-in form and no data. Keep the portal URL private until the live
+> verification (§6) and security checklist (§9) pass.
 
 ### 2.5 Build and deploy the portal frontend
 
