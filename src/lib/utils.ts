@@ -1,0 +1,268 @@
+import type {
+  DiscountType,
+  JobCard,
+  JobPart,
+  JobTask,
+  WorkerProfile,
+} from "../types";
+
+export function money(value: number, decimals = 0): string {
+  return `LKR ${new Intl.NumberFormat("en-LK", {
+    minimumFractionDigits: decimals,
+    maximumFractionDigits: decimals,
+  }).format(Number.isFinite(value) ? value : 0)}`;
+}
+
+export function num(value: number): string {
+  return new Intl.NumberFormat("en-LK").format(value);
+}
+
+/** Formats whole and fractional issue quantities without noisy trailing zeros. */
+export function formatQty(value: number, unit?: string): string {
+  const rounded = Math.round((Number.isFinite(value) ? value : 0) * 1000) / 1000;
+  const text = new Intl.NumberFormat("en-LK", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 3,
+  }).format(rounded);
+  return unit ? `${text} ${unit}` : text;
+}
+
+export function partIssueQty(part: Pick<JobPart, "qtyIssued" | "qtyRequested">): number {
+  if (part.qtyIssued > 0) return part.qtyIssued;
+  return Math.max(0, part.qtyRequested);
+}
+
+export function shortDate(iso?: string): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+export function dateTime(iso?: string): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-GB", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+export function timeAgo(iso?: string): string {
+  if (!iso) return "";
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "yesterday";
+  if (days < 30) return `${days}d ago`;
+  return shortDate(iso);
+}
+
+export function todayISO(): string {
+  const d = new Date();
+  d.setHours(12, 0, 0, 0);
+  return d.toISOString();
+}
+
+export function dateOnly(iso: string): string {
+  return iso.slice(0, 10);
+}
+
+export function isoDaysFrom(base: string | Date, days: number): string {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  return d.toISOString();
+}
+
+export function daysAgoISO(days: number, hour = 10): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  d.setHours(hour, 15, 0, 0);
+  return d.toISOString();
+}
+
+export function daysUntil(iso?: string): number {
+  if (!iso) return 0;
+  const target = new Date(iso);
+  target.setHours(0, 0, 0, 0);
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  return Math.round((target.getTime() - now.getTime()) / 86400000);
+}
+
+export function daysBetween(a: string, b: string): number {
+  const start = new Date(a);
+  const end = new Date(b);
+  start.setHours(0, 0, 0, 0);
+  end.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.round((end.getTime() - start.getTime()) / 86400000));
+}
+
+/** Normalise a Sri Lankan number to WhatsApp format: 94771234567 */
+export function normalizePhone(input: string): string {
+  let digits = String(input || "").replace(/[^\d]/g, "");
+  if (digits.startsWith("94")) return digits;
+  if (digits.startsWith("0")) digits = digits.slice(1);
+  return `94${digits}`;
+}
+
+export function displayPhone(input: string): string {
+  const n = normalizePhone(input);
+  if (n.length < 11) return input;
+  return `+${n.slice(0, 2)} ${n.slice(2, 4)} ${n.slice(4, 7)} ${n.slice(7)}`;
+}
+
+/** Demo mode routes every outbound customer message to the developer test number. */
+export const DEMO_WHATSAPP_NUMBER = "94755756803";
+
+export function isDemoMode(): boolean {
+  try {
+    const raw = localStorage.getItem("torque_workshop_erp_v1");
+    if (!raw) return false;
+    const parsed = JSON.parse(raw) as { settings?: { demoMode?: boolean } };
+    return parsed.settings?.demoMode === true;
+  } catch {
+    return false;
+  }
+}
+
+export function waLink(phone: string, message: string): string {
+  const recipient = isDemoMode() ? DEMO_WHATSAPP_NUMBER : normalizePhone(phone);
+  return `https://wa.me/${recipient}?text=${encodeURIComponent(message)}`;
+}
+
+export function uid(prefix = "id"): string {
+  return `${prefix}_${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+}
+
+export interface JobTotals {
+  labor: number;
+  parts: number;
+  subtotal: number;
+  discount: number;
+  vat: number;
+  total: number;
+  partsCost: number;
+  commission: number;
+  issuedParts: JobPart[];
+  billableParts: JobPart[];
+  includedParts: JobPart[];
+  activeTasks: JobTask[];
+}
+
+export function jobTotals(
+  job: JobCard,
+  tasks: JobTask[],
+  parts: JobPart[],
+  workers: WorkerProfile[],
+): JobTotals {
+  const activeTasks = tasks.filter((t) => t.jobCardId === job.id);
+  const allIssuedParts = parts.filter(
+    (p) =>
+      p.jobCardId === job.id &&
+      (p.status === "Issued" || p.status === "Exchange Pending" || p.status === "Return Pending"),
+  );
+  const billableParts = allIssuedParts.filter(
+    (p) => !p.includedInLabor && p.sellingPrice > 0,
+  );
+  const includedParts = allIssuedParts.filter(
+    (p) => p.includedInLabor || p.sellingPrice <= 0,
+  );
+  const issuedParts = billableParts;
+  const labor = activeTasks.reduce((sum, t) => sum + t.laborCost, 0);
+  const partsTotal = billableParts.reduce(
+    (sum, p) => sum + p.sellingPrice * partIssueQty(p),
+    0,
+  );
+  const partsCost = allIssuedParts.reduce(
+    (sum, p) => sum + p.costPrice * partIssueQty(p),
+    0,
+  );
+  const subtotal = labor + partsTotal;
+  let discount = 0;
+  if (job.discount > 0) {
+    discount =
+      job.discountType === "Percentage"
+        ? (subtotal * job.discount) / 100
+        : job.discount;
+  }
+  discount = Math.min(discount, subtotal);
+  const commission = activeTasks.reduce((sum, t) => {
+    const worker = workers.find((w) => w.id === t.workerId);
+    return sum + (t.laborCost * (worker?.commissionRate ?? 0)) / 100;
+  }, 0);
+  const vat = Math.max(0, job.vatAmount ?? 0);
+  return {
+    labor,
+    parts: partsTotal,
+    subtotal,
+    discount,
+    vat,
+    total: Math.max(0, subtotal - discount + vat),
+    partsCost,
+    commission,
+    issuedParts,
+    billableParts,
+    includedParts,
+    activeTasks,
+  };
+}
+
+export function discountValue(
+  subtotal: number,
+  value: number,
+  type: DiscountType,
+): number {
+  if (!value) return 0;
+  return Math.min(
+    subtotal,
+    type === "Percentage" ? (subtotal * value) / 100 : value,
+  );
+}
+
+export function driverCommissionFor(
+  job: JobCard,
+  totals: Pick<JobTotals, "labor" | "total">,
+): number {
+  if (!job.driver || job.driver.value <= 0) return 0;
+  const base = job.driver.basis === "Labour" ? totals.labor : totals.total;
+  const amount =
+    job.driver.type === "Percentage" ? (base * job.driver.value) / 100 : job.driver.value;
+  return Math.max(0, Math.round(amount * 100) / 100);
+}
+
+export function isWithinRange(iso: string, range: "today" | "month" | "year"): boolean {
+  const d = new Date(iso);
+  const now = new Date();
+  if (range === "today") {
+    return (
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate()
+    );
+  }
+  if (range === "month") {
+    return d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth();
+  }
+  return d.getFullYear() === now.getFullYear();
+}
+
+export function initials(name: string): string {
+  return name
+    .split(" ")
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((n) => n[0]?.toUpperCase())
+    .join("");
+}
+
+export function classNames(...parts: (string | false | null | undefined)[]): string {
+  return parts.filter(Boolean).join(" ");
+}

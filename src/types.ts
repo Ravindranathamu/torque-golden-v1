@@ -1,0 +1,1011 @@
+export type Department = "PRO" | "Supervisor" | "Cashier" | "Accounting" | "Stores";
+
+export type Role = "Owner" | Department;
+
+export type FeatureFlagKey =
+  | "enable_multi_sections"
+  | "enable_paint_module"
+  | "enable_insurance_module"
+  | "enable_estimates_module"
+  | "enable_vat_invoicing"
+  | "enable_advanced_accounting"
+  | "enable_payroll_epf_etf"
+  | "enable_daily_wages"
+  | "enable_driver_commissions"
+  | "enable_petty_cash"
+  | "enable_voice_notifications";
+
+export type FeatureFlags = Record<FeatureFlagKey, boolean>;
+
+export type StoresTopology = "Central" | "PerSection";
+
+export interface WorkshopSection {
+  id: string;
+  name: string;
+  code: string;
+  description?: string;
+  color: string;
+  supervisorIds: string[];
+  storekeeperIds: string[];
+  workerIds: string[];
+  active: boolean;
+  createdAt: string;
+}
+
+export interface OpenContainerIssue {
+  id: string;
+  jobCardId: string;
+  partId: string;
+  qty: number;
+  issuedAt: string;
+  issuedBy?: string;
+}
+
+export interface OpenContainer {
+  id: string;
+  itemId: string;
+  itemName: string;
+  sectionId?: string;
+  label: string;
+  capacity: number;
+  remainingQty: number;
+  unit: string;
+  costPerUnit: number;
+  sellingPricePerUnit: number;
+  status: "Open" | "Empty" | "Closed";
+  openedAt: string;
+  openedBy?: string;
+  closedAt?: string;
+  closedBy?: string;
+  issues: OpenContainerIssue[];
+}
+
+export type NotificationEventType =
+  | "job"
+  | "inventory"
+  | "payment"
+  | "cheque"
+  | "appointment";
+
+export interface UserNotificationPreferences {
+  voiceEnabled: boolean;
+  jobUpdates: boolean;
+  inventoryAlerts: boolean;
+  paymentAlerts: boolean;
+  chequeAlerts: boolean;
+  appointmentAlerts?: boolean;
+  /** Event types that are spoken aloud. Empty means none. */
+  voiceEvents?: NotificationEventType[];
+  /** Optional installed voice name; empty uses the device default. */
+  voiceName?: string;
+  /** Speech rate between 0.7 and 1.3. */
+  voiceRate?: number;
+  /** Play a short chime before speaking on mobile. */
+  voiceChime?: boolean;
+}
+
+export interface WorkshopUser {
+  id: string;
+  name: string;
+  username: string;
+  pin: string;
+  isOwner: boolean;
+  departments: Department[];
+  phone: string;
+  email?: string;
+  baseSalary: number;
+  commissionRate: number;
+  gdriveEmail?: string;
+  workerId?: string;
+  sectionIds?: string[];
+  active: boolean;
+  createdAt: string;
+  notificationPreferences?: UserNotificationPreferences;
+}
+
+export type CheckInStatus = "Awaiting Approval" | "Accepted" | "Rejected";
+
+export interface DriverCommission {
+  name: string;
+  phone: string;
+  basis: "Labour" | "Total Bill";
+  type: "Fixed" | "Percentage";
+  value: number;
+  addedBy?: string;
+  addedAt?: string;
+  updatedBy?: string;
+  updatedAt?: string;
+}
+
+export interface CheckIn {
+  id: string;
+  createdAt: string;
+  vehicleNo: string;
+  make: string;
+  model: string;
+  customerName: string;
+  phone: string;
+  mileage: number;
+  email?: string;
+  address?: string;
+  driverName?: string;
+  driverPhone?: string;
+  driverBasis?: DriverCommission["basis"];
+  driverType?: DriverCommission["type"];
+  driverValue?: number;
+  status: CheckInStatus;
+}
+
+export interface DamagePhoto {
+  id: string;
+  name: string;
+  dataUrl: string;
+}
+
+export type JobStatus =
+  | "In Progress"
+  | "Repair Completed"
+  | "Paid"
+  | "Released on Credit"
+  | "Dispatched";
+
+export type PaymentMethod = "Cash" | "Card" | "Credit" | "Insurance" | "Cheque";
+export type DiscountType = "Fixed" | "Percentage";
+
+export type JobIntakeType = "Repair" | "Estimate";
+
+export interface JobCard {
+  id: string;
+  numericId: number;
+  checkInId?: string;
+  createdAt: string;
+  acceptedAt?: string;
+  completedAt?: string;
+  paidAt?: string;
+  dispatchedAt?: string;
+  vehicleNo: string;
+  make: string;
+  model: string;
+  customerName: string;
+  phone: string;
+  customerAddress?: string;
+  mileage: number;
+  repairType: string;
+  intakeType: JobIntakeType;
+  sectionIds?: string[];
+  safetyNotes?: string;
+  photos: DamagePhoto[];
+  driveFolderId?: string;
+  status: JobStatus;
+  discount: number;
+  discountType: DiscountType;
+  paymentMethod?: PaymentMethod;
+  creditGraceDays?: number;
+  dispatchedBy?: string;
+  /** PRO gate override — vehicle left without payment. */
+  billingOverrideReason?: string;
+  billingOverrideBy?: string;
+  billingOverrideAt?: string;
+  driver?: DriverCommission;
+  insuranceClaimId?: string;
+  chequeId?: string;
+  customerTinNumber?: string;
+  isVatInvoice?: boolean;
+  vatRateApplied?: number;
+  vatAmount?: number;
+}
+
+export interface JobTask {
+  id: string;
+  jobCardId: string;
+  name: string;
+  laborCost: number;
+  workerId: string;
+  sectionId?: string;
+  catalogueItemId?: string;
+  createdAt: string;
+  addedBy?: string;
+  addedAt?: string;
+}
+
+export type PartStatus =
+  | "Requested"
+  | "Issued"
+  | "Exchange Pending"
+  | "Return Pending"
+  | "Returned"
+  | "Backordered";
+
+export interface JobPart {
+  id: string;
+  jobCardId: string;
+  itemId: string;
+  itemName: string;
+  qtyRequested: number;
+  qtyIssued: number;
+  costPrice: number;
+  marginPercent: number;
+  sellingPrice: number;
+  status: PartStatus;
+  sectionId?: string;
+  includedInLabor?: boolean;
+  measuredQty?: boolean;
+  supplierId?: string;
+  supplierInvoiceNo?: string;
+  warrantyReplacementInvoiceNo?: string;
+  warrantyStatus?: "None" | "Claimed" | "Replaced" | "Credited";
+  warrantyNote?: string;
+  creditNoteNo?: string;
+  creditNoteAmount?: number;
+  salvageStatus?: "Pending" | "Submitted" | "Not Required";
+  salvageNote?: string;
+  salvageRef?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SupplierCreditNote {
+  id: string;
+  supplierId: string;
+  partId?: string;
+  jobCardId?: string;
+  supplierInvoiceNo: string;
+  creditNoteNo: string;
+  amount: number;
+  date: string;
+  reason: string;
+  status: "Recorded" | "Applied";
+}
+
+export interface EstimateLine {
+  id: string;
+  type: "Labour" | "Part";
+  description: string;
+  qty: number;
+  unitPrice: number;
+}
+
+export interface JobEstimate {
+  id: string;
+  jobCardId: string;
+  kind: "Initial" | "Supplementary";
+  number: string;
+  revision: number;
+  status: "Draft" | "Awaiting Approval" | "Approved" | "Rejected";
+  lines: EstimateLine[];
+  notes: string;
+  createdAt: string;
+  updatedAt?: string;
+  createdBy?: string;
+  approvedAt?: string;
+  approvedBy?: string;
+}
+
+export interface InsuranceCompany {
+  id: string;
+  name: string;
+  address: string;
+  email: string;
+  hotline: string;
+  website?: string;
+  tinNumber?: string;
+  active?: boolean;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface InsuranceClaim {
+  id: string;
+  jobCardId: string;
+  insurerId: string;
+  claimNo: string;
+  policyNo: string;
+  assessorName?: string;
+  assessorPhone?: string;
+  estimateStatus: "Pending" | "Submitted" | "Approved";
+  estimateApprovedAt?: string;
+  partsStatus: "Pending" | "Submitted" | "Approved";
+  partsApprovedAt?: string;
+  insuranceBillNo?: string;
+  insuranceBillAmount?: number;
+  insuranceBillAt?: string;
+  customerBillNo?: string;
+  customerBillAmount?: number;
+  releaseOrderNo?: string;
+  releaseOrderReceivedAt?: string;
+  salvageStatus: "Pending" | "Submitted" | "Not Required";
+  salvageSubmittedAt?: string;
+  salvageReference?: string;
+  chequeNo?: string;
+  chequeAmount?: number;
+  chequeReceivedAt?: string;
+  chequeClearedAt?: string;
+  chequeBank?: string;
+  chequeBranch?: string;
+  chequeDate?: string;
+  chequeStatus?: ChequeStatus;
+  chequeBounceReason?: string;
+  chequeId?: string;
+  branchAddressOverride?: string;
+  isVatInvoice?: boolean;
+  vatRateApplied?: number;
+  vatAmount?: number;
+  status: "Open" | "Estimate Approved" | "Parts Approved" | "Awaiting Payment" | "Settled";
+  createdAt: string;
+}
+
+export interface AdvancePayment {
+  id: string;
+  jobCardId: string;
+  customerName: string;
+  vehicleNo: string;
+  phone: string;
+  amount: number;
+  method: "Cash" | "Card" | "Bank Transfer" | "Cheque";
+  receiptNo: string;
+  note?: string;
+  createdAt: string;
+  recordedBy?: string;
+  chequeId?: string;
+  chequeNo?: string;
+  chequeBank?: string;
+  chequeBranch?: string;
+  chequeDate?: string;
+  chequeStatus?: ChequeStatus;
+}
+
+export interface AttendanceRecord {
+  id: string;
+  date: string;
+  workerId: string;
+  sectionId?: string;
+  status: "Present" | "Absent" | "Off Day";
+  markedAt: string;
+  markedBy?: string;
+}
+
+export type AppointmentStatus =
+  | "Pending"
+  | "Confirmed"
+  | "Rescheduled"
+  | "Arrived"
+  | "Fulfilled"
+  | "Cancelled"
+  | "No Show";
+
+export interface Appointment {
+  id: string;
+  reference: string;
+  createdAt: string;
+  updatedAt: string;
+  token: string;
+  customerName: string;
+  phone: string;
+  vehicleNo: string;
+  vehicleModel: string;
+  repairType: string;
+  scheduledAt: string;
+  notes?: string;
+  status: AppointmentStatus;
+  source: "Booking link" | "Staff";
+  createdBy?: string;
+  confirmedAt?: string;
+  confirmedBy?: string;
+  cancelledAt?: string;
+  cancelReason?: string;
+  rescheduledFrom?: string;
+  employeeNote?: string;
+  fulfilledAt?: string;
+  checkInId?: string;
+}
+
+export interface AppointmentBookingInput {
+  token: string;
+  customerName: string;
+  phone: string;
+  vehicleNo: string;
+  vehicleModel: string;
+  repairType: string;
+  scheduledAt: string;
+  notes?: string;
+}
+
+export interface StaffLoan {
+  id: string;
+  workerId: string;
+  date: string;
+  principal: number;
+  balance: number;
+  monthlyDeduction: number;
+  reason: string;
+  status: "Active" | "Settled";
+}
+
+export interface Payslip {
+  id: string;
+  workerId: string;
+  periodStart: string;
+  periodEnd: string;
+  workedDays: number;
+  workingDays: number;
+  basic: number;
+  commission: number;
+  loanDeduction: number;
+  epfEmployee: number;
+  epfEmployer: number;
+  etfEmployer: number;
+  otherDeductions: number;
+  gross: number;
+  net: number;
+  paidAt: string;
+  paidBy?: string;
+  note?: string;
+}
+
+export interface WagePayout {
+  id: string;
+  workerId: string;
+  date: string;
+  days: number;
+  baseAmount: number;
+  commissionAmount: number;
+  commissionIncluded: boolean;
+  amount: number;
+  receiptNo: string;
+  paidAt: string;
+  paidBy?: string;
+}
+
+export interface ServiceRecord {
+  id: string;
+  jobCardId: string;
+  vehicleNo: string;
+  make: string;
+  model: string;
+  customerName: string;
+  date: string;
+  mileage: number;
+  repairType: string;
+  tasks: {
+    name: string;
+    workerId: string;
+    workerName: string;
+    laborCost: number;
+  }[];
+  parts: {
+    itemName: string;
+    supplierId?: string;
+    supplierInvoiceNo?: string;
+    qty: number;
+    sellingPrice: number;
+    status: PartStatus;
+  }[];
+  total: number;
+}
+
+export type StockType = "Spare Part" | "Consumable";
+
+export interface InventoryItem {
+  id: string;
+  code: string;
+  name: string;
+  type: StockType;
+  make?: string;
+  model?: string;
+  stock: number;
+  minStock: number;
+  unit: string;
+  lastSellingPrice?: number;
+  lastCostPrice?: number;
+  sectionId?: string;
+  /** Consumables can be measured out of an open shop-floor container. */
+  sharedConsumable?: boolean;
+  /** Base measure used for fractional issues, e.g. g, ml, pc. */
+  measureUnit?: string;
+  /** Units in one sealed pack, e.g. 1000 for a 1 kg tin measured in g. */
+  packSize?: number;
+  packLabel?: string;
+  supplierId?: string;
+  isOpeningStock?: boolean;
+  openingStockSetAt?: string;
+}
+
+export interface PurchaseLine {
+  id: string;
+  itemId: string;
+  itemName: string;
+  qty: number;
+  costPrice: number;
+  sellingPrice?: number;
+}
+
+export interface Supplier {
+  id: string;
+  name: string;
+  phone: string;
+  contactPerson?: string;
+  outstandingCredit: number;
+}
+
+export interface SupplierPurchase {
+  id: string;
+  supplierId: string;
+  invoiceNo: string;
+  amount: number;
+  type: "Cash" | "Credit";
+  creditDays: number;
+  purchaseDate: string;
+  dueDate?: string;
+  status: "Unpaid" | "Paid";
+  description: string;
+  lines?: PurchaseLine[];
+  goodsConfirmedBy?: string;
+  goodsConfirmedAt?: string;
+  paidBy?: string;
+  paidAt?: string;
+  paymentMethod?: "Cash" | "Bank Transfer" | "Cheque";
+  bankAccountId?: string;
+  chequeId?: string;
+}
+
+export interface CustomerCredit {
+  id: string;
+  jobCardId: string;
+  customerName: string;
+  vehicleNo: string;
+  phone: string;
+  total: number;
+  paid: number;
+  creditDate: string;
+  dueDate: string;
+  graceDays: number;
+  status: "Unpaid" | "Partially Paid" | "Settled";
+}
+
+export type ExpenseCategory =
+  | "Rental"
+  | "Electricity"
+  | "Water"
+  | "Operational Cost"
+  | "Other Expenses";
+
+export interface Expense {
+  id: string;
+  date: string;
+  category: ExpenseCategory;
+  amount: number;
+  description: string;
+}
+
+export type LedgerPaymentMethod =
+  | "Cash"
+  | "Card"
+  | "Credit"
+  | "Credit Settlement"
+  | "Cheque"
+  | "Cheque Settlement"
+  | "Insurance"
+  | "Insurance Settlement";
+
+export interface LedgerSectionBreakdown {
+  sectionId: string;
+  sectionName: string;
+  laborRevenue: number;
+  partsRevenue: number;
+  partsCost: number;
+  commission: number;
+}
+
+export interface LedgerEntry {
+  id: string;
+  jobCardId?: string;
+  date: string;
+  laborRevenue: number;
+  partsRevenue: number;
+  partsCost: number;
+  commission: number;
+  discount: number;
+  paymentMethod: LedgerPaymentMethod;
+  settlementAmount?: number;
+  workerId?: string;
+  driverCommission?: number;
+  insuranceClaimId?: string;
+  sectionBreakdown?: LedgerSectionBreakdown[];
+  description: string;
+}
+
+export type MarketingType = "Periodic Cycle" | "Mileage Milestone";
+export type MarketingStatus = "Pending" | "Reminder Sent" | "Completed";
+
+export interface MarketingReminder {
+  id: string;
+  vehicleNo: string;
+  customerName: string;
+  phone: string;
+  triggerType: MarketingType;
+  targetDate?: string;
+  targetMileage?: number;
+  dispatchDate?: string;
+  readyAt?: string;
+  status: MarketingStatus;
+  avgCycleDays?: number;
+  createdAt: string;
+}
+
+export type NotificationDepartment = Department | "Owner";
+
+export interface AppNotification {
+  id: string;
+  departments: NotificationDepartment[];
+  title: string;
+  message: string;
+  priority: "normal" | "high" | "critical";
+  createdAt: string;
+  read: boolean;
+  link?: string;
+  /** Used for short, vehicle-only voice announcements. */
+  vehicleNo?: string;
+  eventType?: NotificationEventType;
+}
+
+export type PrinterMode = "Standard_PC" | "Thermal_Only" | "Both";
+export type ThermalPaperWidth = "58mm" | "80mm";
+export type StandardPaperSize = "A4" | "A5";
+
+export type LicenceStatus = "Trial" | "Active" | "Suspended" | "Expired";
+export type LicencePlan = "Starter" | "Professional" | "Enterprise";
+
+export interface WorkshopSettings {
+  companyName: string;
+  address: string;
+  phone: string;
+  email: string;
+  logo?: string;
+  brandColor: string;
+  accentColor: string;
+  googleReviewUrl: string;
+  currency: string;
+  qrSlug: string;
+  ownerPassword: string;
+  configured: boolean;
+  demoMode: boolean;
+  createdAt: string;
+  workingDays: number[];
+  epfEmployeeRate: number;
+  epfEmployerRate: number;
+  etfRate: number;
+  trialStartedAt: string;
+  licenseKey?: string;
+  licenseActivatedAt?: string;
+  licenseExpiresAt?: string;
+  licenseHolder?: string;
+  installationId?: string;
+  licenseStatus?: LicenceStatus;
+  licensePlan?: LicencePlan | string;
+  lastLicenceSyncAt?: string;
+  lastLicenceServerTime?: string;
+  licenceClockRollback?: boolean;
+  featureFlags?: FeatureFlags;
+  storesTopology?: StoresTopology;
+  tinNumber?: string;
+  vatRegNumber?: string;
+  defaultVatRate?: number;
+  placeOfSupply?: string;
+  footerInquiryLine?: string;
+  footerComplaintLine?: string;
+  printerMode?: PrinterMode;
+  thermalPaperWidth?: ThermalPaperWidth;
+  standardPaperSize?: StandardPaperSize;
+  /** Secret token embedded in the public reservation link. */
+  bookingToken?: string;
+  /** Self-hosted WAHA WhatsApp gateway settings. */
+  whatsappMode?: "Disabled" | "WAHA";
+  whatsappGatewayUrl?: string;
+  whatsappSession?: string;
+  whatsappApiKey?: string;
+  whatsappCompanyNumber?: string;
+  whatsappConnected?: boolean;
+  whatsappAutoSend?: boolean;
+  whatsappOwnerNotify?: boolean;
+  whatsappLastQrAt?: string;
+}
+
+export interface WorkerProfile {
+  id: string;
+  fullName: string;
+  phone: string;
+  nic: string;
+  address: string;
+  emergencyName: string;
+  emergencyPhone: string;
+  baseSalary: number;
+  commissionRate: number;
+  joined: string;
+  status: "Active" | "Suspended" | "Terminated";
+  bankName: string;
+  accountNumber: string;
+  userId?: string;
+  sectionIds?: string[];
+  payType: "Monthly" | "Daily";
+  dailyRate: number;
+  epfEnabled: boolean;
+  etfEnabled: boolean;
+  commissionEnabled: boolean;
+  allowedOffDaysPerMonth: number;
+}
+
+export type ChequeStatus = "In_Safe" | "Deposited" | "Cleared" | "Bounced";
+
+export type ChequeSource = "Checkout" | "Advance" | "Credit" | "Insurance";
+
+export interface ChequeDetails {
+  chequeNo: string;
+  bank: string;
+  branch: string;
+  chequeDate: string;
+  amount: number;
+}
+
+export interface CustomerCheque extends ChequeDetails {
+  id: string;
+  source: ChequeSource;
+  jobCardId?: string;
+  creditId?: string;
+  advanceId?: string;
+  insuranceClaimId?: string;
+  customerName: string;
+  vehicleNo: string;
+  phone: string;
+  status: ChequeStatus;
+  bounceReason?: string;
+  receivedAt: string;
+  receivedBy?: string;
+  clearedAt?: string;
+  bankAccountId?: string;
+  note?: string;
+}
+
+export interface CreditPayment {
+  id: string;
+  creditId: string;
+  amount: number;
+  method: "Cash" | "Card" | "Bank Transfer" | "Cheque";
+  date: string;
+  chequeId?: string;
+  bankAccountId?: string;
+  recordedBy?: string;
+  reversed?: boolean;
+}
+
+export type SupplierChequeStatus =
+  | "Issued_PDC"
+  | "Cleared"
+  | "Taken_Back_Paid_Cash";
+
+export interface SupplierCheque extends ChequeDetails {
+  id: string;
+  supplierId: string;
+  purchaseId?: string;
+  status: SupplierChequeStatus;
+  issuedAt: string;
+  issuedBy?: string;
+  clearedAt?: string;
+  takenBackAt?: string;
+  note?: string;
+}
+
+export type StockMovementType =
+  | "Opening_Stock"
+  | "Purchase"
+  | "Job_Issue"
+  | "Supplier_Return"
+  | "Job_Return"
+  | "Container_Open"
+  | "Container_Empty";
+
+export interface StockMovement {
+  id: string;
+  itemId: string;
+  itemName: string;
+  date: string;
+  type: StockMovementType;
+  qty: number;
+  reference: string;
+  note?: string;
+  createdBy?: string;
+  isOpeningStock?: boolean;
+}
+
+export interface SupplierReturnLine {
+  itemId: string;
+  itemName: string;
+  qty: number;
+  costPrice: number;
+}
+
+export interface SupplierReturn {
+  id: string;
+  supplierId: string;
+  purchaseId?: string;
+  invoiceNo: string;
+  date: string;
+  total: number;
+  reason: string;
+  lines: SupplierReturnLine[];
+  createdBy?: string;
+  creditNoteNo?: string;
+}
+
+export type BankAccountType = "Bank" | "Cash";
+
+export interface BankAccount {
+  id: string;
+  name: string;
+  bankName: string;
+  branch: string;
+  accountNumber: string;
+  type: BankAccountType;
+  openingBalance: number;
+  active: boolean;
+  createdAt: string;
+}
+
+export type BankDirection = "Credit_In" | "Debit_Out";
+
+export interface BankTransaction {
+  id: string;
+  accountId: string;
+  date: string;
+  direction: BankDirection;
+  amount: number;
+  category: string;
+  description: string;
+  reference?: string;
+  linkedType?:
+    | "Opening_Balance"
+    | "Job"
+    | "Credit"
+    | "Cheque"
+    | "Supplier"
+    | "Petty_Cash"
+    | "Loan"
+    | "Transfer"
+    | "Manual";
+  linkedId?: string;
+  transferGroup?: string;
+  createdBy?: string;
+}
+
+export type PettyCashCategory =
+  | "Fuel"
+  | "Transport"
+  | "Office Supplies"
+  | "Refreshments"
+  | "Repairs"
+  | "Other";
+
+export interface PettyCashEntry {
+  id: string;
+  voucherNo?: string;
+  date: string;
+  type: "Float_Topup" | "Expense";
+  category: PettyCashCategory | "Float";
+  amount: number;
+  description: string;
+  paidTo?: string;
+  photoDataUrl?: string;
+  receiptNo: string;
+  createdAt: string;
+  recordedBy?: string;
+  bankAccountId?: string;
+}
+
+export interface WorkshopLoan {
+  id: string;
+  lender: string;
+  purpose: string;
+  principal: number;
+  balance: number;
+  monthlyInstallment: number;
+  startDate: string;
+  nextDueDate: string;
+  status: "Active" | "Settled";
+  createdAt: string;
+}
+
+export interface WorkshopLoanPayment {
+  id: string;
+  loanId: string;
+  amount: number;
+  date: string;
+  method: "Cash" | "Bank Transfer" | "Cheque";
+  bankAccountId?: string;
+  receiptNo: string;
+  recordedBy?: string;
+}
+
+export interface VehicleBill {
+  id: string;
+  jobCardId: string;
+  vehicleNo: string;
+  kind: "Insurance" | "Customer";
+  billNo: string;
+  amount: number;
+  createdAt: string;
+  createdBy?: string;
+  claimId?: string;
+  insurerId?: string;
+  notes?: string;
+}
+
+export interface AppState {
+  version: number;
+  settings: WorkshopSettings;
+  users: WorkshopUser[];
+  workers: WorkerProfile[];
+  checkIns: CheckIn[];
+  jobCards: JobCard[];
+  tasks: JobTask[];
+  parts: JobPart[];
+  inventory: InventoryItem[];
+  suppliers: Supplier[];
+  purchases: SupplierPurchase[];
+  supplierCreditNotes: SupplierCreditNote[];
+  customerCredits: CustomerCredit[];
+  expenses: Expense[];
+  ledger: LedgerEntry[];
+  marketing: MarketingReminder[];
+  notifications: AppNotification[];
+  appointments: Appointment[];
+  estimates: JobEstimate[];
+  advancePayments: AdvancePayment[];
+  insuranceCompanies: InsuranceCompany[];
+  insuranceJobs: InsuranceClaim[];
+  vehicleBills: VehicleBill[];
+  attendance: AttendanceRecord[];
+  staffLoans: StaffLoan[];
+  payslips: Payslip[];
+  wagePayouts: WagePayout[];
+  serviceRecords: ServiceRecord[];
+  bankAccounts: BankAccount[];
+  bankTransactions: BankTransaction[];
+  pettyCash: PettyCashEntry[];
+  customerCheques: CustomerCheque[];
+  supplierCheques: SupplierCheque[];
+  creditPayments: CreditPayment[];
+  supplierReturns: SupplierReturn[];
+  stockMovements: StockMovement[];
+  workshopLoans: WorkshopLoan[];
+  workshopLoanPayments: WorkshopLoanPayment[];
+  sections: WorkshopSection[];
+  openContainers: OpenContainer[];
+  currentUserId: string | null;
+}
+
+export interface NewCheckInInput {
+  vehicleNo: string;
+  make: string;
+  model: string;
+  customerName: string;
+  phone: string;
+  mileage: number;
+  email?: string;
+  address?: string;
+  driverName?: string;
+  driverPhone?: string;
+  driverBasis?: DriverCommission["basis"];
+  driverType?: DriverCommission["type"];
+  driverValue?: number;
+}
+
+export interface CheckoutInput {
+  paymentMethod: PaymentMethod;
+  discount: number;
+  discountType: DiscountType;
+  graceDays?: number;
+  cheque?: ChequeDetails;
+  bankAccountId?: string;
+  isVatInvoice?: boolean;
+  vatRate?: number;
+  customerTinNumber?: string;
+}
