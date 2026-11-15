@@ -258,6 +258,18 @@ workspaces from one login, with no role switch and no "already assigned"
 conflict. The sidebar shows the union; notifications target every department
 the user belongs to; the profile menu lists all roles.
 
+In cloud mode, the owner can change a staff member's departments without SQL:
+open **Team & HR → Staff access**, edit the person and tick every department
+they cover. The app writes the change to `public.profiles` with the owner's
+session, so it survives reload and applies at that person's next sign-in. The
+same dialog also shows a coverage summary so no department is left unstaffed.
+
+Creating or deleting the underlying Supabase **Auth** user is a server-side
+action. Do it with the Admin API or the Supabase dashboard; the Team screen
+deliberately blocks those two actions in cloud mode rather than pretending a
+local-only account exists. In demo/local mode, PIN accounts are created and
+removed directly in Team.
+
 Worker payroll is held in `public.workers`, not `profiles`:
 
 ```sql

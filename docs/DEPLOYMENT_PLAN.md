@@ -1605,6 +1605,9 @@ Run this after Phase 3 and before handover.
 ### 6.3 Client
 
 - [ ] Owner can sign in.
+- [ ] One staff account is assigned **Supervisor + Stores**; both workspaces open from one login and the profile menu lists both.
+- [ ] Change that person's departments in **Team & HR → Staff access**, reload, and confirm the change persisted in `profiles`.
+- [ ] A Stores-only user cannot open `/workshop`; a Supervisor-only user cannot open `/stores`.
 - [ ] Trial/active licence shows the correct plan and expiry.
 - [ ] **Settings → Licence** shows the correct installation and machine IDs.
 - [ ] One job card created end-to-end.

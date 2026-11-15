@@ -19,6 +19,7 @@ import {
   Wallet,
 } from "lucide-react";
 import { useApp } from "../state/AppStore";
+import { supabase } from "../lib/supabase";
 import { featureEnabled } from "../lib/features";
 import { commissionsByWorker } from "../lib/analytics";
 import { dateOnly, money, shortDate, waLink } from "../lib/utils";
@@ -78,10 +79,12 @@ const emptyWorkerForm = {
 };
 
 export function TeamPage() {
-  const { state, addUser, updateUser, removeUser, addWorker, updateWorker } = useApp();
+  const { state, currentUser, cloudStatus, addUser, updateUser, removeUser, addWorker, updateWorker } = useApp();
   const { push } = useToast();
   const [tab, setTab] = useState<TeamTab>("staff");
-  const [unlocked, setUnlocked] = useState(false);
+  const [unlockedLocal, setUnlockedLocal] = useState(false);
+  const cloudMode = cloudStatus !== "disabled";
+  const unlocked = cloudMode ? Boolean(currentUser?.isOwner) : unlockedLocal;
   const [password, setPassword] = useState("");
   const [staffOpen, setStaffOpen] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
@@ -116,7 +119,7 @@ export function TeamPage() {
       push("Incorrect master password.", "error");
       return;
     }
-    setUnlocked(true);
+    setUnlockedLocal(true);
     setPassword("");
     push("Owner controls unlocked for this session.");
   }
@@ -124,6 +127,12 @@ export function TeamPage() {
   function openAddStaff() {
     if (!unlocked) {
       push("Unlock owner controls to manage staff accounts.", "error");
+      return;
+    }
+    if (cloudMode) {
+      push(
+        "Sign-in accounts live on the workshop server. Ask RAVsoft to create the Auth account, then assign its departments here.",
+      );
       return;
     }
     setEditingUserId(null);
@@ -153,7 +162,7 @@ export function TeamPage() {
     setStaffOpen(true);
   }
 
-  function saveStaff() {
+  async function saveStaff() {
     if (!staffForm.name.trim()) {
       push("Enter the staff member's full name.", "error");
       return;
@@ -170,7 +179,7 @@ export function TeamPage() {
       push("That username is already in use.", "error");
       return;
     }
-    if (!/^\d{4,6}$/.test(staffForm.pin)) {
+    if (!cloudMode && !/^\d{4,6}$/.test(staffForm.pin)) {
       push("PIN must be 4 to 6 digits.", "error");
       return;
     }
@@ -189,7 +198,7 @@ export function TeamPage() {
       return;
     }
     if (editingUser) {
-      updateUser({
+      const nextUser = {
         ...editingUser,
         name: staffForm.name.trim(),
         username: staffForm.username.trim().toLowerCase(),
@@ -202,8 +211,33 @@ export function TeamPage() {
         commissionRate,
         workerId: staffForm.workerId || undefined,
         active: editingUser.isOwner ? true : staffForm.active,
-      });
-      push("Staff account updated.");
+      };
+      if (cloudMode && supabase) {
+        const { error } = await supabase
+          .from("profiles")
+          .update({
+            full_name: nextUser.name,
+            username: nextUser.username,
+            phone: nextUser.phone,
+            email: nextUser.email ?? null,
+            gdrive_email: nextUser.gdriveEmail ?? null,
+            departments: nextUser.departments,
+            base_salary: nextUser.baseSalary,
+            commission_rate: nextUser.commissionRate,
+            active: nextUser.active,
+          })
+          .eq("id", editingUser.id);
+        if (error) {
+          push(`Could not save the staff profile: ${error.message}`, "error");
+          return;
+        }
+      }
+      updateUser(nextUser);
+      push(
+        cloudMode
+          ? "Staff departments saved to the workshop server. Changes apply at their next sign-in."
+          : "Staff account updated.",
+      );
     } else {
       addUser({
         name: staffForm.name.trim(),
@@ -228,6 +262,14 @@ export function TeamPage() {
 
   function confirmRemoveStaff() {
     if (!removeTarget) return;
+    if (cloudMode) {
+      push(
+        "Removing a sign-in account is a server-side action. Suspend the profile instead, or ask RAVsoft to delete the Auth user.",
+        "error",
+      );
+      setRemoveTarget(null);
+      return;
+    }
     const result = removeUser(removeTarget.id);
     if (!result.ok) {
       push(result.message ?? "Could not remove this account.", "error");
@@ -383,13 +425,24 @@ export function TeamPage() {
       <ShieldCheck />
       <div className="row-between wrap" style={{ width: "100%" }}>
         <span>
-          <strong>Owner controls unlocked</strong> — salary, commission and access changes are
-          available until you sign out or lock the page.
+          {cloudMode ? (
+            <>
+              <strong>Owner controls unlocked</strong> — you are signed in as the owner, so
+              departments, salaries and access changes are available for this session.
+            </>
+          ) : (
+            <>
+              <strong>Owner controls unlocked</strong> — salary, commission and access changes are
+              available until you sign out or lock the page.
+            </>
+          )}
         </span>
-        <button className="btn btn-ghost btn-sm" onClick={() => setUnlocked(false)}>
-          <Lock />
-          Lock again
-        </button>
+        {!cloudMode && (
+          <button className="btn btn-ghost btn-sm" onClick={() => setUnlockedLocal(false)}>
+            <Lock />
+            Lock again
+          </button>
+        )}
       </div>
     </div>
   );
@@ -470,7 +523,11 @@ export function TeamPage() {
             <div className="card-head">
               <div>
                 <h3>Staff accounts & login access</h3>
-                <p>Each person signs in with a PIN and only sees their departments.</p>
+                <p>
+                  {cloudMode
+                    ? "Each person signs in with their workshop email and password; departments decide which workspaces open."
+                    : "Each person signs in with a PIN and only sees their departments."}
+                </p>
               </div>
               <span className="badge badge-green">
                 {state.users.filter((user) => user.active).length} active
@@ -540,8 +597,12 @@ export function TeamPage() {
                             <button
                               className="btn btn-ghost btn-sm"
                               onClick={() => setRemoveTarget(user)}
-                              disabled={!unlocked}
-                              title="Remove account"
+                              disabled={!unlocked || cloudMode}
+                              title={
+                                cloudMode
+                                  ? "Sign-in accounts are deleted on the workshop server by RAVsoft"
+                                  : "Remove account"
+                              }
                             >
                               <Trash2 />
                             </button>
@@ -863,18 +924,20 @@ export function TeamPage() {
                 onChange={(event) => setStaffForm({ ...staffForm, username: event.target.value })}
               />
             </Field>
-            <Field label="Login PIN" required hint="4 to 6 digits. Share it securely.">
-              <input
-                className="input"
-                inputMode="numeric"
-                maxLength={6}
-                placeholder="1234"
-                value={staffForm.pin}
-                onChange={(event) =>
-                  setStaffForm({ ...staffForm, pin: event.target.value.replace(/\D/g, "") })
-                }
-              />
-            </Field>
+            {!cloudMode && (
+              <Field label="Login PIN" required hint="4 to 6 digits. Share it securely.">
+                <input
+                  className="input"
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="1234"
+                  value={staffForm.pin}
+                  onChange={(event) =>
+                    setStaffForm({ ...staffForm, pin: event.target.value.replace(/\D/g, "") })
+                  }
+                />
+              </Field>
+            )}
             <Field label="Phone" required>
               <input
                 className="input"
