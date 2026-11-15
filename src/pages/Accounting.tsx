@@ -640,7 +640,7 @@ export function AccountingPage() {
             <StatCard
               label={`Revenue · ${periodLabels[period]}`}
               value={money(pnl.revenue)}
-              meta={`${money(pnl.cashSales)} cash & card · ${money(pnl.creditSales)} credit`}
+              meta={`${money(pnl.cashSales)} cash, card & bank · ${money(pnl.creditSales)} credit`}
               icon={<Wallet />}
             />
             <StatCard
@@ -910,7 +910,7 @@ export function AccountingPage() {
             <Landmark />
             <div>
               <strong>Reconciliation snapshot</strong>
-              Cash and card sales {money(pnl.cashSales)} + credit invoices {money(pnl.creditSales)}{" "}
+              Cash, card and bank sales {money(pnl.cashSales)} + credit invoices {money(pnl.creditSales)}{" "}
               + credit settlements {money(pnl.creditSettlements)} ={" "}
               <strong>{money(pnl.revenue + pnl.creditSettlements)}</strong> total billings and
               collections. Receivables still to collect: {money(pnl.receivables)}. Bank & cash

@@ -59,8 +59,10 @@ import {
   buildInsuranceBillPdf,
   buildInsuranceEstimatePdf,
   downloadInvoice,
+  downloadVehicleBill,
   printDriverCommissionChit,
   printInvoice,
+  printVehicleBill,
   shareEstimateWhatsApp,
   shareInsuranceBillWhatsApp,
   shareInsuranceEstimateWhatsApp,
@@ -2996,6 +2998,7 @@ export function JobDetailPage() {
                           <th>Type</th>
                           <th className="num">Items</th>
                           <th className="num">Net payable</th>
+                          <th>Status</th>
                           <th>Recorded</th>
                           <th />
                         </tr>
@@ -3024,6 +3027,7 @@ export function JobDetailPage() {
                               {(bill.taskIds?.length ?? 0) + (bill.partIds?.length ?? 0)}
                             </td>
                             <td className="num">{money(bill.netPayable ?? bill.amount)}</td>
+                            <td><StatusBadge status={bill.status ?? "Unpaid"} /></td>
                             <td>
                               <div className="tiny muted">
                                 {dateTime(bill.createdAt)}
@@ -3031,19 +3035,55 @@ export function JobDetailPage() {
                               </div>
                             </td>
                             <td>
-                              <button
-                                className="btn btn-ghost btn-sm"
-                                title="Remove this bill and unlock its items"
-                                onClick={() => {
-                                  removeVehicleBill(bill.id);
-                                  push(
-                                    `${bill.billNo} removed. Its items are available to bill again.`,
-                                    "info",
-                                  );
-                                }}
-                              >
-                                <Trash2 />
-                              </button>
+                              <div className="row" style={{ justifyContent: "flex-end", gap: 3 }}>
+                                <button
+                                  className="btn btn-ghost btn-sm"
+                                  title="Print this bill"
+                                  onClick={() =>
+                                    printVehicleBill(
+                                      activeJob,
+                                      bill,
+                                      jobTasks.filter((task) => bill.taskIds?.includes(task.id)),
+                                      jobParts.filter((part) => bill.partIds?.includes(part.id)),
+                                      state.settings,
+                                      insurancePdfData,
+                                    )
+                                  }
+                                >
+                                  <Printer />
+                                </button>
+                                <button
+                                  className="btn btn-ghost btn-sm"
+                                  title="Download this bill as PDF"
+                                  onClick={() =>
+                                    downloadVehicleBill(
+                                      activeJob,
+                                      bill,
+                                      jobTasks.filter((task) => bill.taskIds?.includes(task.id)),
+                                      jobParts.filter((part) => bill.partIds?.includes(part.id)),
+                                      state.settings,
+                                      insurancePdfData,
+                                    )
+                                  }
+                                >
+                                  <Download />
+                                </button>
+                                {bill.status !== "Paid" && bill.status !== "Release Order" && (
+                                  <button
+                                    className="btn btn-ghost btn-sm"
+                                    title="Remove this bill and unlock its items"
+                                    onClick={() => {
+                                      removeVehicleBill(bill.id);
+                                      push(
+                                        `${bill.billNo} removed. Its items are available to bill again.`,
+                                        "info",
+                                      );
+                                    }}
+                                  >
+                                    <Trash2 />
+                                  </button>
+                                )}
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -4411,7 +4451,7 @@ export function JobDetailPage() {
                       const blocked =
                         Boolean(part.assignedBillId) ||
                         (splitBillKind === "Insurance" && Boolean(part.isCustomerExtra)) ||
-                        (splitBillKind === "Customer" &&
+                        (splitBillKind !== "Insurance" &&
                           part.partSource === "Customer_Brought");
                       return (
                         <tr key={part.id}>

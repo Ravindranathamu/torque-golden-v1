@@ -10,6 +10,7 @@ import type {
   Payslip,
   WagePayout,
   WorkerProfile,
+  VehicleBill,
   WorkshopSettings,
 } from "../types";
 import {
@@ -30,10 +31,12 @@ import {
   buildIrdInsuranceBillPdf,
   buildIrdInsuranceEstimatePdf,
   buildIrdInvoicePdf,
+  buildVehicleBillPdf,
   printA4AdvanceReceipt,
   printIrdInvoice,
   printThermalAdvanceReceipt,
   printThermalInvoice,
+  printVehicleBill as printIrdVehicleBill,
   type InvoiceDocumentOptions,
 } from "./ird";
 
@@ -837,6 +840,41 @@ export function buildInsuranceBillPdf(
   detail?: { tasks?: JobTask[]; parts?: JobPart[] },
 ): { blob: Blob; filename: string } {
   return buildIrdInsuranceBillPdf(job, claim, insurer, settings, lines, detail);
+}
+
+export function printVehicleBill(
+  job: JobCard,
+  bill: VehicleBill,
+  tasks: JobTask[],
+  parts: JobPart[],
+  settings: WorkshopSettings,
+  insurance?: { claim: InsuranceClaim; insurer?: InsuranceCompany },
+): void {
+  printIrdVehicleBill(job, bill, tasks, parts, settings, insurance);
+}
+
+export async function downloadVehicleBill(
+  job: JobCard,
+  bill: VehicleBill,
+  tasks: JobTask[],
+  parts: JobPart[],
+  settings: WorkshopSettings,
+  insurance?: { claim: InsuranceClaim; insurer?: InsuranceCompany },
+): Promise<void> {
+  const { blob, filename } = buildVehicleBillPdf(
+    job,
+    bill,
+    tasks,
+    parts,
+    settings,
+    insurance,
+  );
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
 }
 
 export async function shareInsuranceBillWhatsApp(

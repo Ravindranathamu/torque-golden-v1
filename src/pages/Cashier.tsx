@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  AlertTriangle,
   ArrowRight,
   Banknote,
   CheckCircle2,
@@ -24,9 +25,11 @@ import { jobTotals, money, shortDate, timeAgo, waLink } from "../lib/utils";
 import { checkoutMessage } from "../lib/messages";
 import {
   downloadInvoice,
+  downloadVehicleBill,
   printAdvanceReceipt,
   printDriverCommissionChit,
   printInvoice,
+  printVehicleBill,
   shareAdvanceReceiptWhatsApp,
   shareInvoiceWhatsApp,
   totalsForInvoice,
@@ -34,12 +37,19 @@ import {
 import { CreditLedger } from "../components/CreditLedger";
 import { EmptyState, Field, Modal, PageHeader, StatCard, StatusBadge, Tabs } from "../components/ui";
 import { useToast } from "../components/Toast";
-import type { AdvancePayment, DiscountType, JobCard, PaymentMethod } from "../types";
+import type {
+  AdvancePayment,
+  DiscountType,
+  JobCard,
+  PaymentMethod,
+  VehicleBill,
+  VehicleBillPaymentMethod,
+} from "../types";
 
-type CashierTab = "queue" | "advances" | "settled" | "credits";
+type CashierTab = "queue" | "bills" | "advances" | "settled" | "credits";
 
 export function CashierPage() {
-  const { state, checkoutJob, recordAdvancePayment } = useApp();
+  const { state, checkoutJob, recordAdvancePayment, settleVehicleBill } = useApp();
   const { push } = useToast();
   const [tab, setTab] = useState<CashierTab>("queue");
   const [checkoutTargetId, setCheckoutTargetId] = useState<string | null>(null);
@@ -60,6 +70,12 @@ export function CashierPage() {
   const [printFormat, setPrintFormat] = useState<"thermal" | "a4">(
     state.settings.printerMode === "Standard_PC" ? "a4" : "thermal",
   );
+  const [releaseBillId, setReleaseBillId] = useState<string | null>(null);
+  const [releaseOrderNo, setReleaseOrderNo] = useState("");
+  const [releaseAmount, setReleaseAmount] = useState("");
+  const [paymentBillId, setPaymentBillId] = useState<string | null>(null);
+  const [billPaymentMethod, setBillPaymentMethod] =
+    useState<VehicleBillPaymentMethod>("Cash");
 
   const queue = state.jobCards
     .filter((job) => job.status === "Repair Completed")
@@ -73,6 +89,52 @@ export function CashierPage() {
     .filter((job) => !["Paid", "Released on Credit", "Dispatched"].includes(job.status))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const todayPnl = pnlFor(state, "today");
+  const openBills = state.vehicleBills.filter(
+    (bill) => bill.status !== "Paid" && bill.status !== "Release Order",
+  );
+  const billGroups = useMemo(() => {
+    const grouped = new Map<string, VehicleBill[]>();
+    state.vehicleBills.forEach((bill) => {
+      const list = grouped.get(bill.jobCardId) ?? [];
+      list.push(bill);
+      grouped.set(bill.jobCardId, list);
+    });
+    return Array.from(grouped.entries())
+      .map(([jobId, bills]) => {
+        const sorted = [...bills].sort((a, b) =>
+          a.createdAt.localeCompare(b.createdAt),
+        );
+        return {
+          jobId,
+          job: state.jobCards.find((job) => job.id === jobId),
+          bills: sorted,
+          open: sorted.filter(
+            (bill) =>
+              bill.status !== "Paid" && bill.status !== "Release Order",
+          ),
+        };
+      })
+      .sort((a, b) => {
+        if (a.open.length !== b.open.length) {
+          return b.open.length - a.open.length;
+        }
+        return (b.bills[0]?.createdAt ?? "").localeCompare(
+          a.bills[0]?.createdAt ?? "",
+        );
+      });
+  }, [state.vehicleBills, state.jobCards]);
+  const releaseBill =
+    state.vehicleBills.find((bill) => bill.id === releaseBillId) ?? null;
+  const paymentBill =
+    state.vehicleBills.find((bill) => bill.id === paymentBillId) ?? null;
+  const releaseNet = releaseBill
+    ? releaseBill.netPayable ?? releaseBill.amount
+    : 0;
+  const releaseApproved = Number(releaseAmount) || 0;
+  const releaseShortfall = Math.max(
+    0,
+    releaseNet - Math.min(releaseNet, releaseApproved),
+  );
 
   const target = state.jobCards.find((job) => job.id === checkoutTargetId) ?? null;
   const ticket = useMemo(() => {
@@ -281,6 +343,133 @@ export function CashierPage() {
     };
   }
 
+  function insuranceForBill(bill: VehicleBill) {
+    const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
+    const claimId = bill.claimId ?? job?.insuranceClaimId;
+    const claim = claimId
+      ? state.insuranceJobs.find((entry) => entry.id === claimId)
+      : undefined;
+    if (!claim) return undefined;
+    return {
+      claim,
+      insurer: state.insuranceCompanies.find((entry) => entry.id === claim.insurerId),
+    };
+  }
+
+  function billNet(bill: VehicleBill) {
+    return bill.netPayable ?? bill.amount;
+  }
+
+  function billTasks(bill: VehicleBill) {
+    return bill.taskIds?.length
+      ? state.tasks.filter((task) => bill.taskIds?.includes(task.id))
+      : [];
+  }
+
+  function billParts(bill: VehicleBill) {
+    return bill.partIds?.length
+      ? state.parts.filter((part) => bill.partIds?.includes(part.id))
+      : [];
+  }
+
+  function printBillDocument(bill: VehicleBill) {
+    const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
+    if (!job) {
+      push("The job card for this bill could not be found.", "error");
+      return;
+    }
+    printVehicleBill(
+      job,
+      bill,
+      billTasks(bill),
+      billParts(bill),
+      state.settings,
+      insuranceForBill(bill),
+    );
+  }
+
+  async function downloadBillDocument(bill: VehicleBill) {
+    const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
+    if (!job) {
+      push("The job card for this bill could not be found.", "error");
+      return;
+    }
+    setBusy(`bill_download_${bill.id}`);
+    try {
+      await downloadVehicleBill(
+        job,
+        bill,
+        billTasks(bill),
+        billParts(bill),
+        state.settings,
+        insuranceForBill(bill),
+      );
+      push(`${bill.billNo} PDF downloaded.`);
+    } catch {
+      push("Could not generate the bill PDF.", "error");
+    } finally {
+      setBusy("");
+    }
+  }
+
+  function openReleaseBill(bill: VehicleBill) {
+    setReleaseBillId(bill.id);
+    setReleaseOrderNo(bill.releaseOrderNo ?? "");
+    setReleaseAmount(String(billNet(bill)));
+    setPaymentBillId(null);
+  }
+
+  function openPaymentBill(bill: VehicleBill) {
+    setPaymentBillId(bill.id);
+    setBillPaymentMethod("Cash");
+    setReleaseBillId(null);
+  }
+
+  function confirmReleaseBill() {
+    if (!releaseBill) return;
+    if (!releaseOrderNo.trim()) {
+      push("Enter the insurer release order number.", "error");
+      return;
+    }
+    if (!Number.isFinite(releaseApproved) || releaseApproved <= 0) {
+      push("Enter the amount approved on the release order.", "error");
+      return;
+    }
+    const result = settleVehicleBill(releaseBill.id, {
+      method: "Release Order",
+      releaseOrderNo: releaseOrderNo.trim(),
+      releaseOrderAmount: releaseApproved,
+    });
+    if (!result.ok) {
+      push(result.message ?? "Could not release the insurance bill.", "error");
+      return;
+    }
+    push(
+      releaseShortfall > 0.005
+        ? `${releaseBill.billNo} released. Shortfall ${money(releaseShortfall)} was added as a customer-payable additional bill.`
+        : `${releaseBill.billNo} released against order ${releaseOrderNo.trim()}.`,
+    );
+    setReleaseBillId(null);
+    setTab("bills");
+  }
+
+  function confirmBillPayment() {
+    if (!paymentBill) return;
+    const result = settleVehicleBill(paymentBill.id, {
+      method: billPaymentMethod,
+      amount: billNet(paymentBill),
+    });
+    if (!result.ok) {
+      push(result.message ?? "Could not collect the bill payment.", "error");
+      return;
+    }
+    push(
+      `${paymentBill.billNo} paid in full — ${money(billNet(paymentBill))} collected by ${billPaymentMethod}.`,
+    );
+    setPaymentBillId(null);
+    setTab("bills");
+  }
+
   function printJobWithFormat(job: JobCard, format: "thermal" | "a4") {
     printInvoice(
       job,
@@ -364,6 +553,7 @@ export function CashierPage() {
               onChange={setTab}
               tabs={[
                 { id: "queue", label: "Billing queue", count: queue.length },
+                { id: "bills", label: "Separate bills", count: openBills.length },
                 { id: "advances", label: "Advances", count: state.advancePayments.length },
                 { id: "settled", label: "Paid & released", count: settled.length },
                 { id: "credits", label: "Credit ledger" },
@@ -407,7 +597,7 @@ export function CashierPage() {
             tone="purple"
           />
           <StatCard
-            label="Cash & card today"
+            label="Cash, card & bank today"
             value={money(todayPnl.cashSales)}
             meta="Collected at the counter"
             icon={<Banknote />}
@@ -448,6 +638,13 @@ export function CashierPage() {
           ) : (
             queue.map((job) => {
               const totals = jobTotals(job, state.tasks, state.parts, state.workers);
+              const jobBills = state.vehicleBills.filter(
+                (bill) => bill.jobCardId === job.id,
+              );
+              const openJobBills = jobBills.filter(
+                (bill) =>
+                  bill.status !== "Paid" && bill.status !== "Release Order",
+              );
               return (
                 <div className="card" key={job.id}>
                   <div className="card-head">
@@ -498,6 +695,28 @@ export function CashierPage() {
                         <div className="meta">Payable to technicians</div>
                       </div>
                     </div>
+                    {jobBills.length > 0 && (
+                      <div className="alert alert-info" style={{ marginTop: 10 }}>
+                        <ReceiptText />
+                        <div>
+                          This vehicle has {jobBills.length} separate bill
+                          {jobBills.length === 1 ? "" : "s"} —{" "}
+                          {money(
+                            jobBills
+                              .filter((bill) => bill.kind === "Insurance")
+                              .reduce((sum, bill) => sum + billNet(bill), 0),
+                          )}{" "}
+                          insurer and{" "}
+                          {money(
+                            jobBills
+                              .filter((bill) => bill.kind !== "Insurance")
+                              .reduce((sum, bill) => sum + billNet(bill), 0),
+                          )}{" "}
+                          customer. {openJobBills.length} still open; settle each bill separately in
+                          the Separate bills tab.
+                        </div>
+                      </div>
+                    )}
                     <div className="divider" />
                     <div className="row-between wrap">
                       <div className="row wrap small muted">
@@ -511,11 +730,237 @@ export function CashierPage() {
                         <Link className="btn btn-ghost btn-sm" to={`/jobs/${job.id}`}>
                           Review job
                         </Link>
-                        <button className="btn btn-primary" onClick={() => openCheckout(job.id)}>
-                          <Wallet />
-                          Bill & collect
-                        </button>
+                        {jobBills.length > 0 ? (
+                          <button className="btn btn-primary" onClick={() => setTab("bills")}>
+                            <ReceiptText />
+                            Separate bills
+                            {openJobBills.length > 0 ? ` (${openJobBills.length})` : ""}
+                          </button>
+                        ) : (
+                          <button className="btn btn-primary" onClick={() => openCheckout(job.id)}>
+                            <Wallet />
+                            Bill & collect
+                          </button>
+                        )}
                       </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {tab === "bills" && (
+        <div className="stack" style={{ marginTop: 18 }}>
+          {billGroups.length === 0 ? (
+            <div className="card">
+              <EmptyState
+                icon={<ReceiptText size={22} />}
+                title="No separate bills yet"
+                message="Split a vehicle into insurer and customer bills from the job card. Each bill locks its own tasks and parts, then prints and settles independently here."
+                action={
+                  <Link className="btn btn-secondary" to="/workshop">
+                    Open workshop floor
+                    <ArrowRight />
+                  </Link>
+                }
+              />
+            </div>
+          ) : (
+            billGroups.map(({ jobId, job, bills, open }) => {
+              if (!job) return null;
+              const insuranceTotal = bills
+                .filter((bill) => bill.kind === "Insurance")
+                .reduce((sum, bill) => sum + billNet(bill), 0);
+              const customerTotal = bills
+                .filter((bill) => bill.kind !== "Insurance")
+                .reduce((sum, bill) => sum + billNet(bill), 0);
+              const openTotal = open.reduce((sum, bill) => sum + billNet(bill), 0);
+              return (
+                <div className="card" key={jobId}>
+                  <div className="card-head">
+                    <div className="row" style={{ gap: 11 }}>
+                      <span
+                        className="part-icon"
+                        style={{
+                          width: 42,
+                          height: 42,
+                          flex: "0 0 42px",
+                          background: "var(--purple-soft)",
+                          color: "var(--purple)",
+                        }}
+                      >
+                        <ReceiptText size={18} />
+                      </span>
+                      <div>
+                        <div className="row wrap" style={{ gap: 7 }}>
+                          <h3 style={{ fontSize: 16.5, fontWeight: 800, letterSpacing: "-0.02em" }}>
+                            {job.vehicleNo} · {job.make} {job.model}
+                          </h3>
+                          <StatusBadge status={job.status} />
+                        </div>
+                        <p>
+                          {job.customerName} · {job.id} · {bills.length} bill
+                          {bills.length === 1 ? "" : "s"}
+                        </p>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontSize: 20, fontWeight: 780 }}>{money(openTotal)}</div>
+                      <div className="tiny muted">
+                        {open.length} open of {bills.length}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="card-body stack">
+                    <div className="grid cols-3" style={{ gap: 10 }}>
+                      <div className="mini-stat card">
+                        <div className="label">Insurance bill</div>
+                        <div className="value" style={{ fontSize: 15 }}>{money(insuranceTotal)}</div>
+                        <div className="meta">Settle on the insurer release order</div>
+                      </div>
+                      <div className="mini-stat card">
+                        <div className="label">Customer bills</div>
+                        <div className="value" style={{ fontSize: 15 }}>{money(customerTotal)}</div>
+                        <div className="meta">Paid in full by the customer</div>
+                      </div>
+                      <div className="mini-stat card">
+                        <div className="label">Still to settle</div>
+                        <div className="value" style={{ fontSize: 15 }}>{money(openTotal)}</div>
+                        <div className="meta">{open.length} open bill{open.length === 1 ? "" : "s"}</div>
+                      </div>
+                    </div>
+
+                    <div className="table-wrap">
+                      <table className="data">
+                        <thead>
+                          <tr>
+                            <th>Bill</th>
+                            <th>Type</th>
+                            <th className="num">Items</th>
+                            <th className="num">Net payable</th>
+                            <th>Status</th>
+                            <th>Settled</th>
+                            <th />
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {bills.map((bill) => {
+                            const parent = bill.parentBillId
+                              ? state.vehicleBills.find((entry) => entry.id === bill.parentBillId)
+                              : null;
+                            const shortfallBill = bill.shortfallBillId
+                              ? state.vehicleBills.find((entry) => entry.id === bill.shortfallBillId)
+                              : null;
+                            const settled =
+                              bill.status === "Paid" || bill.status === "Release Order";
+                            return (
+                              <tr key={bill.id}>
+                                <td>
+                                  <div className="cell-main">{bill.billNo}</div>
+                                  {bill.parentBillId && (
+                                    <div className="cell-sub">
+                                      Shortfall of {parent?.billNo ?? bill.parentBillId}
+                                    </div>
+                                  )}
+                                  {bill.shortfallBillId && (
+                                    <div className="cell-sub">
+                                      Shortfall billed to{" "}
+                                      {shortfallBill?.billNo ?? bill.shortfallBillId}
+                                    </div>
+                                  )}
+                                  {bill.notes && <div className="cell-sub">{bill.notes}</div>}
+                                </td>
+                                <td>
+                                  <span
+                                    className={`badge ${
+                                      bill.kind === "Insurance"
+                                        ? "badge-blue"
+                                        : bill.kind === "Additional"
+                                          ? "badge-amber"
+                                          : "badge-slate"
+                                    }`}
+                                  >
+                                    {bill.kind}
+                                  </span>
+                                </td>
+                                <td className="num">
+                                  {(bill.taskIds?.length ?? 0) + (bill.partIds?.length ?? 0)}
+                                </td>
+                                <td className="num strong">{money(billNet(bill))}</td>
+                                <td><StatusBadge status={bill.status ?? "Unpaid"} /></td>
+                                <td className="tiny muted">
+                                  {bill.status === "Release Order" ? (
+                                    <>
+                                      RO {bill.releaseOrderNo ?? "—"}
+                                      <div className="cell-sub">
+                                        {shortDate(bill.releaseOrderAt ?? bill.paidAt)}
+                                        {bill.releaseOrderAmount !== undefined
+                                          ? ` · approved ${money(bill.releaseOrderAmount)}`
+                                          : ""}
+                                      </div>
+                                    </>
+                                  ) : bill.status === "Paid" ? (
+                                    <>
+                                      {shortDate(bill.paidAt)}
+                                      <div className="cell-sub">
+                                        {bill.paymentMethod ?? "—"}
+                                        {bill.paidBy ? ` · ${bill.paidBy}` : ""}
+                                      </div>
+                                    </>
+                                  ) : (
+                                    "—"
+                                  )}
+                                </td>
+                                <td>
+                                  <div className="row" style={{ justifyContent: "flex-end", gap: 3 }}>
+                                    <button
+                                      className="btn btn-ghost btn-sm"
+                                      title="Print this bill (A4)"
+                                      onClick={() => printBillDocument(bill)}
+                                    >
+                                      <Printer />
+                                    </button>
+                                    <button
+                                      className="btn btn-ghost btn-sm"
+                                      title="Download this bill as PDF"
+                                      disabled={busy === `bill_download_${bill.id}`}
+                                      onClick={() => downloadBillDocument(bill)}
+                                    >
+                                      <Download />
+                                    </button>
+                                    {bill.kind === "Insurance" && !settled && (
+                                      <button
+                                        className="btn btn-primary btn-sm"
+                                        onClick={() => openReleaseBill(bill)}
+                                      >
+                                        <ShieldCheck />
+                                        Release on order
+                                      </button>
+                                    )}
+                                    {bill.kind !== "Insurance" && !settled && (
+                                      <button
+                                        className="btn btn-primary btn-sm"
+                                        onClick={() => openPaymentBill(bill)}
+                                      >
+                                        <Wallet />
+                                        Collect payment
+                                      </button>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                    <div className="tiny muted">
+                      Insurance bills settle on the insurer release order. Customer and additional
+                      bills are collected in full by the cashier. A short release order creates an
+                      additional customer bill for the difference automatically.
                     </div>
                   </div>
                 </div>
@@ -725,6 +1170,173 @@ export function CashierPage() {
           <CreditLedger />
         </div>
       )}
+
+      <Modal
+        open={Boolean(releaseBill)}
+        onClose={() => setReleaseBillId(null)}
+        title="Release insurance bill on order"
+        subtitle={
+          releaseBill
+            ? `${releaseBill.billNo} · ${releaseBill.vehicleNo} · ${money(releaseNet)}`
+            : undefined
+        }
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setReleaseBillId(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={confirmReleaseBill}>
+              <ShieldCheck />
+              Release on order
+            </button>
+          </>
+        }
+      >
+        {releaseBill && (
+          <div className="stack">
+            <div className="card">
+              <div className="card-body">
+                <div className="kv"><span>Bill</span><span>{releaseBill.billNo}</span></div>
+                <div className="kv"><span>Vehicle</span><span>{releaseBill.vehicleNo}</span></div>
+                <div className="kv">
+                  <span>Insurer</span>
+                  <span>{insuranceForBill(releaseBill)?.insurer?.name ?? "—"}</span>
+                </div>
+                <div className="kv">
+                  <span>Claim</span>
+                  <span>{insuranceForBill(releaseBill)?.claim.claimNo ?? "—"}</span>
+                </div>
+                <div className="kv">
+                  <span>Net payable by insurer</span>
+                  <span className="strong">{money(releaseNet)}</span>
+                </div>
+              </div>
+            </div>
+            <div className="form-grid">
+              <Field label="Release order number" required full>
+                <input
+                  className="input"
+                  placeholder="RO / settlement reference"
+                  value={releaseOrderNo}
+                  onChange={(event) => setReleaseOrderNo(event.target.value)}
+                />
+              </Field>
+              <Field
+                label="Amount approved on order (LKR)"
+                required
+                full
+                hint="If the release order is lower than the bill, the shortfall is billed to the customer automatically."
+              >
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={releaseAmount}
+                  onChange={(event) => setReleaseAmount(event.target.value)}
+                />
+              </Field>
+            </div>
+            {releaseShortfall > 0.005 ? (
+              <div className="alert alert-warn">
+                <AlertTriangle />
+                <div>
+                  The release order is short by <strong>{money(releaseShortfall)}</strong>. This
+                  penalty / under-value difference will be created as a separate additional bill
+                  payable by the customer. The insurance bill itself stays at{" "}
+                  {money(releaseNet)}.
+                </div>
+              </div>
+            ) : (
+              <div className="alert alert-info">
+                <ShieldCheck />
+                <div>
+                  The release order covers the full insurance bill. The vehicle's insurance side is
+                  settled; any customer bill on this vehicle must still be collected.
+                </div>
+              </div>
+            )}
+            <div className="tiny muted">
+              Releasing records the insurer settlement in the ledger and notifies Cashier,
+              Accounting and PRO. Settled bills cannot be deleted.
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(paymentBill)}
+        onClose={() => setPaymentBillId(null)}
+        title="Collect customer bill payment"
+        subtitle={
+          paymentBill
+            ? `${paymentBill.billNo} · ${paymentBill.vehicleNo} · ${money(billNet(paymentBill))}`
+            : undefined
+        }
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setPaymentBillId(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={confirmBillPayment}>
+              <CheckCircle2 />
+              Collect {paymentBill ? money(billNet(paymentBill)) : "payment"}
+            </button>
+          </>
+        }
+      >
+        {paymentBill && (
+          <div className="stack">
+            <div className="card">
+              <div className="card-body">
+                <div className="kv"><span>Bill</span><span>{paymentBill.billNo}</span></div>
+                <div className="kv"><span>Type</span><span>{paymentBill.kind}</span></div>
+                <div className="kv">
+                  <span>Customer</span>
+                  <span>
+                    {state.jobCards.find((job) => job.id === paymentBill.jobCardId)?.customerName ??
+                      "—"}
+                  </span>
+                </div>
+                {paymentBill.parentBillId && (
+                  <div className="kv">
+                    <span>Release order shortfall</span>
+                    <span>
+                      {state.vehicleBills.find((bill) => bill.id === paymentBill.parentBillId)
+                        ?.billNo ?? paymentBill.parentBillId}
+                    </span>
+                  </div>
+                )}
+                <div className="kv">
+                  <span>Amount to collect</span>
+                  <span className="strong">{money(billNet(paymentBill))}</span>
+                </div>
+              </div>
+            </div>
+            <Field label="Payment method" required>
+              <select
+                className="select"
+                value={billPaymentMethod}
+                onChange={(event) =>
+                  setBillPaymentMethod(event.target.value as VehicleBillPaymentMethod)
+                }
+              >
+                <option value="Cash">Cash</option>
+                <option value="Card">Card</option>
+                <option value="Bank Transfer">Bank transfer</option>
+                <option value="Cheque">Cheque</option>
+              </select>
+            </Field>
+            <div className="alert alert-info">
+              <Wallet />
+              <div>
+                Customer bills are collected in full — partial payments are not recorded here. The
+                payment is posted to the ledger against this bill only.
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       <Modal
         open={advanceOpen}

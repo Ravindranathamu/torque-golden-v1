@@ -121,6 +121,7 @@ export function SettingsPage() {
     setStoresTopology,
     updateWorker,
     syncLicence,
+    backupToDrive,
   } = useApp();
   const { push } = useToast();
   const navigate = useNavigate();
@@ -180,6 +181,14 @@ export function SettingsPage() {
   const [licenceKey, setLicenceKey] = useState(settings.licenseKey ?? "");
   const [licenceHolder, setLicenceHolder] = useState(settings.licenseHolder ?? "");
   const [syncingLicence, setSyncingLicence] = useState(false);
+  const [driveForm, setDriveForm] = useState({
+    enabled: settings.driveBackupEnabled ?? false,
+    url: settings.driveBackupUrl ?? "",
+    key: settings.driveBackupKey ?? "",
+    folderId: settings.driveBackupFolderId ?? "",
+    hour: String(settings.driveBackupHour ?? 2),
+  });
+  const [driveBusy, setDriveBusy] = useState(false);
   const [sectionOpen, setSectionOpen] = useState(false);
   const [sectionEditingId, setSectionEditingId] = useState<string | null>(null);
   const [sectionForm, setSectionForm] = useState({
@@ -437,10 +446,15 @@ export function SettingsPage() {
     if (!file) return;
     try {
       const text = await file.text();
-      const parsed = JSON.parse(text) as AppState;
+      const raw = JSON.parse(text) as
+        | AppState
+        | { app?: string; state?: AppState };
+      const parsed =
+        "state" in raw && raw.state ? raw.state : (raw as AppState);
       if (
         !parsed ||
-        (parsed.version !== 1 && parsed.version !== 2) ||
+        typeof parsed.version !== "number" ||
+        parsed.version > 4 ||
         !parsed.settings ||
         !Array.isArray(parsed.users) ||
         !Array.isArray(parsed.jobCards) ||
@@ -455,6 +469,43 @@ export function SettingsPage() {
       navigate("/login", { replace: true });
     } catch {
       push("That file is not a valid Torque workshop backup.", "error");
+    }
+  }
+
+  function saveDriveBackup() {
+    const hour = Number(driveForm.hour);
+    if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+      push("Backup hour must be a whole number between 0 and 23.", "error");
+      return;
+    }
+    if (driveForm.enabled && (!driveForm.url.trim() || !driveForm.key.trim())) {
+      push(
+        "Add the backup webhook URL and secret key before enabling daily backups.",
+        "error",
+      );
+      return;
+    }
+    updateSettings({
+      driveBackupEnabled: driveForm.enabled,
+      driveBackupUrl: driveForm.url.trim(),
+      driveBackupKey: driveForm.key.trim(),
+      driveBackupFolderId: driveForm.folderId.trim(),
+      driveBackupHour: hour,
+    });
+    push("Daily Google Drive backup settings saved.");
+  }
+
+  async function runDriveBackupNow() {
+    setDriveBusy(true);
+    try {
+      const result = await backupToDrive(true);
+      push(
+        result.message ??
+          (result.ok ? "Backup uploaded to Google Drive." : "Backup failed."),
+        result.ok ? "info" : "error",
+      );
+    } finally {
+      setDriveBusy(false);
     }
   }
 
@@ -2509,6 +2560,134 @@ export function SettingsPage() {
               <div className="label">Marketing records</div>
               <div className="value">{state.marketing.length}</div>
               <div className="meta">Retention queue</div>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="card-head">
+              <div>
+                <h3>Daily Google Drive backup</h3>
+                <p>
+                  Upload a complete JSON snapshot to Drive once a day through a secured webhook.
+                </p>
+              </div>
+              <Cloud size={18} className="muted" />
+            </div>
+            <div className="card-body stack">
+              <div className="form-grid">
+                <Field label="Daily backup" full>
+                  <select
+                    className="select"
+                    value={driveForm.enabled ? "on" : "off"}
+                    onChange={(event) =>
+                      setDriveForm((prev) => ({
+                        ...prev,
+                        enabled: event.target.value === "on",
+                      }))
+                    }
+                  >
+                    <option value="off">Disabled</option>
+                    <option value="on">Enabled — upload once a day</option>
+                  </select>
+                </Field>
+                <Field
+                  label="Backup webhook URL"
+                  full
+                  hint="Google Apps Script web app or Supabase Edge Function that writes the JSON file to Drive."
+                >
+                  <input
+                    className="input"
+                    placeholder="https://script.google.com/macros/s/…/exec"
+                    value={driveForm.url}
+                    onChange={(event) =>
+                      setDriveForm((prev) => ({ ...prev, url: event.target.value }))
+                    }
+                  />
+                </Field>
+                <Field label="Secret key" hint="Shared secret checked by the webhook.">
+                  <input
+                    className="input"
+                    type="password"
+                    placeholder="Long random value"
+                    value={driveForm.key}
+                    onChange={(event) =>
+                      setDriveForm((prev) => ({ ...prev, key: event.target.value }))
+                    }
+                  />
+                </Field>
+                <Field label="Drive folder ID" hint="Optional — the webhook default folder is used when blank.">
+                  <input
+                    className="input"
+                    placeholder="1AbCdEfGhIjKlMnOpQrStUvWxYz"
+                    value={driveForm.folderId}
+                    onChange={(event) =>
+                      setDriveForm((prev) => ({ ...prev, folderId: event.target.value }))
+                    }
+                  />
+                </Field>
+                <Field
+                  label="Earliest backup hour (0–23)"
+                  hint="The app uploads once the local clock passes this hour, or at the next launch if it was closed."
+                >
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    max={23}
+                    value={driveForm.hour}
+                    onChange={(event) =>
+                      setDriveForm((prev) => ({ ...prev, hour: event.target.value }))
+                    }
+                  />
+                </Field>
+              </div>
+              <div className="row wrap">
+                <button className="btn btn-primary" onClick={saveDriveBackup}>
+                  <Save />
+                  Save backup settings
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={runDriveBackupNow}
+                  disabled={driveBusy}
+                >
+                  {driveBusy ? <Loader2 className="spin" /> : <UploadCloud />}
+                  Backup now
+                </button>
+              </div>
+              <div className="card">
+                <div className="card-body">
+                  <div className="kv">
+                    <span>Last successful upload</span>
+                    <span>
+                      {settings.lastDriveBackupAt
+                        ? new Date(settings.lastDriveBackupAt).toLocaleString()
+                        : "Never"}
+                    </span>
+                  </div>
+                  <div className="kv">
+                    <span>Last result</span>
+                    <span>{settings.lastDriveBackupStatus ?? "Not run yet"}</span>
+                  </div>
+                  <div className="kv">
+                    <span>Last file</span>
+                    <span>{settings.lastDriveBackupFile ?? "—"}</span>
+                  </div>
+                </div>
+              </div>
+              {driveForm.enabled &&
+                (!driveForm.url.trim() || !driveForm.key.trim()) && (
+                  <Alert tone="warn" icon={<Lock />}>
+                    Daily backup is enabled but the webhook URL or secret key is missing. Nothing
+                    will upload until both are saved.
+                  </Alert>
+                )}
+              <div className="tiny muted">
+                The snapshot includes jobs, parts, bills, staff, ledger, settings and embedded
+                photos. Configure the Apps Script or Edge Function as described in
+                docs/GOOGLE_DRIVE_BACKUP.md. Keep the secret key in the webhook, not in shared
+                documents.
+              </div>
             </div>
           </div>
 

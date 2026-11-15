@@ -162,6 +162,9 @@ const statusTone: Record<string, string> = {
   Terminated: "red",
   Cash: "green",
   Card: "blue",
+  "Bank Transfer": "blue",
+  "Release Order": "blue",
+  Insurance: "blue",
   Credit: "amber",
   "Credit Settlement": "purple",
 };

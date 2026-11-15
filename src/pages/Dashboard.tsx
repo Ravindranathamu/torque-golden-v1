@@ -198,7 +198,7 @@ export function DashboardPage() {
 
       <div className="grid cols-4" style={{ marginTop: 18 }}>
         <StatCard
-          label="Cash & card sales"
+          label="Cash, card & bank sales"
           value={money(pnl.cashSales)}
           meta={`${pnl.revenue > 0 ? (100 - creditShare).toFixed(0) : 0}% of invoiced revenue`}
           icon={<Banknote />}
@@ -273,11 +273,11 @@ export function DashboardPage() {
           <div className="card-head">
             <div>
               <h3>Sales rhythm · last 7 days</h3>
-              <p>Cash/card collected versus credit invoiced.</p>
+              <p>Cash, card and bank collected versus credit invoiced.</p>
             </div>
             <div className="legend">
               <span>
-                <i style={{ background: "var(--brand)" }} /> Cash & card
+                <i style={{ background: "var(--brand)" }} /> Cash, card & bank
               </span>
               <span>
                 <i style={{ background: "var(--accent)" }} /> Credit
@@ -291,7 +291,7 @@ export function DashboardPage() {
                   <div className="bar-group">
                     <div
                       className="bar"
-                      title={`Cash & card ${money(day.cash)}`}
+                      title={`Cash, card & bank ${money(day.cash)}`}
                       style={{ height: `${Math.max(2, (day.cash / maxDay) * 100)}%` }}
                     />
                     <div
@@ -333,7 +333,7 @@ export function DashboardPage() {
               </div>
               <div className="stack" style={{ flex: 1, gap: 10 }}>
                 <div>
-                  <div className="tiny muted">Cash & card</div>
+                  <div className="tiny muted">Cash, card & bank</div>
                   <div className="strong">{money(pnl.cashSales)}</div>
                 </div>
                 <div>

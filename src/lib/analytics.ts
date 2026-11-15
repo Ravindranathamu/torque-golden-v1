@@ -92,7 +92,12 @@ export function pnlFor(state: AppState, period: Period): PnlSummary {
     0,
   );
   const cashSales = entries
-    .filter((entry) => entry.paymentMethod === "Cash" || entry.paymentMethod === "Card")
+    .filter(
+      (entry) =>
+        entry.paymentMethod === "Cash" ||
+        entry.paymentMethod === "Card" ||
+        entry.paymentMethod === "Bank Transfer",
+    )
     .reduce((sum, entry) => sum + ledgerRevenue(entry), 0);
   const creditSales = entries
     .filter((entry) => entry.paymentMethod === "Credit")
@@ -249,7 +254,12 @@ export function dailySales(state: AppState, days = 7): DailySales[] {
       (entry) => new Date(entry.date).toDateString() === key,
     );
     const cash = entries
-      .filter((entry) => entry.paymentMethod === "Cash" || entry.paymentMethod === "Card")
+      .filter(
+        (entry) =>
+          entry.paymentMethod === "Cash" ||
+          entry.paymentMethod === "Card" ||
+          entry.paymentMethod === "Bank Transfer",
+      )
       .reduce((sum, entry) => sum + ledgerRevenue(entry), 0);
     const credit = entries
       .filter((entry) => entry.paymentMethod === "Credit")

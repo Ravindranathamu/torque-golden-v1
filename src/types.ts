@@ -613,6 +613,7 @@ export interface Expense {
 export type LedgerPaymentMethod =
   | "Cash"
   | "Card"
+  | "Bank Transfer"
   | "Credit"
   | "Credit Settlement"
   | "Cheque"
@@ -741,6 +742,16 @@ export interface WorkshopSettings {
   whatsappAutoSend?: boolean;
   whatsappOwnerNotify?: boolean;
   whatsappLastQrAt?: string;
+  /** Daily Google Drive backup through a Google Apps Script / edge-function webhook. */
+  driveBackupEnabled?: boolean;
+  driveBackupUrl?: string;
+  driveBackupKey?: string;
+  driveBackupFolderId?: string;
+  /** Local hour (0-23) after which the daily catch-up backup may run. */
+  driveBackupHour?: number;
+  lastDriveBackupAt?: string;
+  lastDriveBackupStatus?: string;
+  lastDriveBackupFile?: string;
 }
 
 export interface WorkerProfile {
@@ -957,6 +968,14 @@ export interface WorkshopLoanPayment {
   recordedBy?: string;
 }
 
+export type VehicleBillStatus = "Unpaid" | "Paid" | "Release Order";
+export type VehicleBillPaymentMethod =
+  | "Cash"
+  | "Card"
+  | "Bank Transfer"
+  | "Cheque"
+  | "Release Order";
+
 export interface VehicleBill {
   id: string;
   jobCardId: string;
@@ -983,6 +1002,20 @@ export interface VehicleBill {
   policyExcess?: number;
   depreciation?: number;
   netPayable?: number;
+  /** Unpaid until the insurer release order or customer payment settles it. */
+  status?: VehicleBillStatus;
+  paidAmount?: number;
+  paidAt?: string;
+  paidBy?: string;
+  paymentMethod?: VehicleBillPaymentMethod;
+  /** Insurer release order that settled an insurance bill. */
+  releaseOrderNo?: string;
+  releaseOrderAmount?: number;
+  releaseOrderAt?: string;
+  /** Additional customer bill created when the release order is short. */
+  shortfallBillId?: string;
+  /** Insurance bill that produced this shortfall adjustment. */
+  parentBillId?: string;
 }
 
 export interface AppState {

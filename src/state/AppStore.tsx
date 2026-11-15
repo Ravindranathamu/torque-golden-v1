@@ -54,6 +54,7 @@ import type {
   StoresTopology,
   UserNotificationPreferences,
   VehicleBill,
+  VehicleBillPaymentMethod,
   WorkshopLoan,
   WorkshopLoanPayment,
   WorkshopSection,
@@ -77,6 +78,7 @@ import {
   partIssueQty,
   uid,
 } from "../lib/utils";
+import { uploadBackupToDrive } from "../lib/driveBackup";
 import { dailyWageDue, localDateKey } from "../lib/payroll";
 import {
   acceptanceMessage,
@@ -399,6 +401,16 @@ interface AppStoreValue {
     netPayable?: number;
   }) => ActionResult;
   removeVehicleBill: (billId: string) => void;
+  settleVehicleBill: (
+    billId: string,
+    input: {
+      method: VehicleBillPaymentMethod;
+      amount?: number;
+      releaseOrderNo?: string;
+      releaseOrderAmount?: number;
+    },
+  ) => ActionResult;
+  backupToDrive: (manual?: boolean) => Promise<ActionResult>;
   sendMarketingReminder: (id: string) => void;
   markMarketingCompleted: (id: string) => void;
   addExpense: (category: ExpenseCategory, amount: number, description: string, date: string) => void;
@@ -534,6 +546,8 @@ function normaliseState(raw: AppState): AppState {
     whatsappSession: "default",
     whatsappAutoSend: true,
     whatsappOwnerNotify: true,
+    driveBackupEnabled: false,
+    driveBackupHour: 2,
     featureFlags: defaultFeatureFlags(),
     storesTopology: "Central",
     installationId: getInstallationId(),
@@ -673,7 +687,10 @@ function normaliseState(raw: AppState): AppState {
       chequeStatus:
         claim.chequeStatus ?? (claim.chequeNo ? ("In_Safe" as const) : undefined),
     })),
-    vehicleBills: raw.vehicleBills ?? [],
+    vehicleBills: (raw.vehicleBills ?? []).map((bill) => ({
+      ...bill,
+      status: bill.status ?? "Unpaid",
+    })),
     advancePayments: (raw.advancePayments ?? []).map((advance) => ({
       ...advance,
       chequeStatus:
@@ -823,6 +840,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const cloud = useCloudSync(state, setState);
 
   const lastSerialised = useRef<string>("");
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useEffect(() => {
     try {
@@ -1020,6 +1039,51 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateSettings = useCallback((patch: Partial<WorkshopSettings>) => {
     setState((prev) => ({ ...prev, settings: { ...prev.settings, ...patch } }));
   }, []);
+
+  const backupToDrive = useCallback(async (manual = false): Promise<ActionResult> => {
+    const current = stateRef.current;
+    if (!manual && !current.settings.driveBackupEnabled) {
+      return { ok: false, message: "Daily Google Drive backup is disabled." };
+    }
+    const result = await uploadBackupToDrive(current);
+    const now = new Date().toISOString();
+    setState((prev) => ({
+      ...prev,
+      settings: {
+        ...prev.settings,
+        lastDriveBackupAt: result.ok ? now : prev.settings.lastDriveBackupAt,
+        lastDriveBackupStatus: result.ok
+          ? `OK · ${result.filename ?? "backup uploaded"}`
+          : `Failed · ${result.message}`,
+        lastDriveBackupFile: result.ok
+          ? result.filename
+          : prev.settings.lastDriveBackupFile,
+      },
+    }));
+    return {
+      ok: result.ok,
+      message: result.message,
+      reference: result.filename,
+    };
+  }, []);
+
+  const driveBackupAttemptedRef = useRef<string | null>(null);
+  useEffect(() => {
+    const settings = state.settings;
+    if (!settings.driveBackupEnabled || !settings.driveBackupUrl?.trim()) return;
+    const today = localDateKey();
+    if (
+      settings.lastDriveBackupAt &&
+      localDateKey(new Date(settings.lastDriveBackupAt)) === today
+    ) {
+      return;
+    }
+    const hour = Math.max(0, Math.min(23, settings.driveBackupHour ?? 2));
+    if (new Date().getHours() < hour) return;
+    if (driveBackupAttemptedRef.current === today) return;
+    driveBackupAttemptedRef.current = today;
+    void backupToDrive(false);
+  }, [state.settings, backupToDrive]);
 
   const addSection = useCallback((section: Omit<WorkshopSection, "id" | "createdAt">) => {
     const id = uid("sec");
@@ -3799,6 +3863,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (job.status !== "Repair Completed") {
         return { ok: false, message: "This job is not ready for billing." };
       }
+      if (state.vehicleBills.some((bill) => bill.jobCardId === jobId)) {
+        return {
+          ok: false,
+          message:
+            "This vehicle has separate insurance/customer bills. Settle them in Cashier → Separate bills.",
+        };
+      }
       const draftJob: JobCard = {
         ...job,
         discount: input.discount,
@@ -4030,9 +4101,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 claim.id === job.insuranceClaimId
                   ? {
                       ...claim,
-                      insuranceBillAmount: totals.total,
+                      insuranceBillAmount:
+                        Math.round(
+                          (totals.insuranceSubtotal - totals.discount + totals.vat) * 100,
+                        ) / 100,
                       customerBillNo: job.id,
-                      customerBillAmount: totals.total,
+                      customerBillAmount: 0,
                       isVatInvoice: Boolean(input.isVatInvoice),
                       vatRateApplied: vatRate,
                       vatAmount,
@@ -4068,6 +4142,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       state.users,
       state.currentUserId,
       state.settings.defaultVatRate,
+      state.vehicleBills,
     ],
   );
 
@@ -4353,6 +4428,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }. Untick it or remove the earlier bill first.`,
         };
       }
+      if (input.kind !== "Insurance") {
+        const customerBrought = state.parts.find(
+          (part) =>
+            partIds.includes(part.id) && part.partSource === "Customer_Brought",
+        );
+        if (customerBrought) {
+          return {
+            ok: false,
+            message: `${customerBrought.itemName} was supplied by the customer. It can only be priced on the insurance bill, never charged to the customer.`,
+          };
+        }
+      }
       const user = state.users.find((entry) => entry.id === state.currentUserId);
       const bill: VehicleBill = {
         id: uid("bill"),
@@ -4377,6 +4464,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         policyExcess: input.policyExcess,
         depreciation: input.depreciation,
         netPayable: Math.round(netPayable * 100) / 100,
+        status: "Unpaid",
       };
       setState((prev) => ({
         ...prev,
@@ -4387,6 +4475,33 @@ export function AppProvider({ children }: { children: ReactNode }) {
         parts: prev.parts.map((part) =>
           partIds.includes(part.id) ? { ...part, assignedBillId: bill.id } : part,
         ),
+        insuranceJobs:
+          bill.claimId && bill.kind === "Insurance"
+            ? prev.insuranceJobs.map((claim) =>
+                claim.id === bill.claimId
+                  ? {
+                      ...claim,
+                      insuranceBillNo: billNo,
+                      insuranceBillAmount: bill.netPayable,
+                      insuranceBillAt: bill.createdAt,
+                      status:
+                        claim.status === "Settled"
+                          ? ("Settled" as const)
+                          : ("Awaiting Payment" as const),
+                    }
+                  : claim,
+              )
+            : bill.claimId && bill.kind === "Customer"
+              ? prev.insuranceJobs.map((claim) =>
+                  claim.id === bill.claimId
+                    ? {
+                        ...claim,
+                        customerBillNo: billNo,
+                        customerBillAmount: bill.netPayable,
+                      }
+                    : claim,
+                )
+              : prev.insuranceJobs,
         notifications: notify(
           prev,
           ["Cashier", "Accounting"],
@@ -4403,17 +4518,311 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const removeVehicleBill = useCallback((billId: string) => {
-    setState((prev) => ({
-      ...prev,
-      vehicleBills: prev.vehicleBills.filter((entry) => entry.id !== billId),
-      tasks: prev.tasks.map((task) =>
-        task.assignedBillId === billId ? { ...task, assignedBillId: undefined } : task,
-      ),
-      parts: prev.parts.map((part) =>
-        part.assignedBillId === billId ? { ...part, assignedBillId: undefined } : part,
-      ),
-    }));
+    setState((prev) => {
+      const bill = prev.vehicleBills.find((entry) => entry.id === billId);
+      if (bill && (bill.status === "Paid" || bill.status === "Release Order")) {
+        return prev;
+      }
+      return {
+        ...prev,
+        vehicleBills: prev.vehicleBills.filter((entry) => entry.id !== billId),
+        tasks: prev.tasks.map((task) =>
+          task.assignedBillId === billId ? { ...task, assignedBillId: undefined } : task,
+        ),
+        parts: prev.parts.map((part) =>
+          part.assignedBillId === billId ? { ...part, assignedBillId: undefined } : part,
+        ),
+      };
+    });
   }, []);
+
+  const settleVehicleBill = useCallback(
+    (
+      billId: string,
+      input: {
+        method: VehicleBillPaymentMethod;
+        amount?: number;
+        releaseOrderNo?: string;
+        releaseOrderAmount?: number;
+      },
+    ): ActionResult => {
+      const bill = state.vehicleBills.find((entry) => entry.id === billId);
+      if (!bill) return { ok: false, message: "Bill not found." };
+      if (bill.status === "Paid" || bill.status === "Release Order") {
+        return { ok: false, message: "This bill is already settled." };
+      }
+      const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
+      if (!job) return { ok: false, message: "Job card not found." };
+      const user = state.users.find((entry) => entry.id === state.currentUserId);
+      const now = new Date().toISOString();
+      const net = Math.round((bill.netPayable ?? bill.amount) * 100) / 100;
+      if (net <= 0) return { ok: false, message: "This bill has no payable amount." };
+
+      const billTasks = state.tasks.filter((task) => bill.taskIds?.includes(task.id));
+      const billParts = state.parts.filter((part) => bill.partIds?.includes(part.id));
+      const workshopParts = billParts.filter(
+        (part) => part.partSource !== "Customer_Brought",
+      );
+      const laborRevenue = billTasks.reduce((sum, task) => sum + task.laborCost, 0);
+      const partsRevenue = workshopParts.reduce(
+        (sum, part) => sum + part.sellingPrice * partIssueQty(part),
+        0,
+      );
+      const partsCost = workshopParts.reduce(
+        (sum, part) => sum + part.costPrice * partIssueQty(part),
+        0,
+      );
+      const commission = billTasks.reduce((sum, task) => {
+        const worker = state.workers.find((entry) => entry.id === task.workerId);
+        return sum + (task.laborCost * (worker?.commissionRate ?? 0)) / 100;
+      }, 0);
+      const discount = bill.discount ?? 0;
+      const driverCommission = driverCommissionFor(job, {
+        labor: laborRevenue,
+        total: Math.max(0, laborRevenue + partsRevenue - discount),
+      });
+
+      if (input.method === "Release Order") {
+        if (bill.kind !== "Insurance") {
+          return {
+            ok: false,
+            message: "Only insurance bills can be settled with a release order.",
+          };
+        }
+        const releaseOrderNo = input.releaseOrderNo?.trim();
+        if (!releaseOrderNo) {
+          return { ok: false, message: "Enter the insurer release order number." };
+        }
+        const approved = Math.round(
+          (input.releaseOrderAmount ?? net) * 100,
+        ) / 100;
+        if (!Number.isFinite(approved) || approved <= 0) {
+          return { ok: false, message: "Enter the approved release order amount." };
+        }
+        const paidAmount = Math.min(net, approved);
+        const shortfall = Math.max(0, Math.round((net - paidAmount) * 100) / 100);
+        const shortfallId = shortfall > 0.005 ? uid("bill") : undefined;
+        let shortfallBillNo = "";
+        if (shortfallId) {
+          const count = state.vehicleBills.filter(
+            (entry) => entry.jobCardId === bill.jobCardId && entry.kind === "Additional",
+          ).length;
+          let next = count + 1;
+          shortfallBillNo = `ADD-${bill.jobCardId}-${next}`;
+          while (state.vehicleBills.some((entry) => entry.billNo === shortfallBillNo)) {
+            next += 1;
+            shortfallBillNo = `ADD-${bill.jobCardId}-${next}`;
+          }
+        }
+        const ledgerEntry = {
+          id: uid("led"),
+          jobCardId: job.id,
+          date: now,
+          laborRevenue,
+          partsRevenue,
+          partsCost,
+          commission,
+          discount,
+          paymentMethod: "Insurance" as const,
+          settlementAmount: paidAmount,
+          driverCommission,
+          insuranceClaimId: job.insuranceClaimId,
+          description: `${job.vehicleNo} — ${bill.kind} bill ${bill.billNo}`,
+        };
+        setState((prev) => {
+          const nextBills = prev.vehicleBills.map((entry) =>
+            entry.id === bill.id
+              ? {
+                  ...entry,
+                  status: "Release Order" as const,
+                  paidAmount,
+                  paidAt: now,
+                  paidBy: user?.name,
+                  paymentMethod: "Release Order" as const,
+                  releaseOrderNo,
+                  releaseOrderAmount: approved,
+                  releaseOrderAt: now,
+                  shortfallBillId: shortfallId,
+                }
+              : entry,
+          );
+          if (shortfallId) {
+            nextBills.unshift({
+              id: shortfallId,
+              jobCardId: job.id,
+              vehicleNo: job.vehicleNo,
+              kind: "Additional",
+              billNo: shortfallBillNo,
+              amount: shortfall,
+              netPayable: shortfall,
+              createdAt: now,
+              createdBy: user?.name,
+              claimId: bill.claimId ?? job.insuranceClaimId,
+              insurerId: bill.insurerId,
+              notes: `Release order ${releaseOrderNo} shortfall (penalty / under-value) — payable by the customer.`,
+              status: "Unpaid",
+              parentBillId: bill.id,
+            });
+          }
+          const jobBills = nextBills.filter((entry) => entry.jobCardId === job.id);
+          const allSettled =
+            jobBills.length > 0 &&
+            jobBills.every(
+              (entry) => entry.status === "Paid" || entry.status === "Release Order",
+            );
+          const readyJob = allSettled && job.status === "Repair Completed";
+          const notifications = notify(
+            prev,
+            ["Cashier", "Accounting", "PRO"],
+            shortfall > 0.005
+              ? "Insurance bill released — shortfall moved to customer"
+              : "Insurance bill released",
+            `${job.vehicleNo} · ${bill.billNo} · release order ${releaseOrderNo} for ${money(paidAmount)}${
+              shortfall > 0.005
+                ? `. Shortfall ${money(shortfall)} added to ${shortfallBillNo} for the customer.`
+                : "."
+            }${readyJob ? " All separate bills are settled — vehicle ready for gate release." : ""}`,
+            shortfall > 0.005 || readyJob ? "high" : "normal",
+            readyJob ? "/gate" : "/cashier",
+            { vehicleNo: job.vehicleNo, eventType: "payment" },
+          );
+          return {
+            ...prev,
+            vehicleBills: nextBills,
+            ledger: [ledgerEntry, ...prev.ledger],
+            insuranceJobs: prev.insuranceJobs.map((claim) =>
+              claim.id === bill.claimId
+                ? {
+                    ...claim,
+                    releaseOrderNo,
+                    releaseOrderReceivedAt: now,
+                    insuranceBillNo: claim.insuranceBillNo || bill.billNo,
+                    insuranceBillAmount: claim.insuranceBillAmount ?? net,
+                    insuranceBillAt: claim.insuranceBillAt ?? now,
+                    status: claim.status === "Settled" ? "Settled" : "Awaiting Payment",
+                  }
+                : claim,
+            ),
+            jobCards: readyJob
+              ? prev.jobCards.map((entry) =>
+                  entry.id === job.id
+                    ? {
+                        ...entry,
+                        status: "Paid" as const,
+                        paidAt: now,
+                        paymentMethod: "Insurance" as const,
+                      }
+                    : entry,
+                )
+              : prev.jobCards,
+            notifications,
+          };
+        });
+        return { ok: true, reference: shortfallId };
+      }
+
+      if (bill.kind === "Insurance") {
+        return {
+          ok: false,
+          message: "Settle the insurance bill with the insurer release order.",
+        };
+      }
+      const amount = Math.round((input.amount ?? net) * 100) / 100;
+      if (!Number.isFinite(amount) || amount < net - 0.5) {
+        return {
+          ok: false,
+          message: `Collect the full net payable of ${money(net)}.`,
+        };
+      }
+      const isShortfall = Boolean(bill.parentBillId);
+      const ledgerEntry = {
+        id: uid("led"),
+        jobCardId: job.id,
+        date: now,
+        laborRevenue: isShortfall ? 0 : laborRevenue,
+        partsRevenue: isShortfall ? 0 : partsRevenue,
+        partsCost: isShortfall ? 0 : partsCost,
+        commission: isShortfall ? 0 : commission,
+        discount: isShortfall ? 0 : discount,
+        paymentMethod: (isShortfall
+          ? "Insurance Settlement"
+          : input.method) as "Cash" | "Card" | "Bank Transfer" | "Cheque" | "Insurance Settlement",
+        settlementAmount: net,
+        driverCommission: isShortfall ? 0 : driverCommission,
+        insuranceClaimId: job.insuranceClaimId,
+        description: isShortfall
+          ? `${job.vehicleNo} — release order shortfall ${bill.billNo}`
+          : `${job.vehicleNo} — ${bill.kind} bill ${bill.billNo}`,
+      };
+      setState((prev) => {
+        const nextBills = prev.vehicleBills.map((entry) =>
+          entry.id === bill.id
+            ? {
+                ...entry,
+                status: "Paid" as const,
+                paidAmount: net,
+                paidAt: now,
+                paidBy: user?.name,
+                paymentMethod: input.method,
+              }
+            : entry,
+        );
+        const jobBills = nextBills.filter((entry) => entry.jobCardId === job.id);
+        const allSettled =
+          jobBills.length > 0 &&
+          jobBills.every(
+            (entry) => entry.status === "Paid" || entry.status === "Release Order",
+          );
+        const readyJob = allSettled && job.status === "Repair Completed";
+        const notifications = notify(
+          prev,
+          readyJob ? ["PRO", "Accounting"] : ["Cashier", "Accounting"],
+          readyJob ? "All separate bills settled — gate release ready" : "Customer bill paid",
+          `${job.vehicleNo} · ${bill.billNo} · ${money(net)} collected by ${input.method}${
+            readyJob
+              ? ". Insurance and customer bills are settled; the vehicle can be released at the gate."
+              : ". The insurer release order is still pending."
+          }`,
+          readyJob ? "high" : "normal",
+          readyJob ? "/gate" : "/cashier",
+          { vehicleNo: job.vehicleNo, eventType: "payment" },
+        );
+        return {
+          ...prev,
+          vehicleBills: nextBills,
+          ledger: [ledgerEntry, ...prev.ledger],
+          jobCards: readyJob
+            ? prev.jobCards.map((entry) =>
+                entry.id === job.id
+                  ? {
+                      ...entry,
+                      status: "Paid" as const,
+                      paidAt: now,
+                      paymentMethod:
+                        input.method === "Cheque"
+                          ? ("Cheque" as const)
+                          : input.method === "Card"
+                            ? ("Card" as const)
+                            : ("Cash" as const),
+                    }
+                  : entry,
+              )
+            : prev.jobCards,
+          notifications,
+        };
+      });
+      return { ok: true };
+    },
+    [
+      state.vehicleBills,
+      state.jobCards,
+      state.tasks,
+      state.parts,
+      state.workers,
+      state.users,
+      state.currentUserId,
+    ],
+  );
 
   const sendMarketingReminder = useCallback((id: string) => {
     const reminder = state.marketing.find((entry) => entry.id === id);
@@ -5888,6 +6297,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       overrideBillingGate,
       addVehicleBill,
       removeVehicleBill,
+      settleVehicleBill,
+      backupToDrive,
       sendMarketingReminder,
       markMarketingCompleted,
       addExpense,
@@ -6000,6 +6411,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       overrideBillingGate,
       addVehicleBill,
       removeVehicleBill,
+      settleVehicleBill,
+      backupToDrive,
       sendMarketingReminder,
       markMarketingCompleted,
       addExpense,

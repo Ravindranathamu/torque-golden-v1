@@ -10,6 +10,7 @@ import type {
   Payslip,
   PettyCashEntry,
   SupplierPurchase,
+  VehicleBill,
   WorkerProfile,
   WorkshopSettings,
 } from "../types";
@@ -82,6 +83,10 @@ export interface IrdDocument {
   vehicleStrip?: { label: string; value: string }[];
   /** Estimates intentionally omit the Date of Supply / Place of Supply row. */
   hideSupplyRow?: boolean;
+  /** Itemised deductions (policy excess, depreciation, advance) drawn before the balance. */
+  deductionRows?: { label: string; amount: number }[];
+  /** Label for the final payable row. Defaults to "Net Balance Payable (Rs.)". */
+  balanceLabel?: string;
 }
 
 export interface InvoiceTotalsInput {
@@ -714,12 +719,20 @@ export function drawIrdDocument(
   } else {
     y = drawTotalRow(doc, y, "Total Value (Rs.)", data.totals.total, true);
   }
-  if (data.totals.advance > 0) {
-    y = drawTotalRow(doc, y, "Less: Advance Paid", data.totals.advance);
+  const deductionRows =
+    data.deductionRows && data.deductionRows.length > 0
+      ? data.deductionRows
+      : data.totals.advance > 0
+        ? [{ label: "Less: Advance Paid", amount: data.totals.advance }]
+        : [];
+  deductionRows.forEach((row) => {
+    y = drawTotalRow(doc, y, row.label, row.amount);
+  });
+  if (deductionRows.length > 0) {
     y = drawTotalRow(
       doc,
       y,
-      "Net Balance Payable (Rs.)",
+      data.balanceLabel ?? "Net Balance Payable (Rs.)",
       data.totals.balance,
       true,
     );
@@ -1021,6 +1034,286 @@ export function buildIrdInsuranceBillPdf(
   return { blob: doc.output("blob"), filename };
 }
 
+/**
+ * A4 document for one separately tracked vehicle bill. Insurance bills include
+ * customer-brought parts at their agreed value (never charged to the customer),
+ * while customer/additional bills only contain workshop-supplied work.
+ */
+export function vehicleBillDocument(
+  job: JobCard,
+  bill: VehicleBill,
+  tasks: JobTask[],
+  parts: JobPart[],
+  settings: WorkshopSettings,
+  insurance?: { claim: InsuranceClaim; insurer?: InsuranceCompany },
+): IrdDocument {
+  const billTasks = bill.taskIds?.length
+    ? tasks.filter((task) => bill.taskIds?.includes(task.id))
+    : [];
+  const allBillParts = bill.partIds?.length
+    ? parts.filter((part) => bill.partIds?.includes(part.id))
+    : [];
+  const billParts =
+    bill.kind === "Insurance"
+      ? allBillParts
+      : allBillParts.filter((part) => part.partSource !== "Customer_Brought");
+  const customerBrought = billParts.filter(
+    (part) => part.partSource === "Customer_Brought",
+  );
+  const isShortfall = bill.kind === "Additional" && Boolean(bill.parentBillId);
+  const labor = roundCurrency(
+    bill.laborSubtotal ??
+      billTasks.reduce((sum, task) => sum + task.laborCost, 0),
+  );
+  const partsTotal = roundCurrency(
+    bill.partsSubtotal ??
+      billParts.reduce(
+        (sum, part) => sum + part.sellingPrice * partIssueQty(part),
+        0,
+      ),
+  );
+  const discount = roundCurrency(bill.discount ?? 0);
+  const hasBillLines = billTasks.length > 0 || billParts.length > 0;
+  const net = roundCurrency(
+    bill.netPayable ?? bill.amount ?? Math.max(0, labor + partsTotal - discount),
+  );
+  const supply = roundCurrency(
+    isShortfall && !hasBillLines
+      ? net
+      : Math.max(0, labor + partsTotal - discount),
+  );
+  const vatRate =
+    bill.vatRate ??
+    (job.isVatInvoice ? settings.defaultVatRate ?? 18 : 0);
+  const vatAmount = roundCurrency(
+    bill.vatAmount ??
+      (isShortfall ? 0 : (supply * Math.max(0, vatRate)) / 100),
+  );
+  const total = roundCurrency(
+    isShortfall && !hasBillLines ? net : supply + vatAmount,
+  );
+  const deductions: { label: string; amount: number }[] = [];
+  if ((bill.policyExcess ?? 0) > 0) {
+    deductions.push({
+      label: "Less: Policy Excess",
+      amount: roundCurrency(bill.policyExcess ?? 0),
+    });
+  }
+  if ((bill.depreciation ?? 0) > 0) {
+    deductions.push({
+      label: "Less: Depreciation",
+      amount: roundCurrency(bill.depreciation ?? 0),
+    });
+  }
+  if ((bill.advance ?? 0) > 0) {
+    deductions.push({
+      label: "Less: Advance Paid",
+      amount: roundCurrency(bill.advance ?? 0),
+    });
+  }
+  const deducted = roundCurrency(
+    deductions.reduce((sum, row) => sum + row.amount, 0),
+  );
+  const adjustment = roundCurrency(total - deducted - net);
+  if (Math.abs(adjustment) > 0.01) {
+    deductions.push({
+      label: adjustment > 0 ? "Less: Approved Bill Adjustment" : "Add: Bill Adjustment",
+      amount: Math.abs(adjustment),
+    });
+  }
+
+  const sections: IrdSection[] = [];
+  if (billTasks.length > 0) {
+    sections.push({
+      title: "Labour & repair charges",
+      lines: billTasks.map((task) => ({
+        description: task.name,
+        qty: 1,
+        unitPrice: task.laborCost,
+        kind: "Labour" as const,
+      })),
+    });
+  }
+  if (billParts.length > 0) {
+    sections.push({
+      title: "Parts & materials",
+      lines: billParts.map((part) => ({
+        description:
+          part.partSource === "Customer_Brought"
+            ? `${part.itemName} (customer supplied — billed to insurer only)`
+            : part.itemName,
+        qty: partIssueQty(part),
+        unitPrice: part.sellingPrice,
+        kind: "Part" as const,
+      })),
+    });
+  }
+  if (isShortfall || sections.length === 0) {
+    sections.push({
+      title: isShortfall ? "Release order shortfall" : "Bill value",
+      lines: [
+        {
+          description: isShortfall
+            ? "Difference between the insurance bill and the insurer release order (penalty / under-value), payable by the customer."
+            : bill.notes?.trim() || "Approved bill value",
+          qty: 1,
+          unitPrice: net,
+          kind: "Labour" as const,
+        },
+      ],
+    });
+  }
+
+  const isInsurance = bill.kind === "Insurance";
+  const purchaser = isInsurance
+    ? {
+        name: insurance?.insurer?.name ?? "Insurance company",
+        address:
+          insurance?.claim.branchAddressOverride?.trim() ||
+          insurance?.insurer?.address ||
+          "—",
+        phone: insurance?.insurer?.hotline || "—",
+        tin: insurance?.insurer?.tinNumber ?? "",
+      }
+    : {
+        name: job.customerName,
+        address: job.customerAddress?.trim() || "—",
+        phone: `+${normalizePhone(job.phone)}`,
+        tin: job.customerTinNumber ?? "",
+      };
+
+  const title = isInsurance
+    ? job.isVatInvoice
+      ? "INSURANCE TAX INVOICE"
+      : "INSURANCE INVOICE"
+    : bill.kind === "Additional"
+      ? "ADDITIONAL INVOICE"
+      : job.isVatInvoice
+        ? "TAX INVOICE"
+        : "INVOICE";
+
+  const releaseOrderNote =
+    bill.releaseOrderNo && bill.releaseOrderAmount !== undefined
+      ? `Release order ${bill.releaseOrderNo} approved ${money(bill.releaseOrderAmount)} against this bill of ${money(net)}.`
+      : "";
+  const paidNote =
+    bill.status === "Paid" && bill.paymentMethod
+      ? `Settled by ${bill.paymentMethod}${bill.paidAt ? ` on ${shortDate(bill.paidAt)}` : ""}.`
+      : bill.status === "Release Order"
+        ? "Settled against the insurer release order."
+        : "";
+
+  const notes = [
+    isInsurance
+      ? "Billed to the insurance company for the approved claim. Policy excess, depreciation and non-covered items are billed separately to the vehicle owner."
+      : isShortfall
+        ? "This additional bill covers the difference between the insurer release order and the insurance bill (penalty / under-value). It is payable in full by the customer."
+        : "This bill is payable in full by the customer. The insurance claim, where applicable, is billed separately to the insurer.",
+    isInsurance && customerBrought.length > 0
+      ? "Customer-supplied parts are shown at the agreed value for the insurance claim only and are not charged to the customer."
+      : "",
+    isInsurance && deductions.length > 0
+      ? "Deductions shown above are payable by the customer and are not included in the amount claimed from the insurer."
+      : "",
+    releaseOrderNote,
+    paidNote,
+    "This is a computer-generated document. Parts carry the supplier warranty stated at issue.",
+    CLIENT_CUSTOMISATION.invoiceNote?.trim() ?? "",
+  ].filter(Boolean);
+
+  return {
+    title,
+    referenceLabel: "Bill No",
+    reference: bill.billNo,
+    documentNumber: `No: ${bill.billNo}`,
+    dateLabel: "Date of Bill",
+    invoiceDate: bill.createdAt,
+    supplyDate: job.acceptedAt ?? job.createdAt,
+    purchaser,
+    additionalInfo: `Vehicle No: ${job.vehicleNo} (${job.make} ${job.model}) | Job No: ${job.id} | Meter Reading: ${job.mileage.toLocaleString()} km${
+      isInsurance && insurance
+        ? ` | Policy No: ${insurance.claim.policyNo} | Claim No: ${insurance.claim.claimNo}`
+        : ""
+    }${bill.releaseOrderNo ? ` | Release Order: ${bill.releaseOrderNo}` : ""}`,
+    vehicleStrip: [
+      { label: "Vehicle No", value: `${job.vehicleNo} (${job.make} ${job.model})` },
+      { label: "Job Card", value: job.id },
+      { label: "Bill No", value: bill.billNo },
+      { label: "Meter", value: `${job.mileage.toLocaleString()} km` },
+      ...(isInsurance && insurance
+        ? [
+            { label: "Policy No", value: insurance.claim.policyNo },
+            { label: "Claim No", value: insurance.claim.claimNo },
+          ]
+        : []),
+      ...(bill.releaseOrderNo
+        ? [{ label: "Release Order", value: bill.releaseOrderNo }]
+        : []),
+    ],
+    sections,
+    totals: {
+      supply,
+      discount,
+      vatRate: Math.max(0, vatRate),
+      vatAmount,
+      total,
+      advance: deducted,
+      balance: net,
+    },
+    deductionRows: deductions,
+    balanceLabel: isInsurance
+      ? "Net Payable by Insurer (Rs.)"
+      : "Net Payable by Customer (Rs.)",
+    paymentMode:
+      bill.status === "Paid"
+        ? `${bill.paymentMethod ?? "Paid"} — settled`
+        : bill.status === "Release Order"
+          ? `Insurer release order ${bill.releaseOrderNo ?? ""}`.trim()
+          : isInsurance
+            ? "Insurance claim settlement"
+            : "Payable by customer",
+    notes,
+    signatureBoxes: ["AUTHORIZATION"],
+  };
+}
+
+export function printVehicleBill(
+  job: JobCard,
+  bill: VehicleBill,
+  tasks: JobTask[],
+  parts: JobPart[],
+  settings: WorkshopSettings,
+  insurance?: { claim: InsuranceClaim; insurer?: InsuranceCompany },
+): void {
+  const html = renderIrdHtml(
+    settings,
+    vehicleBillDocument(job, bill, tasks, parts, settings, insurance),
+  );
+  const win = window.open("", "_blank", "width=980,height=1100");
+  if (!win) return;
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
+
+export function buildVehicleBillPdf(
+  job: JobCard,
+  bill: VehicleBill,
+  tasks: JobTask[],
+  parts: JobPart[],
+  settings: WorkshopSettings,
+  insurance?: { claim: InsuranceClaim; insurer?: InsuranceCompany },
+): { blob: Blob; filename: string } {
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  drawIrdDocument(
+    doc,
+    settings,
+    vehicleBillDocument(job, bill, tasks, parts, settings, insurance),
+  );
+  const filename = `Bill_${bill.billNo.replace(/[^\w-]+/g, "-")}_${job.vehicleNo.replace(/\s+/g, "-")}.pdf`;
+  return { blob: doc.output("blob"), filename };
+}
+
 export function buildIrdInsuranceEstimatePdf(
   job: JobCard,
   estimate: JobEstimate,
@@ -1220,9 +1513,17 @@ function renderIrdHtml(settings: WorkshopSettings, data: IrdDocument): string {
       ? `<tr><td colspan="4" class="label">VAT @ ${data.totals.vatRate.toFixed(2)}%</td><td class="num">${money(data.totals.vatAmount, 2)}</td></tr>
          <tr class="strong"><td colspan="4" class="label">Total Value Including VAT (Rs.)</td><td class="num">${money(data.totals.total, 2)}</td></tr>`
       : `<tr class="strong"><td colspan="4" class="label">Total Value (Rs.)</td><td class="num">${money(data.totals.total, 2)}</td></tr>`,
-    data.totals.advance > 0
-      ? `<tr><td colspan="4" class="label">Less: Advance Paid</td><td class="num">${money(data.totals.advance, 2)}</td></tr>
-         <tr class="strong"><td colspan="4" class="label">Net Balance Payable (Rs.)</td><td class="num">${money(data.totals.balance, 2)}</td></tr>`
+    ...(data.deductionRows && data.deductionRows.length > 0
+      ? data.deductionRows
+      : data.totals.advance > 0
+        ? [{ label: "Less: Advance Paid", amount: data.totals.advance }]
+        : []
+    ).map(
+      (row) =>
+        `<tr><td colspan="4" class="label">${esc(row.label)}</td><td class="num">${money(row.amount, 2)}</td></tr>`,
+    ),
+    (data.deductionRows?.length ?? 0) > 0 || data.totals.advance > 0
+      ? `<tr class="strong"><td colspan="4" class="label">${esc(data.balanceLabel ?? "Net Balance Payable (Rs.)")}</td><td class="num">${money(data.totals.balance, 2)}</td></tr>`
       : "",
   ].join("");
 

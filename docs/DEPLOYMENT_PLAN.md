@@ -1799,10 +1799,24 @@ select bucket_id, count(*)
 
 - Store every `.env.*` value in a password manager.
 - Keep a deployment record: project refs, regions, domains, installation ID,
-  branch, plan, expiry, WAHA URL/session, webhook URL.
+  branch, plan, expiry, WAHA URL/session, webhook URL, Google Drive backup
+  webhook URL, folder ID and secret rotation date.
 - Do not store secrets in Git, docs, screenshots or chat.
 
-### 8.4 Restore drill
+### 8.4 Daily Google Drive JSON snapshot
+
+The workshop can upload a complete JSON snapshot to Drive every day through a
+secured Apps Script or Supabase Edge Function webhook. Configure it in
+**Settings → Data & backup**, run **Backup now**, and confirm the status line.
+
+- Receiver setup and hardening: `docs/GOOGLE_DRIVE_BACKUP.md`.
+- Keep the Drive folder private and the shared secret in a password manager.
+- The browser catches up at the next launch if it was closed at the configured
+  hour. For unattended guarantees, add a server-side scheduled function that
+  exports `app_records` and uploads it.
+- Test restoring one snapshot into a spare workshop before go-live.
+
+### 8.5 Restore drill
 
 1. Create a throwaway Supabase project.
 2. Restore the latest client dump.

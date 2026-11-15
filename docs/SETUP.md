@@ -418,6 +418,8 @@ policies. The only anonymous portal RPC is `poll_workshop_license(text)`.
 | Advance payments | `advance_payments` | Amount > 0; unique receipt per workshop; balance = advances not yet applied at checkout. Cashier and Accounting only. |
 | Estimates | `job_estimates` | Exactly one Initial estimate per job; later estimates are `SUP-01`, `SUP-02`; Draft → Awaiting Approval → Approved/Rejected; editing an approved estimate is locked and creates a new revision (`Rev 2`). |
 | Insurance claim | `insurance_claims`, `job_parts.salvage_*` | One claim per job; estimate and parts approval are separate; release order can arrive before cheque/salvage; insurer bill and customer bill are recorded separately; insurer TIN and branch override feed the IRD bill; salvage tracked per part. |
+| Separate vehicle bills | `vehicle_bills`, `job_tasks.assigned_bill_id`, `job_parts.assigned_bill_id` | Each vehicle can have an Insurance bill, a Customer bill and Additional shortfall bills. Ticked tasks/parts lock to one bill. Insurance bills settle on the insurer release order; customer and additional bills are paid in full by the customer. A release order below the insurance bill creates an Additional customer bill for the difference (penalty / under-value). Settled bills are immutable. Customer-brought parts are priced on the insurance bill only and never charged to the customer. |
+| Daily Google Drive backup | `workshops.drive_backup_*`, `app_records` | A complete JSON snapshot uploads once a day to Drive through a secured Apps Script or Edge Function webhook. The browser catches up at the next launch if it was closed at the configured hour. Last success time, status and filename are stored in settings. See `docs/GOOGLE_DRIVE_BACKUP.md`. |
 | Attendance | `attendance_records` | One row per worker per date; Present/Absent/Off Day; only Present workers can be assigned to tasks. |
 | Monthly payroll | `staff_loans`, `payslips` | Basic pay prorated by payable days; commission added; loan deduction, EPF employee deduction and other deductions reduce net. EPF/ETF employer amounts are reported but not deducted. |
 | Daily wages | `wage_payouts` | Pay for present days; commission optional; a receipt number is stored for every payout; unpaid amounts accumulate until paid. |
@@ -448,6 +450,17 @@ Operational notes:
   double-count an advance as both a receipt and a payment.
 - Release the vehicle on the insurer's release note; do not block handover on
   cheque clearance. Keep salvage and cheque status visible in Accounting.
+- Settle split bills in **Cashier → Separate bills**. An insurance bill is
+  released against the insurer release order; the customer and additional bills
+  are collected in full. If the release order is lower than the insurance bill,
+  the shortfall is created automatically as an Additional bill payable by the
+  customer. Never mutate the insurance bill to absorb the shortfall.
+- Customer-brought parts are priced on the insurance bill at the agreed value and
+  are excluded from customer invoices, workshop parts revenue and the ledger
+  parts revenue. The store blocks them from Customer and Additional bills.
+- Configure the daily Google Drive backup under **Settings → Data & backup** and
+  run **Backup now** once. See `docs/GOOGLE_DRIVE_BACKUP.md` for the Apps Script
+  or Edge Function receiver.
 - Generate daily-wage receipt numbers per workshop and keep the commission
   inclusion flag on the payout for audit.
 - Save a service record when the job is dispatched, not when it is created, so
@@ -839,6 +852,11 @@ npx vercel --prod
   migrates it in place and fills the new arrays/fields without discarding jobs.
 - Settings → Data & backup exports a JSON snapshot and imports it back; older
   demo backups are accepted as long as their version is not newer than 4.
+- Daily Google Drive backup uploads the same snapshot automatically through a
+  secured webhook. Configure it in Settings → Data & backup and read
+  `docs/GOOGLE_DRIVE_BACKUP.md`. The app catches up at the next launch if it was
+  closed at the configured hour; use a server-side schedule for unattended
+  guarantees.
 - The demo seed includes an insurance job (`JC-1005`), an advance (`ADV-4001`),
   attendance, loans, payslips, a wage payout, a credit note and a driver
   commission so every workflow can be tried immediately.
