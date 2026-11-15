@@ -1,6 +1,8 @@
 import type {
   DiscountType,
+  EstimateLine,
   JobCard,
+  JobEstimate,
   JobPart,
   JobTask,
   WorkerProfile,
@@ -155,6 +157,12 @@ export interface JobTotals {
   billableParts: JobPart[];
   includedParts: JobPart[];
   activeTasks: JobTask[];
+  /** Workshop-supplied billable parts (excludes customer-brought parts). */
+  workshopParts: number;
+  /** Customer-supplied parts billed to the insurer, never workshop revenue. */
+  customerBroughtParts: number;
+  /** Labour + workshop parts + customer-brought parts, used by insurance documents. */
+  insuranceSubtotal: number;
 }
 
 export function jobTotals(
@@ -175,16 +183,20 @@ export function jobTotals(
   const includedParts = allIssuedParts.filter(
     (p) => p.includedInLabor || p.sellingPrice <= 0,
   );
-  const issuedParts = billableParts;
+  const issuedParts = billableParts.filter(
+    (part) => part.partSource !== "Customer_Brought",
+  );
   const labor = activeTasks.reduce((sum, t) => sum + t.laborCost, 0);
-  const partsTotal = billableParts.reduce(
-    (sum, p) => sum + p.sellingPrice * partIssueQty(p),
-    0,
-  );
-  const partsCost = allIssuedParts.reduce(
-    (sum, p) => sum + p.costPrice * partIssueQty(p),
-    0,
-  );
+  const workshopParts = billableParts
+    .filter((part) => part.partSource !== "Customer_Brought")
+    .reduce((sum, part) => sum + part.sellingPrice * partIssueQty(part), 0);
+  const customerBroughtParts = billableParts
+    .filter((part) => part.partSource === "Customer_Brought")
+    .reduce((sum, part) => sum + part.sellingPrice * partIssueQty(part), 0);
+  const partsTotal = workshopParts;
+  const partsCost = allIssuedParts
+    .filter((part) => part.partSource !== "Customer_Brought")
+    .reduce((sum, part) => sum + part.costPrice * partIssueQty(part), 0);
   const subtotal = labor + partsTotal;
   let discount = 0;
   if (job.discount > 0) {
@@ -212,6 +224,9 @@ export function jobTotals(
     billableParts,
     includedParts,
     activeTasks,
+    workshopParts,
+    customerBroughtParts,
+    insuranceSubtotal: labor + partsTotal + customerBroughtParts,
   };
 }
 
@@ -265,4 +280,72 @@ export function initials(name: string): string {
 
 export function classNames(...parts: (string | false | null | undefined)[]): string {
   return parts.filter(Boolean).join(" ");
+}
+
+/** Next globally sequential estimate number in the form EST-YYYY-0001. */
+export function nextEstimateNumber(estimates: JobEstimate[], now = new Date()): string {
+  const year = now.getFullYear();
+  const pattern = new RegExp(`^EST-${year}-(\\d{4,})$`);
+  let highest = 0;
+  estimates.forEach((estimate) => {
+    const match = estimate.number.match(pattern);
+    if (match) highest = Math.max(highest, Number(match[1]));
+  });
+  return `EST-${year}-${String(highest + 1).padStart(4, "0")}`;
+}
+
+/** Human label: EST-2026-0001 or EST-2026-0002 (SUP-01 • Rev 1). */
+export function estimateDisplayNumber(
+  estimate: Pick<JobEstimate, "number" | "kind" | "revision" | "supplementaryNo">,
+): string {
+  const base = /^EST-\d{4}-\d{4,}$/.test(estimate.number)
+    ? estimate.number
+    : estimate.number || "Estimate";
+  if (estimate.kind !== "Supplementary") return base;
+  const supplementary = String(estimate.supplementaryNo ?? 1).padStart(2, "0");
+  return `${base} (SUP-${supplementary} • Rev ${estimate.revision})`;
+}
+
+export function estimateKindLabel(
+  estimate: Pick<JobEstimate, "kind" | "supplementaryNo">,
+): string {
+  if (estimate.kind === "Initial") return "Initial estimate";
+  const supplementary = String(estimate.supplementaryNo ?? 1).padStart(2, "0");
+  return `Supplementary #${supplementary}`;
+}
+
+/** Short label used in duplicate warnings: "Initial" or "SUP-01". */
+export function estimateShortLabel(
+  estimate: Pick<JobEstimate, "kind" | "supplementaryNo">,
+): string {
+  if (estimate.kind === "Initial") return "Initial";
+  const supplementary = String(estimate.supplementaryNo ?? 1).padStart(2, "0");
+  return `SUP-${supplementary}`;
+}
+
+/**
+ * Finds an already approved line with the same type and description on another
+ * estimate for the same job card. Used to block duplicate supplementary lines.
+ */
+export function findApprovedDuplicate(
+  estimates: JobEstimate[],
+  jobCardId: string,
+  type: EstimateLine["type"],
+  description: string,
+  excludeEstimateId?: string,
+): JobEstimate | null {
+  const needle = description.trim().toLowerCase();
+  if (!needle) return null;
+  const match = estimates.find(
+    (estimate) =>
+      estimate.jobCardId === jobCardId &&
+      estimate.id !== excludeEstimateId &&
+      estimate.lines.some(
+        (line) =>
+          line.type === type &&
+          line.approvalStatus === "Approved" &&
+          line.description.trim().toLowerCase() === needle,
+      ),
+  );
+  return match ?? null;
 }

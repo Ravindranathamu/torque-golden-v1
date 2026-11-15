@@ -1064,6 +1064,51 @@ function makeTasks(): JobTask[] {
       workerId: "wrk_nuwan",
       createdAt: daysAgoISO(30, 10),
     },
+    {
+      id: "tsk_11",
+      jobCardId: "JC-1005",
+      name: "Bumper removal and refit",
+      laborCost: 3000,
+      quotedLaborCost: 3500,
+      workerId: "wrk_kamal",
+      assignedBillId: "bill_1",
+      estimateId: "est_1005_initial",
+      estimateLineId: "el_1",
+      createdAt: daysAgoISO(3, 10),
+    },
+    {
+      id: "tsk_12",
+      jobCardId: "JC-1005",
+      name: "Headlamp replacement",
+      laborCost: 1800,
+      workerId: "wrk_sunil",
+      assignedBillId: "bill_1",
+      estimateId: "est_1005_initial",
+      estimateLineId: "el_2",
+      createdAt: daysAgoISO(3, 10),
+    },
+    {
+      id: "tsk_13",
+      jobCardId: "JC-1005",
+      name: "Panel alignment and gap setting",
+      laborCost: 2200,
+      quotedLaborCost: 2500,
+      workerId: "wrk_kamal",
+      assignedBillId: "bill_1",
+      estimateId: "est_1005_initial",
+      estimateLineId: "el_3",
+      createdAt: daysAgoISO(3, 11),
+    },
+    {
+      id: "tsk_14",
+      jobCardId: "JC-1005",
+      name: "Courtesy wash and interior vacuum",
+      laborCost: 2500,
+      workerId: "wrk_nuwan",
+      isCustomerExtra: true,
+      assignedBillId: "bill_2",
+      createdAt: daysAgoISO(2, 15),
+    },
   ];
 }
 
@@ -1166,18 +1211,42 @@ function makeParts(): JobPart[] {
     fractionalPart("jp_21", "JC-1005", "itm_cataloy", "Cataloy Body Filler", 300, 5200 / 1000, 8500 / 1000, false, 3, demoSectionIds.body),
     fractionalPart("jp_22", "JC-1005", "itm_2k_paint", "2K Paint — Pearl White", 350, 16000 / 1000, 24000 / 1000, false, 3, demoSectionIds.body),
   ];
-  return rows.map((entry) =>
-    entry.id === "jp_17"
-      ? {
-          ...entry,
-          warrantyStatus: "Credited",
-          warrantyReplacementInvoiceNo: "APH/26/1905",
-          warrantyNote: "Defective cabin filter replaced under supplier warranty.",
-          creditNoteNo: "SCN-7001",
-          creditNoteAmount: 3900,
-        }
-      : entry,
-  );
+  return rows.map((entry) => {
+    if (entry.id === "jp_17") {
+      return {
+        ...entry,
+        warrantyStatus: "Credited",
+        warrantyReplacementInvoiceNo: "APH/26/1905",
+        warrantyNote: "Defective cabin filter replaced under supplier warranty.",
+        creditNoteNo: "SCN-7001",
+        creditNoteAmount: 3900,
+      };
+    }
+    if (entry.id === "jp_18") {
+      return {
+        ...entry,
+        sellingPrice: 45500,
+        quotedSellingPrice: 48300,
+        insuranceApprovedPrice: 45500,
+        assignedBillId: "bill_1",
+        estimateId: "est_1005_initial",
+        estimateLineId: "el_4",
+      };
+    }
+    if (entry.id === "jp_19") {
+      return {
+        ...entry,
+        insuranceApprovedPrice: 33630,
+        assignedBillId: "bill_1",
+        estimateId: "est_1005_initial",
+        estimateLineId: "el_5",
+      };
+    }
+    if (entry.id === "jp_21" || entry.id === "jp_22") {
+      return { ...entry, assignedBillId: "bill_2" };
+    }
+    return entry;
+  });
 }
 
 function makeSuppliers(): Supplier[] {
@@ -2208,16 +2277,16 @@ function makeEstimates(): JobEstimate[] {
       id: "est_1005_initial",
       jobCardId: "JC-1005",
       kind: "Initial",
-      number: "Initial",
+      number: "EST-2026-0001",
       revision: 2,
       status: "Approved",
       lines: [
-        { id: "el_1", type: "Labour", description: "Bumper removal and refit", qty: 1, unitPrice: 3500 },
-        { id: "el_2", type: "Labour", description: "Headlamp replacement", qty: 1, unitPrice: 1800 },
-        { id: "el_3", type: "Labour", description: "Panel alignment and gap setting", qty: 1, unitPrice: 2500 },
-        { id: "el_4", type: "Part", description: "Front bumper assembly", qty: 1, unitPrice: 48300 },
-        { id: "el_5", type: "Part", description: "Headlamp assembly — left", qty: 1, unitPrice: 33630 },
-        { id: "el_6", type: "Part", description: "Paint and consumables", qty: 1, unitPrice: 9500 },
+        { id: "el_1", type: "Labour", description: "Bumper removal and refit", qty: 1, unitPrice: 3500, approvalStatus: "Approved", approvedUnitPrice: 3000 },
+        { id: "el_2", type: "Labour", description: "Headlamp replacement", qty: 1, unitPrice: 1800, approvalStatus: "Approved", approvedUnitPrice: 1800 },
+        { id: "el_3", type: "Labour", description: "Panel alignment and gap setting", qty: 1, unitPrice: 2500, approvalStatus: "Approved", approvedUnitPrice: 2200 },
+        { id: "el_4", type: "Part", description: "Front bumper assembly", qty: 1, unitPrice: 48300, approvalStatus: "Approved", approvedUnitPrice: 45500 },
+        { id: "el_5", type: "Part", description: "Headlamp assembly — left", qty: 1, unitPrice: 33630, approvalStatus: "Approved", approvedUnitPrice: 33630 },
+        { id: "el_6", type: "Part", description: "Paint and consumables", qty: 1, unitPrice: 9500, approvalStatus: "Approved", approvedUnitPrice: 9500 },
       ],
       notes: "Revised after assessor inspection. Initial assessor estimate approved by Ceylinco General Insurance.",
       createdAt: daysAgoISO(3, 10),
@@ -2230,12 +2299,13 @@ function makeEstimates(): JobEstimate[] {
       id: "est_1005_supp",
       jobCardId: "JC-1005",
       kind: "Supplementary",
-      number: "SUP-01",
+      number: "EST-2026-0002",
+      supplementaryNo: 1,
       revision: 1,
       status: "Awaiting Approval",
       lines: [
-        { id: "el_7", type: "Labour", description: "Paint blending — bonnet and fenders", qty: 1, unitPrice: 12000 },
-        { id: "el_8", type: "Part", description: "Bumper bracket kit", qty: 1, unitPrice: 4500 },
+        { id: "el_7", type: "Labour", description: "Paint blending — bonnet and fenders", qty: 1, unitPrice: 12000, approvalStatus: "Pending" },
+        { id: "el_8", type: "Part", description: "Bumper bracket kit", qty: 1, unitPrice: 4500, approvalStatus: "Pending" },
       ],
       notes: "Supplementary estimate raised after bumper removal revealed a damaged bracket.",
       createdAt: daysAgoISO(1, 11),
@@ -2271,10 +2341,15 @@ function makeVehicleBills(): VehicleBill[] {
     {
       id: "bill_1",
       jobCardId: "JC-1005",
-      vehicleNo: "WP CBB-1234",
+      vehicleNo: "WP CAJ-4410",
       kind: "Insurance",
       billNo: "INS-CG/26/CL/4410",
-      amount: 48500,
+      amount: 86130,
+      netPayable: 86130,
+      laborSubtotal: 7000,
+      partsSubtotal: 79130,
+      taskIds: ["tsk_11", "tsk_12", "tsk_13"],
+      partIds: ["jp_18", "jp_19"],
       createdAt: daysAgoISO(2, 16),
       createdBy: "Nimal Perera",
       claimId: "clm_1",
@@ -2284,14 +2359,19 @@ function makeVehicleBills(): VehicleBill[] {
     {
       id: "bill_2",
       jobCardId: "JC-1005",
-      vehicleNo: "WP CBB-1234",
+      vehicleNo: "WP CAJ-4410",
       kind: "Customer",
       billNo: "CUS-JC-1005-2",
-      amount: 7500,
+      amount: 13450,
+      netPayable: 13450,
+      laborSubtotal: 2500,
+      partsSubtotal: 10950,
+      taskIds: ["tsk_14"],
+      partIds: ["jp_21", "jp_22"],
       createdAt: daysAgoISO(2, 16),
       createdBy: "Nimal Perera",
       claimId: "clm_1",
-      notes: "Customer excess and consumables, billed separately.",
+      notes: "Customer excess, courtesy wash and consumables, billed separately.",
     },
   ];
 }

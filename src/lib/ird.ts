@@ -15,6 +15,7 @@ import type {
 } from "../types";
 import {
   driverCommissionFor,
+  estimateDisplayNumber,
   formatQty,
   money,
   normalizePhone,
@@ -73,6 +74,12 @@ export interface IrdDocument {
   paymentMode: string;
   notes: string[];
   signatureBoxes: string[];
+  /** Bold document number shown in the masthead. Falls back to reference. */
+  documentNumber?: string;
+  /** Label for the first grid row. Defaults to "Date of Invoice". */
+  dateLabel?: string;
+  /** Bold vehicle / job / estimate identifiers rendered without a label. */
+  vehicleStrip?: { label: string; value: string }[];
   /** Estimates intentionally omit the Date of Supply / Place of Supply row. */
   hideSupplyRow?: boolean;
 }
@@ -224,29 +231,66 @@ function logoImage(logo?: string): string | null {
   return /^data:image\/(png|jpe?g|webp);base64,/i.test(logo) ? logo : null;
 }
 
-function drawTitleBox(doc: jsPDF, title: string, settings: WorkshopSettings): number {
+function drawMasthead(
+  doc: jsPDF,
+  title: string,
+  documentNumber: string,
+  settings: WorkshopSettings,
+): number {
   const top = 10;
   const [r, g, b] = hexToRgb(settings.brandColor);
-  doc.setLineWidth(0.35);
-  doc.setDrawColor(0, 0, 0);
-  doc.setFillColor(r, g, b);
-  doc.rect(MARGIN, top, CONTENT_WIDTH, 11, "FD");
   const logo = logoImage(settings.logo);
+  const badgeX = 128;
+  const badgeWidth = RIGHT - badgeX;
+  const logoHeight = 17; // ~64px at print resolution
+  let leftX = MARGIN;
+  let logoWidth = 0;
+
   if (logo) {
     try {
-      doc.addImage(logo, MARGIN + 2, top + 1.2, 8.6, 8.6);
+      const properties = doc.getImageProperties(logo);
+      const ratio = properties.height > 0 ? properties.width / properties.height : 1;
+      logoWidth = Math.min(42, logoHeight * ratio);
+      doc.addImage(logo, MARGIN, top, logoWidth, logoHeight);
+      leftX = MARGIN + logoWidth + 5;
     } catch {
-      /* Unsupported logo format — keep the branded title bar. */
+      leftX = MARGIN;
     }
   }
+
+  const nameWidth = Math.max(40, badgeX - leftX - 6);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(14);
-  doc.setTextColor(255, 255, 255);
-  doc.text(title.toUpperCase(), PAGE_WIDTH / 2 + (logo ? 3 : 0), top + 7.2, {
-    align: "center",
+  doc.setFontSize(15);
+  doc.setTextColor(20, 30, 45);
+  const nameLines = doc.splitTextToSize(
+    settings.companyName || "Workshop",
+    nameWidth,
+  ) as string[];
+  nameLines.slice(0, 2).forEach((line, index) => {
+    doc.text(line, leftX, top + 8 + index * 6.2);
   });
+
+  doc.setFillColor(r, g, b);
+  doc.setDrawColor(r, g, b);
+  doc.setLineWidth(0.3);
+  doc.rect(badgeX, top, badgeWidth, 10.5, "FD");
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(10.5);
+  doc.setTextColor(255, 255, 255);
+  doc.text(title.toUpperCase(), badgeX + badgeWidth / 2, top + 6.8, {
+    align: "center",
+    maxWidth: badgeWidth - 4,
+  });
+
+  doc.setTextColor(20, 30, 45);
+  doc.setFontSize(11);
+  doc.text(documentNumber, RIGHT, top + 18.5, { align: "right" });
   doc.setTextColor(0, 0, 0);
-  return top + 11;
+
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.3);
+  doc.line(MARGIN, top + logoHeight + 4, RIGHT, top + logoHeight + 4);
+  return top + logoHeight + 7;
 }
 
 function drawTwoCellRow(
@@ -283,43 +327,161 @@ function drawTwoCellRow(
   return y + height;
 }
 
+interface PartyCellInput {
+  heading: string;
+  tin: string;
+  name: string;
+  address: string;
+  phone: string;
+  extra?: string;
+}
+
+function partyCellLines(doc: jsPDF, width: number, data: PartyCellInput) {
+  const valueWidth = width - 28;
+  return {
+    name: doc.splitTextToSize(data.name || "—", valueWidth) as string[],
+    address: doc.splitTextToSize(data.address || "—", valueWidth) as string[],
+    extra: data.extra
+      ? (doc.splitTextToSize(data.extra, valueWidth) as string[])
+      : [],
+  };
+}
+
+function partyCellHeight(doc: jsPDF, width: number, data: PartyCellInput): number {
+  const lines = partyCellLines(doc, width, data);
+  return (
+    11 +
+    lines.name.length * 3.9 +
+    lines.address.length * 3.9 +
+    4 +
+    lines.extra.length * 3.9 +
+    3
+  );
+}
+
 function drawPartyCell(
   doc: jsPDF,
   x: number,
   y: number,
   width: number,
   height: number,
-  heading: string,
-  tin: string,
-  name: string,
-  address: string,
-  phone: string,
-  extra?: string,
+  data: PartyCellInput,
 ): void {
   doc.setLineWidth(0.3);
+  doc.setDrawColor(0, 0, 0);
   doc.rect(x, y, width, height);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(7.2);
-  doc.text(heading, x + 2, y + 4.2);
+  doc.setFontSize(7.4);
+  doc.text(data.heading, x + 3, y + 4.6);
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(8);
-  let lineY = y + 8.5;
-  doc.text(`TIN: ${tin || "—"}`, x + 2, lineY, { maxWidth: width - 4 });
+  doc.setFontSize(7.8);
+
+  const labelX = x + 3;
+  const valueX = x + 25;
+  const valueWidth = width - 28;
+  const lines = partyCellLines(doc, width, data);
+  let lineY = y + 9.4;
+
+  doc.text("TIN No.", labelX, lineY);
+  doc.text(data.tin || "—", valueX, lineY, { maxWidth: valueWidth });
   lineY += 4;
+
+  doc.text("Name", labelX, lineY);
   doc.setFont("helvetica", "bold");
-  doc.text(name || "—", x + 2, lineY, { maxWidth: width - 4 });
-  doc.setFont("helvetica", "normal");
-  lineY += 4;
-  const addressLines = doc.splitTextToSize(address || "—", width - 4) as string[];
-  addressLines.slice(0, 3).forEach((line) => {
-    doc.text(line, x + 2, lineY);
-    lineY += 3.6;
+  lines.name.forEach((line) => {
+    doc.text(line, valueX, lineY);
+    lineY += 3.9;
   });
-  doc.text(`Tel: ${phone || "—"}`, x + 2, lineY, { maxWidth: width - 4 });
+  doc.setFont("helvetica", "normal");
+
+  doc.text("Address", labelX, lineY);
+  lines.address.forEach((line) => {
+    doc.text(line, valueX, lineY);
+    lineY += 3.9;
+  });
+
+  doc.text("Telephone", labelX, lineY);
+  doc.text(data.phone || "—", valueX, lineY, { maxWidth: valueWidth });
   lineY += 4;
-  if (extra) {
-    doc.text(extra, x + 2, lineY, { maxWidth: width - 4 });
+
+  if (data.extra) {
+    doc.text("VAT", labelX, lineY);
+    lines.extra.forEach((line) => {
+      doc.text(line, valueX, lineY);
+      lineY += 3.9;
+    });
   }
+}
+
+function drawPartyCells(
+  doc: jsPDF,
+  y: number,
+  left: PartyCellInput,
+  right: PartyCellInput,
+): number {
+  const half = CONTENT_WIDTH / 2;
+  const height = Math.max(
+    42,
+    partyCellHeight(doc, half, left),
+    partyCellHeight(doc, half, right),
+  );
+  drawPartyCell(doc, MARGIN, y, half, height, left);
+  drawPartyCell(doc, MARGIN + half, y, half, height, right);
+  return y + height;
+}
+
+function drawVehicleStrip(
+  doc: jsPDF,
+  y: number,
+  items: { label: string; value: string }[],
+  fallback: string,
+): number {
+  const segments = (
+    items.length > 0
+      ? items
+      : [{ label: "Details", value: fallback || "—" }]
+  ).map((item) => ({ text: `${item.label}: ${item.value}` }));
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(8.3);
+  const measured = segments.map((segment) => ({
+    ...segment,
+    width: doc.getTextWidth(segment.text),
+  }));
+  const maxWidth = CONTENT_WIDTH - 6;
+  const lines: { text: string; width: number }[][] = [];
+  let current: { text: string; width: number }[] = [];
+  let currentWidth = 0;
+  measured.forEach((segment) => {
+    const separator = current.length > 0 ? 5 : 0;
+    if (current.length > 0 && currentWidth + separator + segment.width > maxWidth) {
+      lines.push(current);
+      current = [];
+      currentWidth = 0;
+    }
+    if (current.length > 0) currentWidth += 5;
+    current.push(segment);
+    currentWidth += segment.width;
+  });
+  if (current.length > 0) lines.push(current);
+  const height = Math.max(9, 4.4 + lines.length * 4.2);
+  doc.setLineWidth(0.3);
+  doc.setDrawColor(0, 0, 0);
+  doc.rect(MARGIN, y, CONTENT_WIDTH, height);
+  lines.forEach((line, lineIndex) => {
+    let x = MARGIN + 3;
+    const lineY = y + 5.2 + lineIndex * 4.2;
+    line.forEach((segment, segmentIndex) => {
+      if (segmentIndex > 0) {
+        doc.setFont("helvetica", "normal");
+        doc.text("|", x, lineY);
+        x += 3.4;
+      }
+      doc.setFont("helvetica", "bold");
+      doc.text(segment.text, x, lineY);
+      x += segment.width + 1.6;
+    });
+  });
+  return y + height;
 }
 
 function drawTableHeader(doc: jsPDF, y: number): number {
@@ -442,76 +604,52 @@ export function drawIrdDocument(
 ): void {
   doc.setTextColor(0, 0, 0);
   doc.setDrawColor(0, 0, 0);
-  let y = drawTitleBox(doc, data.title, settings);
+  let y = drawMasthead(
+    doc,
+    data.title,
+    data.documentNumber ?? data.reference,
+    settings,
+  );
 
   y = drawTwoCellRow(
     doc,
     y,
     8,
-    { label: "Date of Invoice", value: numericDate(data.invoiceDate) },
-    { label: data.referenceLabel, value: data.reference },
+    { label: data.dateLabel ?? "Date of Invoice", value: numericDate(data.invoiceDate) },
+    { label: "Document Ref", value: data.reference },
   );
 
   if (!data.hideSupplyRow) {
-    const halfRow = CONTENT_WIDTH / 2;
-    doc.rect(MARGIN, y, halfRow, 8);
-    doc.rect(MARGIN + halfRow, y, halfRow, 8);
-    doc.setFont("helvetica", "bold");
-    doc.setFontSize(7.2);
-    doc.text("Date of Supply:", MARGIN + 2, y + 4);
-    doc.text("Place of Supply:", MARGIN + halfRow + 2, y + 4);
-    doc.setFont("helvetica", "normal");
-    doc.setFontSize(9);
-    doc.text(numericDate(data.supplyDate), MARGIN + 2, y + 8);
-    doc.text(supplierAddress(settings), MARGIN + halfRow + 2, y + 7, {
-      maxWidth: halfRow - 4,
-    });
-    y += 8;
+    y = drawTwoCellRow(
+      doc,
+      y,
+      8,
+      { label: "Date of Supply", value: numericDate(data.supplyDate) },
+      { label: "Place of Supply", value: supplierAddress(settings) },
+    );
   }
 
-  const half = CONTENT_WIDTH / 2;
-  drawPartyCell(
-    doc,
-    MARGIN,
-    y,
-    half,
-    36,
-    "SUPPLIER",
-    settings.tinNumber ?? "",
-    settings.companyName,
-    settings.address,
-    settings.phone,
-    settings.vatRegNumber ? `VAT Reg No: ${settings.vatRegNumber}` : undefined,
-  );
-  drawPartyCell(
-    doc,
-    MARGIN + half,
-    y,
-    half,
-    36,
-    "PURCHASER",
-    data.purchaser.tin ?? "",
-    data.purchaser.name,
-    data.purchaser.address,
-    data.purchaser.phone,
-  );
-  y += 36;
-
-  y = drawTwoCellRow(
+  y = drawPartyCells(
     doc,
     y,
-    8,
-    { label: "Date of Supply", value: numericDate(data.supplyDate) },
-    { label: "Place of Supply", value: supplierAddress(settings) },
+    {
+      heading: "SUPPLIER",
+      tin: settings.tinNumber ?? "",
+      name: settings.companyName,
+      address: settings.address,
+      phone: settings.phone,
+      extra: settings.vatRegNumber ? `Reg No: ${settings.vatRegNumber}` : undefined,
+    },
+    {
+      heading: "PURCHASER",
+      tin: data.purchaser.tin ?? "",
+      name: data.purchaser.name,
+      address: data.purchaser.address,
+      phone: data.purchaser.phone,
+    },
   );
 
-  y = drawFullRow(
-    doc,
-    y,
-    "Additional Information if any",
-    data.additionalInfo,
-    10,
-  );
+  y = drawVehicleStrip(doc, y, data.vehicleStrip ?? [], data.additionalInfo);
 
   y += 2;
   y = drawTableHeader(doc, y);
@@ -613,11 +751,13 @@ export function drawIrdDocument(
     y += 2;
   });
 
-  if (y + 34 > 278) {
+  const signatureHeight = 19;
+  const footerHeight = 10;
+  if (y + footerHeight + 6 + signatureHeight + 8 > 285) {
     doc.addPage();
     y = 16;
   }
-  y += 4;
+  y += 6;
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.25);
   const footerLine =
@@ -628,23 +768,31 @@ export function drawIrdDocument(
     "Any suggestion or complaint regarding your vehicle or job, please contact management.";
   doc.setFont("helvetica", "normal");
   doc.setFontSize(7.3);
-  doc.text(footerLine, MARGIN, y + 3, { maxWidth: 120 });
-  doc.text(complaintLine, MARGIN, y + 7, { maxWidth: 120 });
+  doc.text(footerLine, MARGIN, y + 3, { maxWidth: CONTENT_WIDTH });
+  doc.text(complaintLine, MARGIN, y + 7, { maxWidth: CONTENT_WIDTH });
 
-  const boxWidth = 46;
+  y += footerHeight + 4;
   const boxes = data.signatureBoxes.length
     ? data.signatureBoxes
     : ["AUTHORIZATION"];
-  const startX = RIGHT - boxes.length * boxWidth - (boxes.length - 1) * 2;
+  const gap = 4;
+  const boxWidth = Math.min(
+    52,
+    (CONTENT_WIDTH - gap * (boxes.length - 1)) / boxes.length,
+  );
+  const startX = RIGHT - boxes.length * boxWidth - gap * (boxes.length - 1);
   boxes.forEach((label, index) => {
-    const x = startX + index * (boxWidth + 2);
-    doc.rect(x, y, boxWidth, 17);
+    const x = startX + index * (boxWidth + gap);
+    doc.rect(x, y, boxWidth, signatureHeight);
     doc.setFontSize(6.8);
-    doc.text(label, x + boxWidth / 2, y + 15, { align: "center" });
-    doc.line(x + 6, y + 13, x + boxWidth - 6, y + 13);
+    doc.text(label, x + boxWidth / 2, y + signatureHeight - 3.5, {
+      align: "center",
+      maxWidth: boxWidth - 4,
+    });
+    doc.line(x + 6, y + signatureHeight - 8, x + boxWidth - 6, y + signatureHeight - 8);
   });
 
-  y += 23;
+  y += signatureHeight + 8;
   doc.setFont("helvetica", "normal");
   doc.setFontSize(6.7);
   doc.setTextColor(90, 100, 115);
@@ -666,7 +814,11 @@ function invoiceDocument(
   options: InvoiceDocumentOptions = {},
 ): IrdDocument {
   const issuedParts = parts.filter(
-    (part) => part.status === "Issued" && part.sellingPrice > 0 && !part.includedInLabor,
+    (part) =>
+      part.status === "Issued" &&
+      part.sellingPrice > 0 &&
+      !part.includedInLabor &&
+      part.partSource !== "Customer_Brought",
   );
   const supply = roundCurrency(Math.max(0, totals.subtotal - totals.discount));
   const vat = jobVat(job, settings, supply);
@@ -681,6 +833,8 @@ function invoiceDocument(
     title: job.isVatInvoice ? "TAX INVOICE" : "INVOICE",
     referenceLabel: job.isVatInvoice ? "Tax Invoice No" : "Invoice No",
     reference: job.id,
+    documentNumber: `No: ${job.id}`,
+    dateLabel: "Date of Invoice",
     invoiceDate: job.paidAt ?? new Date().toISOString(),
     supplyDate: job.acceptedAt ?? job.createdAt,
     purchaser: {
@@ -690,6 +844,18 @@ function invoiceDocument(
       tin: options.customerTin ?? job.customerTinNumber ?? "",
     },
     additionalInfo: `Vehicle No: ${job.vehicleNo} (${job.make} ${job.model}) | Job No: ${job.id} | Meter Reading: ${job.mileage.toLocaleString()} km${insuranceInfo}`,
+    vehicleStrip: [
+      { label: "Vehicle No", value: `${job.vehicleNo} (${job.make} ${job.model})` },
+      { label: "Job Card", value: job.id },
+      { label: "Invoice No", value: job.id },
+      { label: "Meter", value: `${job.mileage.toLocaleString()} km` },
+      ...(insurance
+        ? [
+            { label: "Policy No", value: insurance.claim.policyNo },
+            { label: "Claim No", value: insurance.claim.claimNo },
+          ]
+        : []),
+    ],
     sections: [
       {
         title: "Done Jobs",
@@ -755,6 +921,7 @@ export function buildIrdInsuranceBillPdf(
   insurer: InsuranceCompany | undefined,
   settings: WorkshopSettings,
   lines: { labor: number; parts: number; total: number },
+  detail?: { tasks?: JobTask[]; parts?: JobPart[] },
 ): { blob: Blob; filename: string } {
   const doc = new jsPDF({ unit: "mm", format: "a4" });
   const vatAmount = roundCurrency(
@@ -769,6 +936,8 @@ export function buildIrdInsuranceBillPdf(
     title: job.isVatInvoice ? "INSURANCE TAX INVOICE" : "INSURANCE INVOICE",
     referenceLabel: "Invoice No",
     reference: claim.insuranceBillNo || job.id,
+    documentNumber: `No: ${claim.insuranceBillNo || job.id}`,
+    dateLabel: "Date of Invoice",
     invoiceDate: claim.insuranceBillAt ?? new Date().toISOString(),
     supplyDate: job.acceptedAt ?? job.createdAt,
     purchaser: {
@@ -778,28 +947,57 @@ export function buildIrdInsuranceBillPdf(
       tin: insurer?.tinNumber ?? "",
     },
     additionalInfo: `Vehicle No: ${job.vehicleNo} (${job.make} ${job.model}) | Job No: ${job.id} | Meter Reading: ${job.mileage.toLocaleString()} km | Policy No: ${claim.policyNo} | Claim No: ${claim.claimNo}${claim.releaseOrderNo ? ` | Release Order: ${claim.releaseOrderNo}` : ""}`,
+    vehicleStrip: [
+      { label: "Vehicle No", value: `${job.vehicleNo} (${job.make} ${job.model})` },
+      { label: "Job Card", value: job.id },
+      { label: "Invoice No", value: claim.insuranceBillNo || job.id },
+      { label: "Policy No", value: claim.policyNo },
+      { label: "Claim No", value: claim.claimNo },
+      ...(claim.releaseOrderNo
+        ? [{ label: "Release Order", value: claim.releaseOrderNo }]
+        : []),
+    ],
     sections: [
       {
-        title: "Done Jobs",
-        lines: [
-          {
-            description: "Labour and repair charges",
-            qty: 1,
-            unitPrice: lines.labor,
-            kind: "Labour",
-          },
-        ],
+        title: "Labour & repair charges",
+        lines:
+          detail?.tasks && detail.tasks.length > 0
+            ? detail.tasks.map((task) => ({
+                description: task.name,
+                qty: 1,
+                unitPrice: task.laborCost,
+                kind: "Labour" as const,
+              }))
+            : [
+                {
+                  description: "Labour and repair charges",
+                  qty: 1,
+                  unitPrice: lines.labor,
+                  kind: "Labour" as const,
+                },
+              ],
       },
       {
-        title: "Added Items",
-        lines: [
-          {
-            description: "Parts and materials",
-            qty: 1,
-            unitPrice: lines.parts,
-            kind: "Part",
-          },
-        ],
+        title: "Parts & materials",
+        lines:
+          detail?.parts && detail.parts.length > 0
+            ? detail.parts.map((part) => ({
+                description:
+                  part.partSource === "Customer_Brought"
+                    ? `${part.itemName} (customer supplied)`
+                    : part.itemName,
+                qty: partIssueQty(part),
+                unitPrice: part.sellingPrice,
+                kind: "Part" as const,
+              }))
+            : [
+                {
+                  description: "Parts and materials",
+                  qty: 1,
+                  unitPrice: lines.parts,
+                  kind: "Part" as const,
+                },
+              ],
       },
     ],
     totals: {
@@ -845,7 +1043,9 @@ export function buildIrdInsuranceEstimatePdf(
         ? "SUPPLEMENTARY ESTIMATE"
         : "REPAIR ESTIMATE",
     referenceLabel: "Estimate No",
-    reference: `${estimate.number} · Rev ${estimate.revision}`,
+    reference: estimateDisplayNumber(estimate),
+    documentNumber: `No: ${estimateDisplayNumber(estimate)}`,
+    dateLabel: "Date of Estimate",
     invoiceDate: estimate.updatedAt ?? estimate.createdAt,
     supplyDate: job.acceptedAt ?? job.createdAt,
     purchaser: {
@@ -855,6 +1055,14 @@ export function buildIrdInsuranceEstimatePdf(
       tin: insurer?.tinNumber ?? "",
     },
     additionalInfo: `Vehicle No: ${job.vehicleNo} (${job.make} ${job.model}) | Job No: ${job.id} | Meter Reading: ${job.mileage.toLocaleString()} km | Policy No: ${claim.policyNo} | Claim No: ${claim.claimNo}${claim.assessorName ? ` | Assessor: ${claim.assessorName}` : ""}`,
+    vehicleStrip: [
+      { label: "Vehicle No", value: `${job.vehicleNo} (${job.make} ${job.model})` },
+      { label: "Job Card", value: job.id },
+      { label: "Estimate No", value: estimateDisplayNumber(estimate) },
+      { label: "Meter", value: `${job.mileage.toLocaleString()} km` },
+      { label: "Policy No", value: claim.policyNo },
+      { label: "Claim No", value: claim.claimNo },
+    ],
     sections: [
       {
         title: "Done Jobs",
@@ -918,7 +1126,9 @@ export function buildIrdEstimatePdf(
         ? "SUPPLEMENTARY ESTIMATE"
         : "REPAIR ESTIMATE",
     referenceLabel: "Estimate No",
-    reference: `${estimate.number} · Rev ${estimate.revision}`,
+    reference: estimateDisplayNumber(estimate),
+    documentNumber: `No: ${estimateDisplayNumber(estimate)}`,
+    dateLabel: "Date of Estimate",
     invoiceDate: estimate.updatedAt ?? estimate.createdAt,
     supplyDate: job.acceptedAt ?? job.createdAt,
     purchaser: {
@@ -928,6 +1138,12 @@ export function buildIrdEstimatePdf(
       tin: job.customerTinNumber ?? "",
     },
     additionalInfo: `Vehicle No: ${job.vehicleNo} (${job.make} ${job.model}) | Job No: ${job.id} | Meter Reading: ${job.mileage.toLocaleString()} km`,
+    vehicleStrip: [
+      { label: "Vehicle No", value: `${job.vehicleNo} (${job.make} ${job.model})` },
+      { label: "Job Card", value: job.id },
+      { label: "Estimate No", value: estimateDisplayNumber(estimate) },
+      { label: "Meter", value: `${job.mileage.toLocaleString()} km` },
+    ],
     sections: [
       {
         title: "Done Jobs",
@@ -1016,19 +1232,41 @@ function renderIrdHtml(settings: WorkshopSettings, data: IrdDocument): string {
     .map((label) => `<div class="sign-box"><span>${esc(label)}</span><i></i></div>`)
     .join("");
 
+  const stripItems =
+    data.vehicleStrip && data.vehicleStrip.length > 0
+      ? data.vehicleStrip
+      : [{ label: "Details", value: data.additionalInfo }];
+  const vehicleStrip = stripItems
+    .map(
+      (item) =>
+        `<span><b>${esc(item.label)}:</b> ${esc(item.value)}</span>`,
+    )
+    .join('<span class="sep">|</span>');
+
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${esc(data.reference)} — ${esc(settings.companyName)}</title>
 <style>
   *{box-sizing:border-box}
   body{font-family:Arial,Helvetica,sans-serif;background:#eef2f4;margin:0;padding:16px;color:#000}
   .sheet{width:190mm;min-height:277mm;background:#fff;margin:0 auto;padding:0;box-shadow:0 8px 24px rgba(0,0,0,.12)}
-  .title{border:1px solid #000;background:${esc(settings.brandColor || "#0f766e")};color:#fff;display:flex;align-items:center;justify-content:center;gap:3mm;text-align:center;font-size:15px;font-weight:700;letter-spacing:.14em;padding:3.5mm 0;margin:10mm 0 0}
-  .title-logo{max-width:9mm;max-height:9mm;object-fit:contain;background:#fff;border-radius:1mm;padding:.4mm}
-  .grid{display:grid;grid-template-columns:1fr 1fr;border-left:1px solid #000;margin:0 10mm}
+  .masthead{display:flex;justify-content:space-between;align-items:flex-start;gap:6mm;margin:10mm 10mm 0;padding-bottom:3mm;border-bottom:1px solid #000}
+  .brand{display:flex;align-items:center;gap:4mm;min-width:0}
+  .brand-logo{max-height:17mm;max-width:42mm;object-fit:contain}
+  .brand-name{font-size:15px;font-weight:700;line-height:1.2}
+  .doc{text-align:right;flex-shrink:0}
+  .doc-badge{display:inline-block;background:${esc(settings.brandColor || "#0f766e")};color:#fff;font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:2mm 3mm}
+  .doc-no{font-size:11px;font-weight:700;margin-top:2.2mm}
+  .grid{display:grid;grid-template-columns:1fr 1fr;border-left:1px solid #000;margin:3mm 10mm 0}
   .cell{border-right:1px solid #000;border-bottom:1px solid #000;padding:1.8mm 2mm;font-size:8.5px;line-height:1.45;min-height:8mm}
   .cell b{display:block;font-size:7.5px;text-transform:uppercase;margin-bottom:.8mm}
-  .full{border:1px solid #000;border-top:0;margin:0 10mm;padding:1.8mm 2mm;font-size:8.5px;line-height:1.45}
-  .full b{display:block;font-size:7.5px;text-transform:uppercase;margin-bottom:.8mm}
+  .party{padding:2mm 2.4mm;min-height:38mm;font-size:8px;line-height:1.55}
+  .party b{font-size:7.4px;letter-spacing:.06em}
+  .party .row{display:flex;gap:2mm;margin-top:.7mm}
+  .party .row .k{width:16mm;flex-shrink:0}
+  .party .row .v{flex:1;min-width:0}
+  .party .name{font-weight:700}
+  .strip{display:flex;flex-wrap:wrap;gap:2mm 4mm;align-items:center;border:1px solid #000;border-top:0;margin:0 10mm;padding:2.2mm 2.4mm;font-size:8.2px;font-weight:700}
+  .strip .sep{font-weight:400;color:#64748b}
   table.items{width:calc(100% - 20mm);margin:2mm 10mm 0;border-collapse:collapse;font-size:8px}
   table.items th,table.items td{border:1px solid #000;padding:1.4mm 1.8mm;vertical-align:top}
   table.items th{background:#eef1f4;font-size:7.5px;text-align:left}
@@ -1042,26 +1280,46 @@ function renderIrdHtml(settings: WorkshopSettings, data: IrdDocument): string {
   .words{border:1px solid #000;border-top:0;margin:0 10mm;padding:1.8mm 2mm;font-size:8.5px}
   .words b{display:block;font-size:7.5px;text-transform:uppercase;margin-bottom:.8mm}
   .notes{margin:3mm 10mm 0;font-size:7.5px;color:#334155;line-height:1.5}
-  .foot{display:flex;justify-content:space-between;gap:8mm;margin:6mm 10mm 0;align-items:flex-end}
-  .foot .contacts{font-size:7.5px;line-height:1.5;max-width:112mm}
-  .signs{display:flex;gap:2mm}
-  .sign-box{border:1px solid #000;width:46mm;height:17mm;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding-bottom:1.5mm;font-size:6.8px}
-  .sign-box i{display:block;border-top:1px solid #000;width:34mm;margin-bottom:1mm}
-  .powered{margin:3mm 10mm 0;text-align:center;font-size:6.5px;color:#64748b}
+  .foot{display:flex;justify-content:space-between;gap:8mm;margin:8mm 10mm 0;align-items:flex-end;break-inside:avoid;page-break-inside:avoid}
+  .foot .contacts{font-size:7.5px;line-height:1.5;max-width:96mm}
+  .signs{display:flex;gap:4mm;break-inside:avoid;page-break-inside:avoid}
+  .sign-box{border:1px solid #000;width:52mm;height:22mm;display:flex;flex-direction:column;justify-content:flex-end;align-items:center;padding-bottom:2mm;font-size:6.8px;break-inside:avoid;page-break-inside:avoid}
+  .sign-box i{display:block;border-top:1px solid #000;width:38mm;margin-bottom:1.2mm}
+  .powered{margin:4mm 10mm 0;text-align:center;font-size:6.5px;color:#64748b}
   @media print{body{background:#fff;padding:0}.sheet{box-shadow:none;width:auto;min-height:auto}@page{size:A4 portrait;margin:8mm}}
 </style></head>
 <body>
 <div class="sheet">
-  <div class="title">${settings.logo && /^data:image\//i.test(settings.logo) ? `<img class="title-logo" src="${esc(settings.logo)}" alt="logo">` : ""}${esc(data.title)}</div>
+  <div class="masthead">
+    <div class="brand">
+      ${settings.logo && /^data:image\//i.test(settings.logo) ? `<img class="brand-logo" src="${esc(settings.logo)}" alt="logo">` : ""}
+      <div class="brand-name">${esc(settings.companyName)}</div>
+    </div>
+    <div class="doc">
+      <div class="doc-badge">${esc(data.title)}</div>
+      <div class="doc-no">${esc(data.documentNumber ?? data.reference)}</div>
+    </div>
+  </div>
   <div class="grid">
-    <div class="cell"><b>Date of Invoice</b>${esc(numericDate(data.invoiceDate))}</div>
-    <div class="cell"><b>${esc(data.referenceLabel)}</b>${esc(data.reference)}</div>
-    <div class="cell" style="min-height:36mm"><b>Supplier</b>TIN: ${esc(settings.tinNumber || "—")}<br><strong>${esc(settings.companyName)}</strong><br>${esc(settings.address)}<br>Tel: ${esc(settings.phone)}${settings.vatRegNumber ? `<br>VAT Reg No: ${esc(settings.vatRegNumber)}` : ""}</div>
-    <div class="cell" style="min-height:36mm"><b>Purchaser</b>TIN: ${esc(data.purchaser.tin || "—")}<br><strong>${esc(data.purchaser.name)}</strong><br>${esc(data.purchaser.address)}<br>Tel: ${esc(data.purchaser.phone)}</div>
+    <div class="cell"><b>${esc(data.dateLabel ?? "Date of Invoice")}</b>${esc(numericDate(data.invoiceDate))}</div>
+    <div class="cell"><b>Document Ref</b>${esc(data.reference)}</div>
+    <div class="cell party"><b>Supplier</b>
+      <div class="row"><span class="k">TIN No.</span><span class="v">${esc(settings.tinNumber || "—")}</span></div>
+      <div class="row"><span class="k">Name</span><span class="v name">${esc(settings.companyName)}</span></div>
+      <div class="row"><span class="k">Address</span><span class="v">${esc(settings.address)}</span></div>
+      <div class="row"><span class="k">Telephone</span><span class="v">${esc(settings.phone)}</span></div>
+      ${settings.vatRegNumber ? `<div class="row"><span class="k">VAT</span><span class="v">Reg No: ${esc(settings.vatRegNumber)}</span></div>` : ""}
+    </div>
+    <div class="cell party"><b>Purchaser</b>
+      <div class="row"><span class="k">TIN No.</span><span class="v">${esc(data.purchaser.tin || "—")}</span></div>
+      <div class="row"><span class="k">Name</span><span class="v name">${esc(data.purchaser.name)}</span></div>
+      <div class="row"><span class="k">Address</span><span class="v">${esc(data.purchaser.address)}</span></div>
+      <div class="row"><span class="k">Telephone</span><span class="v">${esc(data.purchaser.phone)}</span></div>
+    </div>
     ${data.hideSupplyRow ? "" : `<div class="cell"><b>Date of Supply</b>${esc(numericDate(data.supplyDate))}</div>
     <div class="cell"><b>Place of Supply</b>${esc(supplierAddress(settings))}</div>`}
   </div>
-  <div class="full"><b>Additional Information if any</b>${esc(data.additionalInfo)}</div>
+  <div class="strip">${vehicleStrip}</div>
   <table class="items">
     <thead><tr><th>Ref.</th><th>Description of Goods or Services</th><th class="num">Qty</th><th class="num">Unit Price</th><th class="num">Amount (Rs.)</th></tr></thead>
     <tbody>${sectionRows}</tbody>
@@ -1134,7 +1392,11 @@ export function printThermalInvoice(
   options: InvoiceDocumentOptions = {},
 ): void {
   const issuedParts = parts.filter(
-    (part) => part.status === "Issued" && part.sellingPrice > 0 && !part.includedInLabor,
+    (part) =>
+      part.status === "Issued" &&
+      part.sellingPrice > 0 &&
+      !part.includedInLabor &&
+      part.partSource !== "Customer_Brought",
   );
   const supply = roundCurrency(Math.max(0, totals.subtotal - totals.discount));
   const vat = jobVat(job, settings, supply);

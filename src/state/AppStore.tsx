@@ -25,6 +25,7 @@ import type {
   Department,
   DriverCommission,
   EstimateLine,
+  EstimateLineApproval,
   Expense,
   ExpenseCategory,
   FeatureFlagKey,
@@ -64,9 +65,14 @@ import { createDemoState, createEmptyState, STORAGE_KEY } from "../data/seed";
 import {
   daysBetween,
   driverCommissionFor,
+  estimateDisplayNumber,
+  estimateShortLabel,
+  findApprovedDuplicate,
   formatQty,
   isoDaysFrom,
   jobTotals,
+  money,
+  nextEstimateNumber,
   normalizePhone,
   partIssueQty,
   uid,
@@ -222,11 +228,18 @@ interface AppStoreValue {
     workerId: string,
     catalogueItemId?: string,
     sectionId?: string,
+    options?: { isCustomerExtra?: boolean },
   ) => ActionResult;
   removeTask: (taskId: string) => void;
   updateTask: (
     taskId: string,
-    data: { name: string; laborCost: number; workerId: string; sectionId?: string },
+    data: {
+      name: string;
+      laborCost: number;
+      workerId: string;
+      sectionId?: string;
+      isCustomerExtra?: boolean;
+    },
   ) => ActionResult;
   removePart: (partId: string) => ActionResult;
   requestPart: (
@@ -234,6 +247,11 @@ interface AppStoreValue {
     itemId: string,
     qty: number,
     sectionId?: string,
+    options?: { isCustomerExtra?: boolean },
+  ) => ActionResult;
+  addCustomerBroughtPart: (
+    jobId: string,
+    data: { name: string; qty: number; unitPrice: number; sectionId?: string },
   ) => ActionResult;
   fulfillPart: (
     partId: string,
@@ -278,7 +296,15 @@ interface AppStoreValue {
     notes: string,
   ) => ActionResult;
   removeEstimate: (estimateId: string) => ActionResult;
-  approveEstimate: (estimateId: string) => ActionResult;
+  approveEstimate: (
+    estimateId: string,
+    decisions?: Record<
+      string,
+      { status: EstimateLineApproval; approvedUnitPrice?: number; approvalNote?: string }
+    >,
+  ) => ActionResult;
+  reviseEstimatePrices: (estimateId: string, prices: Record<string, number>) => ActionResult;
+  convertEstimateLineToCustomerExtra: (estimateId: string, lineId: string) => ActionResult;
   setEstimateStatus: (estimateId: string, status: JobEstimate["status"]) => void;
   updateDriverCommission: (jobId: string, driver?: DriverCommission) => ActionResult;
   recordAdvancePayment: (
@@ -360,6 +386,17 @@ interface AppStoreValue {
     claimId?: string;
     insurerId?: string;
     notes?: string;
+    taskIds?: string[];
+    partIds?: string[];
+    laborSubtotal?: number;
+    partsSubtotal?: number;
+    discount?: number;
+    vatRate?: number;
+    vatAmount?: number;
+    advance?: number;
+    policyExcess?: number;
+    depreciation?: number;
+    netPayable?: number;
   }) => ActionResult;
   removeVehicleBill: (billId: string) => void;
   sendMarketingReminder: (id: string) => void;
@@ -544,6 +581,34 @@ function normaliseState(raw: AppState): AppState {
           updatedAt: estimate.updatedAt ?? estimate.createdAt,
         });
       });
+  });
+  // Upgrade legacy "Initial" / "SUP-01" numbering to globally sequential EST-YYYY-NNNN.
+  const maxEstimateByYear = new Map<number, number>();
+  estimates.forEach((estimate) => {
+    const match = estimate.number.match(/^EST-(\d{4})-(\d{4,})$/);
+    if (match) {
+      const year = Number(match[1]);
+      maxEstimateByYear.set(
+        year,
+        Math.max(maxEstimateByYear.get(year) ?? 0, Number(match[2])),
+      );
+    }
+  });
+  estimates.forEach((estimate) => {
+    if (!/^EST-\d{4}-\d{4,}$/.test(estimate.number)) {
+      const year = new Date(estimate.createdAt).getFullYear() || new Date().getFullYear();
+      const next = (maxEstimateByYear.get(year) ?? 0) + 1;
+      maxEstimateByYear.set(year, next);
+      estimate.number = `EST-${year}-${String(next).padStart(4, "0")}`;
+    }
+    if (estimate.kind === "Supplementary" && !estimate.supplementaryNo) {
+      const siblings = estimatesByJob
+        .get(estimate.jobCardId)
+        ?.filter((entry) => entry.kind === "Supplementary")
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+      estimate.supplementaryNo =
+        (siblings?.findIndex((entry) => entry.id === estimate.id) ?? 0) + 1;
+    }
   });
 
   return {
@@ -1521,6 +1586,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       workerId: string,
       catalogueItemId?: string,
       sectionId?: string,
+      options?: { isCustomerExtra?: boolean },
     ): ActionResult => {
       const today = localDateKey();
       const user = state.users.find((entry) => entry.id === state.currentUserId);
@@ -1549,6 +1615,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             createdAt: new Date().toISOString(),
             addedBy: user?.name,
             addedAt: new Date().toISOString(),
+            isCustomerExtra: options?.isCustomerExtra || undefined,
           },
         ],
       }));
@@ -1564,7 +1631,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const updateTask = useCallback(
     (
       taskId: string,
-      data: { name: string; laborCost: number; workerId: string; sectionId?: string },
+      data: {
+        name: string;
+        laborCost: number;
+        workerId: string;
+        sectionId?: string;
+        isCustomerExtra?: boolean;
+      },
     ): ActionResult => {
       const task = state.tasks.find((entry) => entry.id === taskId);
       if (!task) return { ok: false, message: "Labour task not found." };
@@ -1586,6 +1659,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 laborCost: data.laborCost,
                 workerId: data.workerId,
                 sectionId: data.sectionId,
+                isCustomerExtra: data.isCustomerExtra || undefined,
               }
             : entry,
         ),
@@ -1616,7 +1690,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const requestPart = useCallback(
-    (jobId: string, itemId: string, qty: number, sectionId?: string): ActionResult => {
+    (
+      jobId: string,
+      itemId: string,
+      qty: number,
+      sectionId?: string,
+      options?: { isCustomerExtra?: boolean },
+    ): ActionResult => {
       const item = state.inventory.find((i) => i.id === itemId);
       if (!item) return { ok: false, message: "Item not found." };
       if (item.stock <= 0) return { ok: false, message: `${item.name} is out of stock.` };
@@ -1639,6 +1719,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         includedInLabor: false,
         measuredQty: item.type === "Consumable" || requestedQty % 1 !== 0,
         supplierId: item.supplierId,
+        partSource: "Workshop_Store",
+        isCustomerExtra: options?.isCustomerExtra || undefined,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
@@ -1658,6 +1740,67 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return { ok: true, reference: record.id };
     },
     [state.inventory, state.jobCards],
+  );
+
+  const addCustomerBroughtPart = useCallback(
+    (
+      jobId: string,
+      data: { name: string; qty: number; unitPrice: number; sectionId?: string },
+    ): ActionResult => {
+      const job = state.jobCards.find((entry) => entry.id === jobId);
+      if (!job) return { ok: false, message: "Job card not found." };
+      if (!job.insuranceClaimId) {
+        return {
+          ok: false,
+          message: "Customer-brought parts are only available on insurance jobs.",
+        };
+      }
+      const name = data.name.trim();
+      if (!name) return { ok: false, message: "Enter the part description." };
+      const qty = Number(data.qty);
+      if (!Number.isFinite(qty) || qty <= 0) {
+        return { ok: false, message: "Enter a valid quantity." };
+      }
+      const unitPrice = Math.max(0, Number(data.unitPrice) || 0);
+      const now = new Date().toISOString();
+      const user = state.users.find((entry) => entry.id === state.currentUserId);
+      const record: JobPart = {
+        id: uid("jp"),
+        jobCardId: jobId,
+        itemId: `customer_${uid("part")}`,
+        itemName: name,
+        qtyRequested: qty,
+        qtyIssued: qty,
+        costPrice: 0,
+        marginPercent: 0,
+        sellingPrice: unitPrice,
+        quotedSellingPrice: unitPrice,
+        insuranceApprovedPrice: unitPrice,
+        status: "Issued",
+        sectionId: data.sectionId || job.sectionIds?.[0],
+        includedInLabor: false,
+        partSource: "Customer_Brought",
+        createdAt: now,
+        updatedAt: now,
+        warrantyStatus: "None",
+        salvageStatus: "Not Required",
+      };
+      setState((prev) => ({
+        ...prev,
+        parts: [...prev.parts, record],
+        notifications: notify(
+          prev,
+          ["Supervisor", "Stores", "Cashier"],
+          "Customer-brought part added",
+          `${jobId} · ${job.vehicleNo} · ${name} · ${formatQty(qty)} at ${unitPrice.toLocaleString()}. Insurance bill only — no stock deduction. Added by ${user?.name ?? "staff"}.`,
+          "normal",
+          `/jobs/${jobId}`,
+          { vehicleNo: job.vehicleNo, eventType: "inventory" },
+        ),
+      }));
+      return { ok: true, reference: record.id };
+    },
+    [state.jobCards, state.users, state.currentUserId],
   );
 
   const fulfillPart = useCallback(
@@ -1708,7 +1851,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 qtyRequested: qty,
                 costPrice: data.costPrice,
                 marginPercent: data.marginPercent,
-                sellingPrice: selling,
+                sellingPrice:
+                  p.insuranceApprovedPrice !== undefined && p.insuranceApprovedPrice > 0
+                    ? p.insuranceApprovedPrice
+                    : p.estimateId && p.sellingPrice > 0
+                      ? p.sellingPrice
+                      : selling,
                 status: "Issued" as const,
                 supplierId: data.supplierId ?? p.supplierId,
                 supplierInvoiceNo: data.supplierInvoiceNo.trim() || undefined,
@@ -1838,12 +1986,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ): ActionResult => {
       const part = state.parts.find((p) => p.id === partId);
       if (!part) return { ok: false, message: "Part not found." };
-      if (!data.supplierInvoiceNo.trim()) {
-        return {
-          ok: false,
-          message: "Enter the replacement supplier invoice number.",
-        };
-      }
       const selling = Math.round(data.costPrice * (1 + data.marginPercent / 100) * 100) / 100;
       const job = state.jobCards.find((j) => j.id === part.jobCardId);
       setState((prev) => ({
@@ -1854,10 +1996,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 ...p,
                 costPrice: data.costPrice,
                 marginPercent: data.marginPercent,
-                sellingPrice: selling,
+                sellingPrice:
+                  p.insuranceApprovedPrice !== undefined && p.insuranceApprovedPrice > 0
+                    ? p.insuranceApprovedPrice
+                    : selling,
                 status: "Issued" as const,
                 supplierId: data.supplierId ?? p.supplierId,
-                supplierInvoiceNo: data.supplierInvoiceNo.trim(),
+                supplierInvoiceNo: data.supplierInvoiceNo.trim() || p.supplierInvoiceNo,
                 warrantyStatus: "Replaced" as const,
                 updatedAt: new Date().toISOString(),
               }
@@ -1973,14 +2118,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ): ActionResult => {
       const part = state.parts.find((entry) => entry.id === partId);
       if (!part) return { ok: false, message: "Part not found." };
-      if (!data.replacementInvoiceNo.trim()) {
-        return { ok: false, message: "Enter the supplier invoice number for the replacement." };
-      }
       if (data.creditNoteAmount > 0 && !data.creditNoteNo.trim()) {
         return { ok: false, message: "Enter the supplier credit note number." };
       }
       const now = new Date().toISOString();
-      const originalInvoiceNo = part.supplierInvoiceNo?.trim() || data.replacementInvoiceNo.trim();
+      const originalInvoiceNo = part.supplierInvoiceNo?.trim() || "";
+      const replacementInvoiceNo = data.replacementInvoiceNo.trim() || originalInvoiceNo;
       const creditNote: SupplierCreditNote | null =
         data.creditNoteAmount > 0
           ? {
@@ -1994,7 +2137,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
               date: now,
               reason:
                 part.warrantyNote ??
-                `Warranty replacement for ${part.itemName} (original invoice ${originalInvoiceNo}, replacement invoice ${data.replacementInvoiceNo.trim()}).`,
+                `Warranty replacement for ${part.itemName}${
+                  originalInvoiceNo ? ` (original invoice ${originalInvoiceNo})` : ""
+                }.`,
               status: "Recorded",
             }
           : null;
@@ -2004,8 +2149,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           entry.id === partId
             ? {
                 ...entry,
-                supplierInvoiceNo: entry.supplierInvoiceNo || data.replacementInvoiceNo.trim(),
-                warrantyReplacementInvoiceNo: data.replacementInvoiceNo.trim(),
+                supplierInvoiceNo: entry.supplierInvoiceNo || replacementInvoiceNo || undefined,
+                warrantyReplacementInvoiceNo: replacementInvoiceNo || undefined,
                 warrantyStatus:
                   data.creditNoteAmount > 0 ? ("Credited" as const) : ("Replaced" as const),
                 creditNoteNo: data.creditNoteNo.trim() || undefined,
@@ -2076,11 +2221,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
             "Only one Initial estimate is allowed per job. Create a Supplementary estimate for extra work.",
         };
       }
-      const supplementaryCount = existing.filter(
-        (entry) => entry.kind === "Supplementary",
-      ).length;
-      const number =
-        kind === "Initial" ? "Initial" : `SUP-${String(supplementaryCount + 1).padStart(2, "0")}`;
+      if (kind === "Supplementary") {
+        const seen = new Set<string>();
+        for (const line of lines) {
+          const key = `${line.type}:${line.description.trim().toLowerCase()}`;
+          if (seen.has(key)) {
+            return {
+              ok: false,
+              message: `"${line.description.trim()}" appears twice in this supplementary estimate.`,
+            };
+          }
+          seen.add(key);
+          const duplicate = findApprovedDuplicate(
+            state.estimates,
+            jobId,
+            line.type,
+            line.description,
+          );
+          if (duplicate) {
+            return {
+              ok: false,
+              message: `"${line.description.trim()}" was already approved in ${estimateShortLabel(duplicate)}. Remove the duplicate line.`,
+            };
+          }
+        }
+      }
+      const supplementaryNo =
+        kind === "Supplementary"
+          ? existing.filter((entry) => entry.kind === "Supplementary").length + 1
+          : undefined;
+      const number = nextEstimateNumber(state.estimates);
       const user = state.users.find((entry) => entry.id === state.currentUserId);
       const now = new Date().toISOString();
       const estimate: JobEstimate = {
@@ -2088,9 +2258,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         jobCardId: jobId,
         kind,
         number,
+        supplementaryNo,
         revision: 1,
         status: "Awaiting Approval",
-        lines,
+        lines: lines.map((line) => ({
+          ...line,
+          description: line.description.trim(),
+          approvalStatus: line.approvalStatus ?? "Pending",
+        })),
         notes: notes.trim(),
         createdAt: now,
         updatedAt: now,
@@ -2103,7 +2278,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           prev,
           ["Supervisor", "Owner"],
           `${kind} estimate ready for approval`,
-          `${jobId} · ${number} · ${lines.length} line${lines.length === 1 ? "" : "s"} · ${notes.trim() || "No notes"}`,
+          `${jobId} · ${estimateDisplayNumber(estimate)} · ${lines.length} line${lines.length === 1 ? "" : "s"} · ${notes.trim() || "No notes"}`,
           "normal",
           `/jobs/${jobId}`,
           { vehicleNo: job.vehicleNo, eventType: "job" },
@@ -2125,6 +2300,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
         };
       }
       if (lines.length === 0) return { ok: false, message: "Add at least one estimate line." };
+      if (estimate.kind === "Supplementary") {
+        const seen = new Set<string>();
+        for (const line of lines) {
+          const key = `${line.type}:${line.description.trim().toLowerCase()}`;
+          if (seen.has(key)) {
+            return {
+              ok: false,
+              message: `"${line.description.trim()}" appears twice in this supplementary estimate.`,
+            };
+          }
+          seen.add(key);
+          const duplicate = findApprovedDuplicate(
+            state.estimates,
+            estimate.jobCardId,
+            line.type,
+            line.description,
+            estimate.id,
+          );
+          if (duplicate) {
+            return {
+              ok: false,
+              message: `"${line.description.trim()}" was already approved in ${estimateShortLabel(duplicate)}. Remove the duplicate line.`,
+            };
+          }
+        }
+      }
       const now = new Date().toISOString();
       const estimateJob = state.jobCards.find((entry) => entry.id === estimate.jobCardId);
       setState((prev) => ({
@@ -2133,7 +2334,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
           entry.id === estimateId
             ? {
                 ...entry,
-                lines,
+                lines: lines.map((line) => {
+                  const previous = entry.lines.find((old) => old.id === line.id);
+                  const unchanged =
+                    previous &&
+                    previous.type === line.type &&
+                    previous.description.trim() === line.description.trim() &&
+                    previous.qty === line.qty &&
+                    previous.unitPrice === line.unitPrice;
+                  return {
+                    ...line,
+                    description: line.description.trim(),
+                    approvalStatus: unchanged
+                      ? previous.approvalStatus ?? "Pending"
+                      : ("Pending" as EstimateLineApproval),
+                    approvedUnitPrice: unchanged ? previous.approvedUnitPrice : undefined,
+                    approvalNote: unchanged ? previous.approvalNote : undefined,
+                  };
+                }),
                 notes: notes.trim(),
                 status: "Awaiting Approval" as const,
                 revision: (entry.revision ?? 1) + 1,
@@ -2145,7 +2363,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           prev,
           ["Supervisor", "Owner"],
           "Estimate revised",
-          `${estimate.jobCardId} · ${estimate.number} is now Rev ${(estimate.revision ?? 1) + 1} and needs approval.`,
+          `${estimate.jobCardId} · ${estimateDisplayNumber(estimate)} is now Rev ${(estimate.revision ?? 1) + 1} and needs approval.`,
           "normal",
           `/jobs/${estimate.jobCardId}`,
           { vehicleNo: estimateJob?.vehicleNo, eventType: "job" },
@@ -2176,11 +2394,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const approveEstimate = useCallback(
-    (estimateId: string): ActionResult => {
+    (
+      estimateId: string,
+      decisions?: Record<
+        string,
+        { status: EstimateLineApproval; approvedUnitPrice?: number; approvalNote?: string }
+      >,
+    ): ActionResult => {
       const estimate = state.estimates.find((entry) => entry.id === estimateId);
       if (!estimate) return { ok: false, message: "Estimate not found." };
       if (estimate.status === "Approved") {
-        return { ok: false, message: "This estimate is already approved." };
+        return {
+          ok: false,
+          message:
+            "This estimate is already approved. Edit the assessor approved prices in Parts approval.",
+        };
       }
       const job = state.jobCards.find((entry) => entry.id === estimate.jobCardId);
       if (!job) return { ok: false, message: "Job card not found." };
@@ -2190,82 +2418,88 @@ export function AppProvider({ children }: { children: ReactNode }) {
         state.workers.find((worker) => worker.status === "Active")?.id ??
         "";
       const now = new Date().toISOString();
-      const labourLines = estimate.lines.filter((line) => line.type === "Labour");
-      const partLines = estimate.lines.filter((line) => line.type === "Part");
+      const resolvedLines = estimate.lines.map((line) => {
+        const decision = decisions?.[line.id];
+        const status = decision?.status ?? line.approvalStatus ?? "Approved";
+        const approvedUnitPrice =
+          decision?.approvedUnitPrice ?? line.approvedUnitPrice ?? line.unitPrice;
+        return {
+          ...line,
+          approvalStatus: status,
+          approvedUnitPrice:
+            status === "Approved" ? approvedUnitPrice : line.approvedUnitPrice,
+          approvalNote: decision?.approvalNote ?? line.approvalNote,
+        };
+      });
+      const approvedLines = resolvedLines.filter(
+        (line) => line.approvalStatus === "Approved",
+      );
+      if (approvedLines.length === 0) {
+        return {
+          ok: false,
+          message: "Approve at least one line before confirming the estimate.",
+        };
+      }
+      const labourLines = approvedLines.filter((line) => line.type === "Labour");
+      const partLines = approvedLines.filter((line) => line.type === "Part");
       const newTasks: JobTask[] = labourLines.map((line) => ({
         id: uid("tsk"),
         jobCardId: job.id,
         name: line.description,
-        laborCost: line.qty * line.unitPrice,
+        laborCost:
+          Math.round(line.qty * (line.approvedUnitPrice ?? line.unitPrice) * 100) / 100,
+        quotedLaborCost: Math.round(line.qty * line.unitPrice * 100) / 100,
         workerId: fallbackWorker,
         createdAt: now,
         addedBy: user?.name,
         addedAt: now,
+        estimateId: estimate.id,
+        estimateLineId: line.id,
       }));
       const newParts: JobPart[] = partLines.map((line) => {
         const match = state.inventory.find(
           (item) => item.name.toLowerCase() === line.description.trim().toLowerCase(),
         );
+        const approvedPrice =
+          Math.round((line.approvedUnitPrice ?? line.unitPrice) * 100) / 100;
         return {
           id: uid("jp"),
           jobCardId: job.id,
           itemId: match?.id ?? `est_${line.id}`,
           itemName: line.description,
           qtyRequested: line.qty,
-          qtyIssued: line.qty,
+          qtyIssued: 0,
           costPrice: 0,
           marginPercent: 0,
-          sellingPrice: line.unitPrice,
-          status: "Issued" as const,
+          sellingPrice: approvedPrice,
+          quotedSellingPrice: line.unitPrice,
+          insuranceApprovedPrice: approvedPrice,
+          status: "Requested" as const,
           sectionId: job.sectionIds?.[0] || match?.sectionId,
           measuredQty: line.qty % 1 !== 0,
           supplierId: match?.supplierId,
+          partSource: "Workshop_Store" as const,
+          estimateId: estimate.id,
+          estimateLineId: line.id,
           createdAt: now,
           updatedAt: now,
           warrantyStatus: "None" as const,
           salvageStatus: "Not Required" as const,
         };
       });
-      const stockMovements: StockMovement[] = partLines.flatMap((line) => {
-        const match = state.inventory.find(
-          (item) => item.name.toLowerCase() === line.description.trim().toLowerCase(),
-        );
-        return match
-          ? [
-              {
-                id: uid("stk"),
-                itemId: match.id,
-                itemName: match.name,
-                date: now,
-                type: "Job_Issue" as const,
-                qty: -line.qty,
-                reference: job.id,
-                note: `Issued from approved estimate ${estimate.number}`,
-                createdBy: user?.name,
-              },
-            ]
-          : [];
-      });
       setState((prev) => ({
         ...prev,
         tasks: [...prev.tasks, ...newTasks],
         parts: [...prev.parts, ...newParts],
-        inventory: prev.inventory.map((item) => {
-          const issued = partLines
-            .filter(
-              (line) => line.description.trim().toLowerCase() === item.name.toLowerCase(),
-            )
-            .reduce((sum, line) => sum + line.qty, 0);
-          return issued ? { ...item, stock: Math.max(0, item.stock - issued) } : item;
-        }),
-        stockMovements: [...stockMovements, ...prev.stockMovements],
         estimates: prev.estimates.map((entry) =>
           entry.id === estimateId
             ? {
                 ...entry,
+                lines: resolvedLines,
                 status: "Approved" as const,
                 approvedAt: now,
                 approvedBy: user?.name,
+                updatedAt: now,
               }
             : entry,
         ),
@@ -2292,16 +2526,217 @@ export function AppProvider({ children }: { children: ReactNode }) {
         notifications: notify(
           prev,
           ["Supervisor", "Cashier", "Stores"],
-          "Estimate approved — job unlocked",
-          `${job.id} · ${estimate.number} Rev ${estimate.revision} approved. ${labourLines.length} labour task(s) and ${partLines.length} part(s) copied to the job card.`,
+          "Estimate approved — approved lines loaded",
+          `${job.id} · ${estimateDisplayNumber(estimate)} approved. ${labourLines.length} labour task(s) and ${partLines.length} part(s) loaded at assessor-approved prices. Parts stay Requested until Stores issues them; no stock was deducted.`,
           "high",
           `/jobs/${job.id}`,
           { vehicleNo: job.vehicleNo, eventType: "job" },
         ),
       }));
-      return { ok: true, reference: estimate.number };
+      return { ok: true, reference: estimateDisplayNumber(estimate) };
     },
     [state.estimates, state.jobCards, state.inventory, state.workers, state.users, state.currentUserId],
+  );
+
+  const reviseEstimatePrices = useCallback(
+    (estimateId: string, prices: Record<string, number>): ActionResult => {
+      const estimate = state.estimates.find((entry) => entry.id === estimateId);
+      if (!estimate) return { ok: false, message: "Estimate not found." };
+      if (estimate.status !== "Approved") {
+        return {
+          ok: false,
+          message: "Approve the estimate before recording assessor price revisions.",
+        };
+      }
+      const changed = estimate.lines.filter((line) => {
+        const price = prices[line.id];
+        return (
+          Number.isFinite(price) &&
+          price >= 0 &&
+          price !== (line.approvedUnitPrice ?? line.unitPrice)
+        );
+      });
+      if (changed.length === 0) {
+        return { ok: false, message: "No approved price changes to save." };
+      }
+      const now = new Date().toISOString();
+      const priceById = new Map(changed.map((line) => [line.id, prices[line.id]]));
+      const lineById = new Map(estimate.lines.map((line) => [line.id, line]));
+      setState((prev) => ({
+        ...prev,
+        estimates: prev.estimates.map((entry) =>
+          entry.id === estimateId
+            ? {
+                ...entry,
+                lines: entry.lines.map((line) => {
+                  const price = priceById.get(line.id);
+                  return price === undefined
+                    ? line
+                    : {
+                        ...line,
+                        approvedUnitPrice: price,
+                        approvalStatus:
+                          line.approvalStatus === "Rejected"
+                            ? line.approvalStatus
+                            : ("Approved" as EstimateLineApproval),
+                      };
+                }),
+                updatedAt: now,
+              }
+            : entry,
+        ),
+        tasks: prev.tasks.map((task) => {
+          if (task.estimateId !== estimateId || !task.estimateLineId) return task;
+          const price = priceById.get(task.estimateLineId);
+          if (price === undefined) return task;
+          const line = lineById.get(task.estimateLineId);
+          return {
+            ...task,
+            laborCost: Math.round((line ? line.qty : 1) * price * 100) / 100,
+            quotedLaborCost: line
+              ? Math.round(line.qty * line.unitPrice * 100) / 100
+              : task.quotedLaborCost,
+          };
+        }),
+        parts: prev.parts.map((part) => {
+          if (part.estimateId !== estimateId || !part.estimateLineId) return part;
+          const price = priceById.get(part.estimateLineId);
+          if (price === undefined) return part;
+          const line = lineById.get(part.estimateLineId);
+          return {
+            ...part,
+            sellingPrice: price,
+            insuranceApprovedPrice: price,
+            quotedSellingPrice: line?.unitPrice ?? part.quotedSellingPrice,
+            updatedAt: now,
+          };
+        }),
+        notifications: notify(
+          prev,
+          ["Supervisor", "Cashier", "Accounting"],
+          "Assessor prices updated",
+          `${estimate.jobCardId} · ${estimateDisplayNumber(estimate)} · ${changed.length} approved price${changed.length === 1 ? "" : "s"} revised. Job card costs and the insurance bill now use the assessor figures.`,
+          "normal",
+          `/jobs/${estimate.jobCardId}`,
+          { eventType: "job" },
+        ),
+      }));
+      return { ok: true };
+    },
+    [state.estimates],
+  );
+
+  const convertEstimateLineToCustomerExtra = useCallback(
+    (estimateId: string, lineId: string): ActionResult => {
+      const estimate = state.estimates.find((entry) => entry.id === estimateId);
+      if (!estimate) return { ok: false, message: "Estimate not found." };
+      const line = estimate.lines.find((entry) => entry.id === lineId);
+      if (!line) return { ok: false, message: "Estimate line not found." };
+      const job = state.jobCards.find((entry) => entry.id === estimate.jobCardId);
+      if (!job) return { ok: false, message: "Job card not found." };
+      if (!job.insuranceClaimId) {
+        return {
+          ok: false,
+          message: "Non-claim / customer extra work only applies to insurance jobs.",
+        };
+      }
+      if (line.approvalStatus === "Approved") {
+        return {
+          ok: false,
+          message:
+            "This line is already approved and loaded. Reject it first, then move it to customer extra.",
+        };
+      }
+      const alreadyLoaded =
+        line.type === "Labour"
+          ? state.tasks.some((task) => task.estimateLineId === line.id)
+          : state.parts.some((part) => part.estimateLineId === line.id);
+      if (alreadyLoaded) {
+        return { ok: false, message: "This line is already on the job card." };
+      }
+      const user = state.users.find((entry) => entry.id === state.currentUserId);
+      const fallbackWorker =
+        state.workers.find((worker) => worker.userId === user?.id)?.id ??
+        state.workers.find((worker) => worker.status === "Active")?.id ??
+        "";
+      const now = new Date().toISOString();
+      const task: JobTask | null =
+        line.type === "Labour"
+          ? {
+              id: uid("tsk"),
+              jobCardId: job.id,
+              name: line.description,
+              laborCost: Math.round(line.qty * line.unitPrice * 100) / 100,
+              workerId: fallbackWorker,
+              sectionId: job.sectionIds?.[0],
+              createdAt: now,
+              addedBy: user?.name,
+              addedAt: now,
+              isCustomerExtra: true,
+              estimateId: estimate.id,
+              estimateLineId: line.id,
+            }
+          : null;
+      const part: JobPart | null =
+        line.type === "Part"
+          ? {
+              id: uid("jp"),
+              jobCardId: job.id,
+              itemId: `est_extra_${line.id}`,
+              itemName: line.description,
+              qtyRequested: line.qty,
+              qtyIssued: 0,
+              costPrice: 0,
+              marginPercent: 0,
+              sellingPrice: line.unitPrice,
+              quotedSellingPrice: line.unitPrice,
+              status: "Requested",
+              sectionId: job.sectionIds?.[0],
+              measuredQty: line.qty % 1 !== 0,
+              partSource: "Workshop_Store",
+              isCustomerExtra: true,
+              estimateId: estimate.id,
+              estimateLineId: line.id,
+              createdAt: now,
+              updatedAt: now,
+              warrantyStatus: "None",
+              salvageStatus: "Not Required",
+            }
+          : null;
+      setState((prev) => ({
+        ...prev,
+        tasks: task ? [...prev.tasks, task] : prev.tasks,
+        parts: part ? [...prev.parts, part] : prev.parts,
+        estimates: prev.estimates.map((entry) =>
+          entry.id === estimateId
+            ? {
+                ...entry,
+                lines: entry.lines.map((row) =>
+                  row.id === lineId
+                    ? {
+                        ...row,
+                        approvalStatus: "Rejected" as EstimateLineApproval,
+                        approvalNote: "Moved to Non-Claim / Customer Extra",
+                      }
+                    : row,
+                ),
+                updatedAt: now,
+              }
+            : entry,
+        ),
+        notifications: notify(
+          prev,
+          ["Supervisor", "Cashier"],
+          "Rejected line moved to customer extra",
+          `${job.id} · ${line.description} will be billed to the customer, not the insurer.`,
+          "normal",
+          `/jobs/${job.id}`,
+          { vehicleNo: job.vehicleNo, eventType: "job" },
+        ),
+      }));
+      return { ok: true };
+    },
+    [state.estimates, state.jobCards, state.tasks, state.parts, state.workers, state.users, state.currentUserId],
   );
 
   const setEstimateStatus = useCallback(
@@ -3814,16 +4249,52 @@ export function AppProvider({ children }: { children: ReactNode }) {
       claimId?: string;
       insurerId?: string;
       notes?: string;
+      taskIds?: string[];
+      partIds?: string[];
+      laborSubtotal?: number;
+      partsSubtotal?: number;
+      discount?: number;
+      vatRate?: number;
+      vatAmount?: number;
+      advance?: number;
+      policyExcess?: number;
+      depreciation?: number;
+      netPayable?: number;
     }): ActionResult => {
       const job = state.jobCards.find((entry) => entry.id === input.jobCardId);
       if (!job) return { ok: false, message: "Job card not found." };
       const billNo = input.billNo.trim();
       if (!billNo) return { ok: false, message: "Enter a bill number." };
-      if (!Number.isFinite(input.amount) || input.amount <= 0) {
-        return { ok: false, message: "Enter a bill amount greater than zero." };
+      const taskIds = input.taskIds ?? [];
+      const partIds = input.partIds ?? [];
+      if (taskIds.length === 0 && partIds.length === 0) {
+        return { ok: false, message: "Tick at least one task or part for this bill." };
+      }
+      const netPayable = Number.isFinite(input.netPayable)
+        ? Number(input.netPayable)
+        : Number(input.amount);
+      if (!Number.isFinite(netPayable) || netPayable <= 0) {
+        return { ok: false, message: "The bill net payable must be greater than zero." };
       }
       if (state.vehicleBills.some((entry) => entry.billNo.toLowerCase() === billNo.toLowerCase())) {
         return { ok: false, message: "That bill number is already recorded." };
+      }
+      const lockedTask = state.tasks.find(
+        (task) => taskIds.includes(task.id) && task.assignedBillId,
+      );
+      const lockedPart = state.parts.find(
+        (part) => partIds.includes(part.id) && part.assignedBillId,
+      );
+      if (lockedTask || lockedPart) {
+        const bill = state.vehicleBills.find(
+          (entry) => entry.id === (lockedTask?.assignedBillId ?? lockedPart?.assignedBillId),
+        );
+        return {
+          ok: false,
+          message: `${lockedTask?.name ?? lockedPart?.itemName ?? "That item"} is already billed${
+            bill ? ` on ${bill.billNo}` : ""
+          }. Untick it or remove the earlier bill first.`,
+        };
       }
       const user = state.users.find((entry) => entry.id === state.currentUserId);
       const bill: VehicleBill = {
@@ -3832,21 +4303,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
         vehicleNo: job.vehicleNo,
         kind: input.kind,
         billNo,
-        amount: Math.round(input.amount * 100) / 100,
+        amount: Math.round(netPayable * 100) / 100,
         createdAt: new Date().toISOString(),
         createdBy: user?.name,
         claimId: input.claimId,
         insurerId: input.insurerId,
         notes: input.notes?.trim() || undefined,
+        taskIds,
+        partIds,
+        laborSubtotal: input.laborSubtotal,
+        partsSubtotal: input.partsSubtotal,
+        discount: input.discount,
+        vatRate: input.vatRate,
+        vatAmount: input.vatAmount,
+        advance: input.advance,
+        policyExcess: input.policyExcess,
+        depreciation: input.depreciation,
+        netPayable: Math.round(netPayable * 100) / 100,
       };
       setState((prev) => ({
         ...prev,
         vehicleBills: [bill, ...prev.vehicleBills],
+        tasks: prev.tasks.map((task) =>
+          taskIds.includes(task.id) ? { ...task, assignedBillId: bill.id } : task,
+        ),
+        parts: prev.parts.map((part) =>
+          partIds.includes(part.id) ? { ...part, assignedBillId: bill.id } : part,
+        ),
         notifications: notify(
           prev,
           ["Cashier", "Accounting"],
           `${input.kind} bill recorded`,
-          `${job.vehicleNo} · ${billNo} · LKR ${bill.amount.toLocaleString()}. Separate bills can be issued for the same vehicle.`,
+          `${job.vehicleNo} · ${billNo} · ${money(netPayable)}. ${taskIds.length} task(s) and ${partIds.length} part(s) locked to this bill.`,
           "normal",
           "/accounting",
           { vehicleNo: job.vehicleNo, eventType: "payment" },
@@ -3854,13 +4342,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }));
       return { ok: true, reference: bill.id };
     },
-    [state.jobCards, state.vehicleBills, state.users, state.currentUserId],
+    [state.jobCards, state.vehicleBills, state.tasks, state.parts, state.users, state.currentUserId],
   );
 
   const removeVehicleBill = useCallback((billId: string) => {
     setState((prev) => ({
       ...prev,
       vehicleBills: prev.vehicleBills.filter((entry) => entry.id !== billId),
+      tasks: prev.tasks.map((task) =>
+        task.assignedBillId === billId ? { ...task, assignedBillId: undefined } : task,
+      ),
+      parts: prev.parts.map((part) =>
+        part.assignedBillId === billId ? { ...part, assignedBillId: undefined } : part,
+      ),
     }));
   }, []);
 
@@ -5293,6 +5787,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTask,
       removePart,
       requestPart,
+      addCustomerBroughtPart,
       fulfillPart,
       requestExchange,
       requestReturn,
@@ -5305,6 +5800,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateEstimate,
       removeEstimate,
       approveEstimate,
+      reviseEstimatePrices,
+      convertEstimateLineToCustomerExtra,
       setEstimateStatus,
       updateDriverCommission,
       recordAdvancePayment,
@@ -5402,6 +5899,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTask,
       removePart,
       requestPart,
+      addCustomerBroughtPart,
       fulfillPart,
       requestExchange,
       requestReturn,
@@ -5414,6 +5912,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateEstimate,
       removeEstimate,
       approveEstimate,
+      reviseEstimatePrices,
+      convertEstimateLineToCustomerExtra,
       setEstimateStatus,
       updateDriverCommission,
       recordAdvancePayment,

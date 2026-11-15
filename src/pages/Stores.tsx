@@ -132,9 +132,7 @@ export function StoresPage() {
   const [swapCost, setSwapCost] = useState("");
   const [swapMargin, setSwapMargin] = useState("20");
   const [swapSupplier, setSwapSupplier] = useState("");
-  const [swapInvoice, setSwapInvoice] = useState("");
   const [warrantyTargetId, setWarrantyTargetId] = useState<string | null>(null);
-  const [warrantyInvoice, setWarrantyInvoice] = useState("");
   const [warrantyCreditNote, setWarrantyCreditNote] = useState("");
   const [warrantyAmount, setWarrantyAmount] = useState("");
   const [returnTargetId, setReturnTargetId] = useState<string | null>(null);
@@ -333,7 +331,6 @@ export function StoresPage() {
     setSwapCost(String(part.costPrice || Math.round(part.sellingPrice / 1.2)));
     setSwapMargin(String(part.marginPercent || 20));
     setSwapSupplier(part.supplierId ?? "");
-    setSwapInvoice(part.supplierInvoiceNo ?? "");
   }
 
   function saveSwap() {
@@ -344,15 +341,11 @@ export function StoresPage() {
       push("Enter the new cost price.", "error");
       return;
     }
-    if (!swapInvoice.trim()) {
-      push("Record the replacement supplier invoice number.", "error");
-      return;
-    }
     const result = approveExchange(swapPartRecord.id, {
       costPrice: cost,
       marginPercent: Number.isFinite(margin) ? margin : 20,
       supplierId: swapSupplier || undefined,
-      supplierInvoiceNo: swapInvoice.trim(),
+      supplierInvoiceNo: swapPartRecord.supplierInvoiceNo ?? "",
     });
     if (!result.ok) {
       push(result.message ?? "Could not complete the exchange.", "error");
@@ -373,7 +366,6 @@ export function StoresPage() {
     const part = state.parts.find((entry) => entry.id === partId);
     if (!part) return;
     setWarrantyTargetId(partId);
-    setWarrantyInvoice(part.supplierInvoiceNo ?? "");
     setWarrantyCreditNote(part.creditNoteNo ?? "");
     setWarrantyAmount(part.creditNoteAmount ? String(part.creditNoteAmount) : "");
   }
@@ -381,10 +373,6 @@ export function StoresPage() {
   function saveWarranty() {
     if (!warrantyPartRecord) return;
     const amount = Number(warrantyAmount) || 0;
-    if (!warrantyInvoice.trim()) {
-      push("Record the supplier invoice number for the replacement.", "error");
-      return;
-    }
     if (amount > 0 && !warrantyCreditNote.trim()) {
       push("Enter the supplier credit note number for the credit amount.", "error");
       return;
@@ -394,7 +382,7 @@ export function StoresPage() {
       return;
     }
     const result = completeWarrantyClaim(warrantyPartRecord.id, {
-      replacementInvoiceNo: warrantyInvoice.trim(),
+      replacementInvoiceNo: warrantyPartRecord.supplierInvoiceNo ?? "",
       creditNoteNo: warrantyCreditNote.trim(),
       creditNoteAmount: amount,
     });
@@ -1680,18 +1668,6 @@ export function StoresPage() {
                   ))}
                 </select>
               </Field>
-              <Field
-                label="Replacement invoice no."
-                required
-                hint="Supplier invoice for the replacement part."
-              >
-                <input
-                  className="input"
-                  placeholder="HZL/26/1904"
-                  value={swapInvoice}
-                  onChange={(event) => setSwapInvoice(event.target.value)}
-                />
-              </Field>
               <Field label="New selling price">
                 <input className="input" readOnly value={money(swapSelling)} />
               </Field>
@@ -1732,18 +1708,6 @@ export function StoresPage() {
               <span className="tiny">{warrantyPartRecord.warrantyNote ?? "—"}</span>
             </div>
             <div className="form-grid">
-              <Field
-                label="Replacement invoice no."
-                required
-                hint="Invoice covering the replacement part received from the supplier."
-              >
-                <input
-                  className="input"
-                  placeholder="HZL/26/1889"
-                  value={warrantyInvoice}
-                  onChange={(event) => setWarrantyInvoice(event.target.value)}
-                />
-              </Field>
               <Field label="Credit note no." hint="Required only when the supplier issues a credit.">
                 <input
                   className="input"

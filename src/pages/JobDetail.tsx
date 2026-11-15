@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   Banknote,
   Camera,
+  Check,
   CheckCircle2,
   ChevronRight,
   ClipboardCheck,
@@ -12,6 +13,8 @@ import {
   Gauge,
   History,
   Layers,
+  ListChecks,
+  Lock,
   MessageCircle,
   Package,
   Percent,
@@ -28,12 +31,17 @@ import {
   UserRound,
   Wallet,
   Wrench,
+  X,
   XCircle,
 } from "lucide-react";
 import { hasDepartment, useApp } from "../state/AppStore";
 import { featureEnabled } from "../lib/features";
 import {
   driverCommissionFor,
+  estimateDisplayNumber,
+  estimateKindLabel,
+  estimateShortLabel,
+  findApprovedDuplicate,
   formatQty,
   jobTotals,
   money,
@@ -72,8 +80,10 @@ import { useToast } from "../components/Toast";
 import type {
   DamagePhoto,
   EstimateLine,
+  EstimateLineApproval,
   JobEstimate,
   JobTask,
+  VehicleBill,
 } from "../types";
 
 type JobTab = "overview" | "labour" | "parts" | "estimates" | "insurance" | "invoice";
@@ -87,6 +97,7 @@ export function JobDetailPage() {
     updateTask,
     removeTask,
     requestPart,
+    addCustomerBroughtPart,
     removePart,
     requestExchange,
     requestReturn,
@@ -96,7 +107,8 @@ export function JobDetailPage() {
     updateEstimate,
     removeEstimate,
     approveEstimate,
-    setEstimateStatus,
+    reviseEstimatePrices,
+    convertEstimateLineToCustomerExtra,
     addVehicleBill,
     removeVehicleBill,
     updateDriverCommission,
@@ -131,6 +143,30 @@ export function JobDetailPage() {
   const [estimateNotes, setEstimateNotes] = useState("");
   const [estimateLines, setEstimateLines] = useState<EstimateLine[]>([]);
   const [estimateEditingId, setEstimateEditingId] = useState<string | null>(null);
+  const [approvalEstimateId, setApprovalEstimateId] = useState<string | null>(null);
+  const [approvalDecisions, setApprovalDecisions] = useState<
+    Record<string, { status: EstimateLineApproval; approvedUnitPrice: string }>
+  >({});
+  const [partsApprovalDraft, setPartsApprovalDraft] = useState<Record<string, string>>({});
+  const [splitBillOpen, setSplitBillOpen] = useState(false);
+  const [splitBillKind, setSplitBillKind] = useState<VehicleBill["kind"]>("Insurance");
+  const [splitBillNo, setSplitBillNo] = useState("");
+  const [splitTaskIds, setSplitTaskIds] = useState<string[]>([]);
+  const [splitPartIds, setSplitPartIds] = useState<string[]>([]);
+  const [splitDiscount, setSplitDiscount] = useState("0");
+  const [splitVat, setSplitVat] = useState("0");
+  const [splitAdvance, setSplitAdvance] = useState("0");
+  const [splitExcess, setSplitExcess] = useState("0");
+  const [splitDepreciation, setSplitDepreciation] = useState("0");
+  const [splitNotes, setSplitNotes] = useState("");
+  const [partSource, setPartSource] = useState<"Workshop_Store" | "Customer_Brought">(
+    "Workshop_Store",
+  );
+  const [partExtra, setPartExtra] = useState(false);
+  const [customerPartName, setCustomerPartName] = useState("");
+  const [customerPartQty, setCustomerPartQty] = useState("1");
+  const [customerPartValue, setCustomerPartValue] = useState("");
+  const [taskExtra, setTaskExtra] = useState(false);
   const [driverOpen, setDriverOpen] = useState(false);
   const [driverForm, setDriverForm] = useState({
     name: "",
@@ -160,10 +196,6 @@ export function JobDetailPage() {
   const [chequeAccountId, setChequeAccountId] = useState("");
   const [warrantyPartId, setWarrantyPartId] = useState<string | null>(null);
   const [warrantyNote, setWarrantyNote] = useState("");
-  const [billKind, setBillKind] = useState<"Insurance" | "Customer">("Customer");
-  const [billHistoryNo, setBillHistoryNo] = useState("");
-  const [billHistoryAmount, setBillHistoryAmount] = useState("");
-  const [billHistoryNotes, setBillHistoryNotes] = useState("");
 
   const job = state.jobCards.find((entry) => entry.id === jobId);
   const jobTasks = useMemo(
@@ -289,6 +321,65 @@ export function JobDetailPage() {
   const driverCommission = driverCommissionFor(activeJob, activeTotals);
   const canManageInsurance = canSupervise || Boolean(currentUser?.isOwner);
   const warrantyPart = state.parts.find((part) => part.id === warrantyPartId) ?? null;
+  const billableParts = jobParts.filter(
+    (part) =>
+      (part.status === "Issued" ||
+        part.status === "Exchange Pending" ||
+        part.status === "Return Pending") &&
+      !part.includedInLabor &&
+      part.sellingPrice > 0 &&
+      part.warrantyStatus !== "Replaced",
+  );
+  const orderedEstimates = [...jobEstimates].sort((a, b) => {
+    if (a.kind !== b.kind) return a.kind === "Initial" ? -1 : 1;
+    return (a.supplementaryNo ?? 0) - (b.supplementaryNo ?? 0);
+  });
+  const approvalEstimate = approvalEstimateId
+    ? jobEstimates.find((estimate) => estimate.id === approvalEstimateId) ?? null
+    : null;
+  const splitTasks = jobTasks.filter((task) => splitTaskIds.includes(task.id));
+  const splitParts = billableParts.filter((part) => splitPartIds.includes(part.id));
+  const splitLabor = splitTasks.reduce((sum, task) => sum + task.laborCost, 0);
+  const splitPartsTotal = splitParts.reduce(
+    (sum, part) => sum + part.sellingPrice * partIssueQty(part),
+    0,
+  );
+  const splitSubtotal = splitLabor + splitPartsTotal;
+  const splitDiscountValue = Math.min(
+    splitSubtotal,
+    Math.max(0, Number(splitDiscount) || 0),
+  );
+  const splitVatRate = Math.max(0, Number(splitVat) || 0);
+  const splitVatAmount =
+    ((splitSubtotal - splitDiscountValue) * splitVatRate) / 100;
+  const splitAdvanceValue = Math.min(
+    splitSubtotal - splitDiscountValue + splitVatAmount,
+    Math.max(0, Number(splitAdvance) || 0),
+  );
+  const splitExcessValue = Math.max(0, Number(splitExcess) || 0);
+  const splitDepreciationValue = Math.max(0, Number(splitDepreciation) || 0);
+  const splitGross =
+    splitSubtotal - splitDiscountValue + splitVatAmount - splitAdvanceValue;
+  const splitNet =
+    splitBillKind === "Insurance"
+      ? Math.max(0, splitGross - splitExcessValue - splitDepreciationValue)
+      : Math.max(0, splitGross + splitExcessValue + splitDepreciationValue);
+  const billById = (billId?: string) =>
+    billId ? state.vehicleBills.find((bill) => bill.id === billId) ?? null : null;
+  const estimateDuplicateLineIds = new Set<string>();
+  if (estimateKind === "Supplementary") {
+    estimateLines.forEach((line) => {
+      if (!line.description.trim()) return;
+      const duplicate = findApprovedDuplicate(
+        state.estimates,
+        activeJob.id,
+        line.type,
+        line.description,
+        estimateEditingId ?? undefined,
+      );
+      if (duplicate) estimateDuplicateLineIds.add(line.id);
+    });
+  }
 
   const estimatesEnabled = featureEnabled(state.settings, "enable_estimates_module");
   const insuranceEnabled = featureEnabled(state.settings, "enable_insurance_module");
@@ -311,6 +402,7 @@ export function JobDetailPage() {
     setTaskEditingId(task?.id ?? null);
     setTaskName(task?.name ?? "");
     setTaskLabor(task ? String(task.laborCost) : "");
+    setTaskExtra(Boolean(task?.isCustomerExtra));
     if (task) {
       setTaskSectionId(task.sectionId ?? "");
       setTaskWorker(task.workerId);
@@ -356,6 +448,7 @@ export function JobDetailPage() {
           laborCost: labor,
           workerId: taskWorker,
           sectionId: taskSectionId || undefined,
+          isCustomerExtra: taskExtra || undefined,
         })
       : addTask(
           activeJob.id,
@@ -364,6 +457,7 @@ export function JobDetailPage() {
           taskWorker,
           undefined,
           taskSectionId || undefined,
+          { isCustomerExtra: taskExtra || undefined },
         );
     if (!result.ok) {
       push(result.message ?? "Could not assign this task.", "error");
@@ -378,13 +472,14 @@ export function JobDetailPage() {
     setTaskEditingId(null);
   }
 
-  function newEstimateLine(): EstimateLine {
+  function newEstimateLine(type: EstimateLine["type"] = "Labour"): EstimateLine {
     return {
       id: `el_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-      type: "Labour",
+      type,
       description: "",
       qty: 1,
       unitPrice: 0,
+      approvalStatus: "Pending",
     };
   }
 
@@ -392,31 +487,7 @@ export function JobDetailPage() {
     setEstimateEditingId(existing?.id ?? null);
     setEstimateKind(existing?.kind ?? kind);
     setEstimateNotes(existing?.notes ?? "");
-    if (existing) {
-      setEstimateLines(
-        existing.lines.map((line) => ({ ...line, id: `el_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` })),
-      );
-    } else {
-      const carried: EstimateLine[] = [
-        ...jobTasks.map((task) => ({
-          id: `el_${task.id}`,
-          type: "Labour" as const,
-          description: task.name,
-          qty: 1,
-          unitPrice: task.laborCost,
-        })),
-        ...jobParts
-          .filter((part) => part.sellingPrice > 0)
-          .map((part) => ({
-            id: `el_${part.id}`,
-            type: "Part" as const,
-            description: part.itemName,
-            qty: partIssueQty(part) || part.qtyRequested,
-            unitPrice: part.sellingPrice,
-          })),
-      ];
-      setEstimateLines(carried.length > 0 ? carried : [newEstimateLine()]);
-    }
+    setEstimateLines(existing ? existing.lines.map((line) => ({ ...line })) : []);
     setEstimateOpen(true);
   }
 
@@ -427,6 +498,13 @@ export function JobDetailPage() {
   }
 
   function saveEstimate() {
+    if (estimateDuplicateLineIds.size > 0) {
+      push(
+        "Remove the lines already approved on an earlier estimate before saving.",
+        "error",
+      );
+      return;
+    }
     const lines = estimateLines.filter(
       (line) => line.description.trim() && line.qty > 0 && line.unitPrice >= 0,
     );
@@ -460,18 +538,229 @@ export function JobDetailPage() {
     setTab("estimates");
   }
 
-  function changeEstimateStatus(estimate: JobEstimate, status: JobEstimate["status"]) {
-    if (status === "Approved") {
-      const result = approveEstimate(estimate.id);
-      if (!result.ok) {
-        push(result.message ?? "Could not approve the estimate.", "error");
+  function openApproval(estimate: JobEstimate) {
+    setApprovalEstimateId(estimate.id);
+    setApprovalDecisions(
+      Object.fromEntries(
+        estimate.lines.map((line) => [
+          line.id,
+          {
+            status: (line.approvalStatus === "Rejected"
+              ? "Rejected"
+              : "Approved") as EstimateLineApproval,
+            approvedUnitPrice: String(line.approvedUnitPrice ?? line.unitPrice),
+          },
+        ]),
+      ),
+    );
+  }
+
+  function updateApprovalDecision(
+    lineId: string,
+    patch: Partial<{ status: EstimateLineApproval; approvedUnitPrice: string }>,
+  ) {
+    setApprovalDecisions((prev) => ({
+      ...prev,
+      [lineId]: {
+        ...(prev[lineId] ?? {
+          status: "Approved" as EstimateLineApproval,
+          approvedUnitPrice: "0",
+        }),
+        ...patch,
+      },
+    }));
+  }
+
+  function saveApproval() {
+    if (!approvalEstimate) return;
+    const decisions = Object.fromEntries(
+      approvalEstimate.lines.map((line) => {
+        const draft = approvalDecisions[line.id];
+        return [
+          line.id,
+          {
+            status: draft?.status ?? ("Approved" as EstimateLineApproval),
+            approvedUnitPrice:
+              Number(draft?.approvedUnitPrice) || line.unitPrice,
+          },
+        ];
+      }),
+    );
+    if (approvalEstimate.status === "Approved") {
+      const changed = approvalEstimate.lines.some((line) => {
+        const draftPrice = Number(approvalDecisions[line.id]?.approvedUnitPrice);
+        return (
+          Number.isFinite(draftPrice) &&
+          draftPrice !== (line.approvedUnitPrice ?? line.unitPrice)
+        );
+      });
+      if (!changed) {
+        setApprovalEstimateId(null);
+        push("No approved price changes to save.", "info");
         return;
       }
-      push("Estimate approved. Lines copied to tasks and parts, and the job is unlocked.");
+      const prices = Object.fromEntries(
+        approvalEstimate.lines
+          .filter(
+            (line) =>
+              (approvalDecisions[line.id]?.status ?? line.approvalStatus) === "Approved",
+          )
+          .map((line) => [
+            line.id,
+            Number(approvalDecisions[line.id]?.approvedUnitPrice) ||
+              line.approvedUnitPrice ||
+              line.unitPrice,
+          ]),
+      );
+      const result = reviseEstimatePrices(approvalEstimate.id, prices);
+      if (!result.ok) {
+        push(result.message ?? "Could not save the approved prices.", "error");
+        return;
+      }
+      push("Assessor approved prices saved. Job card costs and the insurance bill updated.");
+      setApprovalEstimateId(null);
       return;
     }
-    setEstimateStatus(estimate.id, status);
-    push(`${estimate.kind} estimate marked ${status.toLowerCase()}.`);
+    const result = approveEstimate(approvalEstimate.id, decisions);
+    if (!result.ok) {
+      push(result.message ?? "Could not approve the estimate.", "error");
+      return;
+    }
+    if (claim) {
+      approveClaimEstimate();
+    }
+    push(
+      "Estimate approved. Only approved lines were loaded at the assessor prices; parts remain Requested until Stores issues them.",
+    );
+    setApprovalEstimateId(null);
+  }
+
+  function savePartsApproval(estimate: JobEstimate) {
+    const prices: Record<string, number> = {};
+    estimate.lines
+      .filter((line) => line.type === "Part" && line.approvalStatus === "Approved")
+      .forEach((line) => {
+        const raw = partsApprovalDraft[line.id];
+        const value = Number(raw);
+        prices[line.id] =
+          raw !== undefined && raw !== "" && Number.isFinite(value)
+            ? value
+            : line.approvedUnitPrice ?? line.unitPrice;
+      });
+    const result = reviseEstimatePrices(estimate.id, prices);
+    if (!result.ok) {
+      push(result.message ?? "Could not save the parts approval prices.", "error");
+      return;
+    }
+    if (claim) {
+      approveClaimParts();
+    }
+    push("Assessor approved part prices saved to the job card and insurance bill.");
+  }
+
+  function convertRejectedLine(estimate: JobEstimate, line: EstimateLine) {
+    const result = convertEstimateLineToCustomerExtra(estimate.id, line.id);
+    if (!result.ok) {
+      push(result.message ?? "Could not move the line to customer extra.", "error");
+      return;
+    }
+    push(`${line.description} moved to Non-Claim / Customer Extra.`);
+  }
+
+  function openSplitBill(kind: VehicleBill["kind"]) {
+    setSplitBillKind(kind);
+    const count = state.vehicleBills.filter(
+      (bill) => bill.jobCardId === activeJob.id && bill.kind === kind,
+    ).length;
+    const prefix = kind === "Insurance" ? "INS" : kind === "Customer" ? "CUS" : "ADD";
+    setSplitBillNo(`${prefix}-${activeJob.id}-${count + 1}`);
+    setSplitDiscount("0");
+    setSplitVat(
+      activeJob.isVatInvoice ? String(state.settings.defaultVatRate ?? 18) : "0",
+    );
+    setSplitAdvance("0");
+    setSplitExcess("0");
+    setSplitDepreciation("0");
+    setSplitNotes("");
+    const taskIds = jobTasks
+      .filter(
+        (task) =>
+          !task.assignedBillId &&
+          (kind === "Insurance"
+            ? !task.isCustomerExtra
+            : kind === "Customer"
+              ? Boolean(task.isCustomerExtra)
+              : false),
+      )
+      .map((task) => task.id);
+    const partIds = billableParts
+      .filter((part) => {
+        if (part.assignedBillId) return false;
+        if (kind === "Insurance") {
+          return part.partSource === "Customer_Brought" || !part.isCustomerExtra;
+        }
+        if (kind === "Customer") {
+          return (
+            part.partSource !== "Customer_Brought" && Boolean(part.isCustomerExtra)
+          );
+        }
+        return false;
+      })
+      .map((part) => part.id);
+    setSplitTaskIds(taskIds);
+    setSplitPartIds(partIds);
+    setSplitBillOpen(true);
+  }
+
+  function toggleSplitTask(taskId: string) {
+    setSplitTaskIds((prev) =>
+      prev.includes(taskId) ? prev.filter((id) => id !== taskId) : [...prev, taskId],
+    );
+  }
+
+  function toggleSplitPart(partId: string) {
+    setSplitPartIds((prev) =>
+      prev.includes(partId) ? prev.filter((id) => id !== partId) : [...prev, partId],
+    );
+  }
+
+  function saveSplitBill() {
+    if (splitTaskIds.length === 0 && splitPartIds.length === 0) {
+      push("Tick at least one task or part for this bill.", "error");
+      return;
+    }
+    if (splitNet <= 0) {
+      push("The bill net payable must be greater than zero.", "error");
+      return;
+    }
+    const result = addVehicleBill({
+      jobCardId: activeJob.id,
+      kind: splitBillKind,
+      billNo: splitBillNo,
+      amount: splitNet,
+      netPayable: splitNet,
+      claimId: claim?.id,
+      insurerId: claim?.insurerId,
+      notes: splitNotes,
+      taskIds: splitTaskIds,
+      partIds: splitPartIds,
+      laborSubtotal: splitLabor,
+      partsSubtotal: splitPartsTotal,
+      discount: splitDiscountValue,
+      vatRate: splitVatRate,
+      vatAmount: splitVatAmount,
+      advance: splitAdvanceValue,
+      policyExcess: splitExcessValue,
+      depreciation: splitDepreciationValue,
+    });
+    if (!result.ok) {
+      push(result.message ?? "Could not record the bill.", "error");
+      return;
+    }
+    push(
+      `${splitBillKind} bill ${splitBillNo.trim()} recorded for ${activeJob.vehicleNo} at ${money(splitNet)}.`,
+    );
+    setSplitBillOpen(false);
   }
 
   function openDriverModal() {
@@ -651,10 +940,18 @@ export function JobDetailPage() {
   }
 
   function insuranceBillLines() {
+    const parts = activeTotals.parts + activeTotals.customerBroughtParts;
     return {
       labor: activeTotals.labor,
-      parts: activeTotals.parts,
-      total: claim?.insuranceBillAmount ?? activeTotals.total,
+      parts,
+      total: claim?.insuranceBillAmount ?? activeTotals.labor + parts,
+    };
+  }
+
+  function insuranceBillDetail() {
+    return {
+      tasks: jobTasks.filter((task) => !task.isCustomerExtra),
+      parts: billableParts.filter((part) => !part.isCustomerExtra),
     };
   }
 
@@ -666,6 +963,7 @@ export function JobDetailPage() {
       insurer ?? undefined,
       state.settings,
       insuranceBillLines(),
+      insuranceBillDetail(),
     );
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -723,13 +1021,13 @@ export function JobDetailPage() {
             claim,
             insurer ?? undefined,
             state.settings,
-            `Insurance estimate ${estimate.number} Rev ${estimate.revision} for ${activeJob.vehicleNo} · claim ${claim.claimNo} · ${money(estimate.lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0))}. ${state.settings.companyName}.`,
+            `Insurance estimate ${estimateDisplayNumber(estimate)} for ${activeJob.vehicleNo} · claim ${claim.claimNo} · ${money(estimate.lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0))}. ${state.settings.companyName}.`,
           )
         : await shareEstimateWhatsApp(
             activeJob,
             estimate,
             state.settings,
-            `Estimate ${estimate.number} Rev ${estimate.revision} for ${activeJob.vehicleNo} · ${money(estimate.lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0))}. ${state.settings.companyName}. Reply here to approve the work.`,
+            `Estimate ${estimateDisplayNumber(estimate)} for ${activeJob.vehicleNo} · ${money(estimate.lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0))}. ${state.settings.companyName}. Reply here to approve the work.`,
           );
       push(
         outcome === "queued"
@@ -751,10 +1049,10 @@ export function JobDetailPage() {
     }
     downloadEstimatePdf(estimate);
     const subject = encodeURIComponent(
-      `Insurance estimate ${estimate.number} Rev ${estimate.revision} · claim ${claim.claimNo}`,
+      `Insurance estimate ${estimateDisplayNumber(estimate)} · claim ${claim.claimNo}`,
     );
     const body = encodeURIComponent(
-      `Dear ${insurer?.name ?? "Assessor"},\n\nPlease find attached estimate ${estimate.number} Rev ${estimate.revision} for ${activeJob.vehicleNo} (${activeJob.make} ${activeJob.model}), policy ${claim.policyNo}, claim ${claim.claimNo}.\n\nThe estimated total is ${money(estimate.lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0))}. The PDF has been downloaded — attach it to this email before sending.\n\nRegards,\n${state.settings.companyName}\n${state.settings.phone}`,
+      `Dear ${insurer?.name ?? "Assessor"},\n\nPlease find attached estimate ${estimateDisplayNumber(estimate)} for ${activeJob.vehicleNo} (${activeJob.make} ${activeJob.model}), policy ${claim.policyNo}, claim ${claim.claimNo}.\n\nThe estimated total is ${money(estimate.lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0))}. The PDF has been downloaded — attach it to this email before sending.\n\nRegards,\n${state.settings.companyName}\n${state.settings.phone}`,
     );
     window.location.href = `mailto:${insurer?.email ?? ""}?subject=${subject}&body=${body}`;
   }
@@ -770,6 +1068,7 @@ export function JobDetailPage() {
         state.settings,
         insuranceBillLines(),
         `Insurance bill for ${activeJob.vehicleNo} · claim ${claim.claimNo} · ${money(insuranceBillLines().total)}. ${state.settings.companyName}.`,
+        insuranceBillDetail(),
       );
       push("Insurance bill prepared for WhatsApp.", "info");
     } catch {
@@ -777,26 +1076,6 @@ export function JobDetailPage() {
     } finally {
       setBusyAction("");
     }
-  }
-
-  function saveVehicleBill() {
-    const result = addVehicleBill({
-      jobCardId: activeJob.id,
-      kind: billKind,
-      billNo: billHistoryNo,
-      amount: Number(billHistoryAmount),
-      claimId: claim?.id,
-      insurerId: claim?.insurerId,
-      notes: billHistoryNotes,
-    });
-    if (!result.ok) {
-      push(result.message ?? "Could not record the bill.", "error");
-      return;
-    }
-    push(`${billKind} bill ${billHistoryNo.trim()} recorded for ${activeJob.vehicleNo}.`);
-    setBillHistoryNo("");
-    setBillHistoryAmount("");
-    setBillHistoryNotes("");
   }
 
   function openWarrantyClaim(partId: string) {
@@ -825,7 +1104,29 @@ export function JobDetailPage() {
     setSelectedItemId("");
     setPartQty("1");
     setPartSectionId(activeJob.sectionIds?.[0] ?? "");
+    setPartSource("Workshop_Store");
+    setPartExtra(false);
+    setCustomerPartName("");
+    setCustomerPartQty("1");
+    setCustomerPartValue("");
     setPartOpen(true);
+  }
+
+  function saveCustomerBroughtPart() {
+    const result = addCustomerBroughtPart(activeJob.id, {
+      name: customerPartName,
+      qty: Number(customerPartQty),
+      unitPrice: Number(customerPartValue),
+      sectionId: partSectionId || undefined,
+    });
+    if (!result.ok) {
+      push(result.message ?? "Could not add the customer-brought part.", "error");
+      return;
+    }
+    push(
+      `${customerPartName.trim()} added as customer-brought. Insurance bill only — no stock deduction.`,
+    );
+    setPartOpen(false);
   }
 
   function sendPartRequest() {
@@ -845,7 +1146,9 @@ export function JobDetailPage() {
       );
       return;
     }
-    const result = requestPart(activeJob.id, selectedItem.id, qty, partSectionId || undefined);
+    const result = requestPart(activeJob.id, selectedItem.id, qty, partSectionId || undefined, {
+      isCustomerExtra: partExtra || undefined,
+    });
     if (!result.ok) {
       push(result.message ?? "Could not request this part.", "error");
       return;
@@ -1370,6 +1673,22 @@ export function JobDetailPage() {
                             {worker?.fullName ?? "Unassigned"} · commission{" "}
                             {worker ? `${worker.commissionRate}%` : "0%"} · added {timeAgo(task.createdAt)}
                           </span>
+                          <div className="row wrap" style={{ gap: 4, marginTop: 4 }}>
+                            {task.isCustomerExtra && (
+                              <span className="badge badge-amber">Customer extra</span>
+                            )}
+                            {billById(task.assignedBillId) && (
+                              <span className="badge badge-slate">
+                                <Lock size={10} /> {billById(task.assignedBillId)?.billNo}
+                              </span>
+                            )}
+                            {task.quotedLaborCost !== undefined &&
+                              task.quotedLaborCost !== task.laborCost && (
+                                <span className="chip">
+                                  Quoted {money(task.quotedLaborCost)}
+                                </span>
+                              )}
+                          </div>
                         </div>
                         <div style={{ textAlign: "right" }}>
                           <div className="strong small">{money(task.laborCost)}</div>
@@ -1452,6 +1771,12 @@ export function JobDetailPage() {
                     const unit = item?.measureUnit ?? item?.unit ?? "pc";
                     const isConsumable = item?.type === "Consumable";
                     const section = state.sections.find((entry) => entry.id === part.sectionId);
+                    const issuedQty =
+                      part.qtyIssued > 0
+                        ? part.qtyIssued
+                        : ["Issued", "Exchange Pending", "Return Pending"].includes(part.status)
+                          ? part.qtyRequested
+                          : 0;
                     return (
                       <div className="part-row" key={part.id}>
                         <span className="part-icon">
@@ -1463,6 +1788,17 @@ export function JobDetailPage() {
                             <StatusBadge status={part.status} />
                             {part.includedInLabor && (
                               <span className="badge badge-slate">Included in labor</span>
+                            )}
+                            {part.partSource === "Customer_Brought" && (
+                              <span className="badge badge-blue">Customer supplied</span>
+                            )}
+                            {part.isCustomerExtra && (
+                              <span className="badge badge-amber">Customer extra</span>
+                            )}
+                            {billById(part.assignedBillId) && (
+                              <span className="badge badge-slate">
+                                <Lock size={10} /> {billById(part.assignedBillId)?.billNo}
+                              </span>
                             )}
                             {sectionsEnabled && section && (
                               <span
@@ -1479,7 +1815,7 @@ export function JobDetailPage() {
                           </div>
                           <span>
                             Requested {formatQty(part.qtyRequested, unit)} · issued{" "}
-                            {formatQty(partIssueQty(part), unit)} ·{" "}
+                            {formatQty(issuedQty, unit)} ·{" "}
                             {supplier?.name ?? "Supplier pending"} · {part.marginPercent}% margin
                           </span>
                           <div className="tiny muted" style={{ marginTop: 3 }}>
@@ -1508,6 +1844,12 @@ export function JobDetailPage() {
                               : money(part.sellingPrice * partIssueQty(part))}
                           </div>
                           <div className="tiny muted">line value</div>
+                          {part.insuranceApprovedPrice !== undefined &&
+                            part.insuranceApprovedPrice !== part.sellingPrice && (
+                              <div className="tiny muted">
+                                Approved {money(part.insuranceApprovedPrice)}
+                              </div>
+                            )}
                           {isConsumable && part.status === "Issued" && canSupervise && (
                             <label className="tiny" style={{ display: "inline-flex", gap: 4, marginTop: 3 }}>
                               <input
@@ -1657,19 +1999,41 @@ export function JobDetailPage() {
                       }
                     />
                   ) : (
-                    jobEstimates.map((estimate) => {
+                    orderedEstimates.map((estimate) => {
                       const estimateTotal = estimate.lines.reduce(
                         (sum, line) => sum + line.qty * line.unitPrice,
                         0,
                       );
+                      const approvedTotal = estimate.lines.reduce(
+                        (sum, line) =>
+                          sum +
+                          (line.approvalStatus === "Approved"
+                            ? line.qty * (line.approvedUnitPrice ?? line.unitPrice)
+                            : 0),
+                        0,
+                      );
+                      const pendingCount = estimate.lines.filter(
+                        (line) =>
+                          !line.approvalStatus || line.approvalStatus === "Pending",
+                      ).length;
                       return (
                         <div key={estimate.id} style={{ marginBottom: 18 }}>
                           <div className="row-between wrap" style={{ marginBottom: 8 }}>
                             <div className="row wrap" style={{ gap: 8 }}>
-                              <strong>{estimate.number} estimate</strong>
+                              <strong>{estimateDisplayNumber(estimate)}</strong>
                               <span className="badge badge-brand">Rev {estimate.revision}</span>
                               <StatusBadge status={estimate.status} />
                               <span className="badge badge-slate">{money(estimateTotal)}</span>
+                              {approvedTotal > 0 && approvedTotal !== estimateTotal && (
+                                <span className="badge badge-green">
+                                  Approved {money(approvedTotal)}
+                                </span>
+                              )}
+                              {pendingCount > 0 && estimate.status !== "Approved" && (
+                                <span className="badge badge-amber">
+                                  {pendingCount} pending
+                                </span>
+                              )}
                               {estimate.status === "Approved" && (
                                 <span className="badge badge-slate">Locked</span>
                               )}
@@ -1694,7 +2058,7 @@ export function JobDetailPage() {
                                         push(result.message ?? "Could not delete the estimate.", "error");
                                         return;
                                       }
-                                      push(`${estimate.number} estimate deleted.`, "info");
+                                      push(`${estimateDisplayNumber(estimate)} deleted.`, "info");
                                     }}
                                   >
                                     <Trash2 />
@@ -1703,22 +2067,22 @@ export function JobDetailPage() {
                                 </>
                               )}
                               {canManageInsurance && estimate.status === "Awaiting Approval" && (
-                                <>
-                                  <button
-                                    className="btn btn-soft btn-sm"
-                                    onClick={() => changeEstimateStatus(estimate, "Approved")}
-                                  >
-                                    <CheckCircle2 />
-                                    Approve
-                                  </button>
-                                  <button
-                                    className="btn btn-ghost btn-sm"
-                                    onClick={() => changeEstimateStatus(estimate, "Rejected")}
-                                  >
-                                    <XCircle />
-                                    Reject
-                                  </button>
-                                </>
+                                <button
+                                  className="btn btn-soft btn-sm"
+                                  onClick={() => openApproval(estimate)}
+                                >
+                                  <ListChecks />
+                                  Review &amp; approve
+                                </button>
+                              )}
+                              {canManageInsurance && estimate.status === "Approved" && (
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => openApproval(estimate)}
+                                >
+                                  <Pencil />
+                                  Revise approved prices
+                                </button>
                               )}
                               <button
                                 className="btn btn-ghost btn-sm"
@@ -1772,20 +2136,59 @@ export function JobDetailPage() {
                                   <th>Type</th>
                                   <th>Description</th>
                                   <th className="num">Qty</th>
-                                  <th className="num">Unit price</th>
-                                  <th className="num">Amount</th>
+                                  <th className="num">Quoted</th>
+                                  <th className="num">Approved</th>
+                                  <th>Decision</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {estimate.lines.map((line) => (
-                                  <tr key={line.id}>
-                                    <td><span className="chip">{line.type}</span></td>
-                                    <td>{line.description}</td>
-                                    <td className="num">{line.qty}</td>
-                                    <td className="num">{money(line.unitPrice)}</td>
-                                    <td className="num">{money(line.qty * line.unitPrice)}</td>
-                                  </tr>
-                                ))}
+                                {estimate.lines.map((line) => {
+                                  const approvedPrice =
+                                    line.approvedUnitPrice ?? line.unitPrice;
+                                  const variance =
+                                    line.approvalStatus === "Approved"
+                                      ? approvedPrice - line.unitPrice
+                                      : 0;
+                                  return (
+                                    <tr key={line.id}>
+                                      <td><span className="chip">{line.type}</span></td>
+                                      <td>{line.description}</td>
+                                      <td className="num">{line.qty}</td>
+                                      <td className="num">{money(line.unitPrice)}</td>
+                                      <td className="num">
+                                        {line.approvalStatus === "Approved"
+                                          ? money(approvedPrice)
+                                          : "—"}
+                                        {variance !== 0 && (
+                                          <div
+                                            className="cell-sub"
+                                            style={{
+                                              color:
+                                                variance < 0
+                                                  ? "var(--danger)"
+                                                  : "var(--success, #0f766e)",
+                                            }}
+                                          >
+                                            {variance > 0 ? "+" : ""}
+                                            {money(variance)}
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td>
+                                        {line.approvalStatus === "Approved" && (
+                                          <span className="badge badge-green">Approved</span>
+                                        )}
+                                        {line.approvalStatus === "Rejected" && (
+                                          <span className="badge badge-red">Rejected</span>
+                                        )}
+                                        {(!line.approvalStatus ||
+                                          line.approvalStatus === "Pending") && (
+                                          <span className="badge badge-amber">Pending</span>
+                                        )}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
@@ -1932,34 +2335,244 @@ export function JobDetailPage() {
                     </div>
                   </div>
 
+                  <div className="card">
+                    <div className="card-head">
+                      <div>
+                        <h3>Approvals</h3>
+                        <p>
+                          Stage 1 scope sign-off, then Stage 2 parts pricing. Every initial and
+                          supplementary estimate appears here as soon as it is saved.
+                        </p>
+                      </div>
+                      <ListChecks size={16} className="muted" />
+                    </div>
+                    <div className="card-body stack">
+                      {orderedEstimates.length === 0 ? (
+                        <p className="small muted">
+                          No estimates submitted yet. Create an estimate to start the approval
+                          workflow.
+                        </p>
+                      ) : (
+                        orderedEstimates.map((estimate) => {
+                          const pendingLines = estimate.lines.filter(
+                            (line) =>
+                              !line.approvalStatus || line.approvalStatus === "Pending",
+                          );
+                          const approvedParts = estimate.lines.filter(
+                            (line) =>
+                              line.type === "Part" && line.approvalStatus === "Approved",
+                          );
+                          const rejectedLines = estimate.lines.filter(
+                            (line) => line.approvalStatus === "Rejected",
+                          );
+                          return (
+                            <div key={estimate.id} className="stack" style={{ gap: 8 }}>
+                              <div className="row-between wrap">
+                                <div className="row wrap" style={{ gap: 8 }}>
+                                  <strong>{estimateDisplayNumber(estimate)}</strong>
+                                  <span className="badge badge-slate">
+                                    {estimateKindLabel(estimate)}
+                                  </span>
+                                  <StatusBadge status={estimate.status} />
+                                  {pendingLines.length > 0 && (
+                                    <span className="badge badge-amber">
+                                      {pendingLines.length} pending
+                                    </span>
+                                  )}
+                                </div>
+                                {canManageInsurance &&
+                                  (estimate.status === "Approved" ? (
+                                    <button
+                                      className="btn btn-secondary btn-sm"
+                                      onClick={() => openApproval(estimate)}
+                                    >
+                                      <Pencil />
+                                      Revise approved prices
+                                    </button>
+                                  ) : (
+                                    <button
+                                      className="btn btn-primary btn-sm"
+                                      onClick={() => openApproval(estimate)}
+                                    >
+                                      <ListChecks />
+                                      Stage 1 review
+                                    </button>
+                                  ))}
+                              </div>
+                              <div className="table-wrap">
+                                <table className="data">
+                                  <thead>
+                                    <tr>
+                                      <th>Type</th>
+                                      <th>Description</th>
+                                      <th className="num">Qty</th>
+                                      <th className="num">Quoted</th>
+                                      <th className="num">Approved</th>
+                                      <th>Decision</th>
+                                      <th />
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {estimate.lines.map((line) => (
+                                      <tr key={line.id}>
+                                        <td><span className="chip">{line.type}</span></td>
+                                        <td>{line.description}</td>
+                                        <td className="num">{line.qty}</td>
+                                        <td className="num">{money(line.unitPrice)}</td>
+                                        <td className="num">
+                                          {line.approvalStatus === "Approved"
+                                            ? money(line.approvedUnitPrice ?? line.unitPrice)
+                                            : "—"}
+                                        </td>
+                                        <td>
+                                          {line.approvalStatus === "Approved" && (
+                                            <span className="badge badge-green">Approved</span>
+                                          )}
+                                          {line.approvalStatus === "Rejected" && (
+                                            <span className="badge badge-red">Rejected</span>
+                                          )}
+                                          {(!line.approvalStatus ||
+                                            line.approvalStatus === "Pending") && (
+                                            <span className="badge badge-amber">Pending</span>
+                                          )}
+                                        </td>
+                                        <td>
+                                          {canManageInsurance &&
+                                            line.approvalStatus === "Rejected" &&
+                                            claim && (
+                                              <button
+                                                className="btn btn-ghost btn-sm"
+                                                title="Load this rejected line as customer extra work"
+                                                onClick={() =>
+                                                  convertRejectedLine(estimate, line)
+                                                }
+                                              >
+                                                <UserRound />
+                                                Move to customer extra
+                                              </button>
+                                            )}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {rejectedLines.length > 0 && (
+                                <div className="tiny muted">
+                                  {rejectedLines.length} rejected line(s) will not load to the job
+                                  card. Use “Move to customer extra” to bill the work to the
+                                  vehicle owner instead.
+                                </div>
+                              )}
+
+                              {estimate.status === "Approved" && approvedParts.length > 0 && (
+                                <div
+                                  className="stack"
+                                  style={{
+                                    gap: 8,
+                                    border: "1px solid var(--line)",
+                                    borderRadius: 12,
+                                    padding: 12,
+                                  }}
+                                >
+                                  <div className="row-between wrap">
+                                    <div>
+                                      <strong className="small">Stage 2 · Parts approval</strong>
+                                      <div className="tiny muted">
+                                        Compare the workshop quoted price with the assessor
+                                        approved price. Variance updates the job card cost and the
+                                        insurance bill.
+                                      </div>
+                                    </div>
+                                    <button
+                                      className="btn btn-primary btn-sm"
+                                      disabled={!canManageInsurance}
+                                      onClick={() => savePartsApproval(estimate)}
+                                    >
+                                      <Check />
+                                      Save parts approval
+                                    </button>
+                                  </div>
+                                  <div className="table-wrap">
+                                    <table className="data">
+                                      <thead>
+                                        <tr>
+                                          <th>Part</th>
+                                          <th className="num">Qty</th>
+                                          <th className="num">Workshop quoted</th>
+                                          <th className="num">Assessor approved</th>
+                                          <th className="num">Variance</th>
+                                        </tr>
+                                      </thead>
+                                      <tbody>
+                                        {approvedParts.map((line) => {
+                                          const draft =
+                                            partsApprovalDraft[line.id] ??
+                                            String(line.approvedUnitPrice ?? line.unitPrice);
+                                          const approved = Number(draft);
+                                          const variance =
+                                            (Number.isFinite(approved) ? approved : 0) -
+                                            line.unitPrice;
+                                          return (
+                                            <tr key={line.id}>
+                                              <td>{line.description}</td>
+                                              <td className="num">{line.qty}</td>
+                                              <td className="num">{money(line.unitPrice)}</td>
+                                              <td className="num">
+                                                <input
+                                                  className="input"
+                                                  type="number"
+                                                  min={0}
+                                                  step="0.01"
+                                                  style={{ maxWidth: 130, textAlign: "right" }}
+                                                  value={draft}
+                                                  onChange={(event) =>
+                                                    setPartsApprovalDraft((prev) => ({
+                                                      ...prev,
+                                                      [line.id]: event.target.value,
+                                                    }))
+                                                  }
+                                                />
+                                              </td>
+                                              <td
+                                                className="num"
+                                                style={{
+                                                  color:
+                                                    variance < 0
+                                                      ? "var(--danger)"
+                                                      : variance > 0
+                                                        ? "var(--success, #0f766e)"
+                                                        : undefined,
+                                                }}
+                                              >
+                                                {variance > 0 ? "+" : ""}
+                                                {money(variance)}
+                                              </td>
+                                            </tr>
+                                          );
+                                        })}
+                                      </tbody>
+                                    </table>
+                                  </div>
+                                </div>
+                              )}
+                              <div className="divider" />
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+
                   <div className="grid cols-2">
                     <div className="card">
-                      <div className="card-head"><div><h3>Approvals</h3><p>Record the insurer's decisions.</p></div></div>
+                      <div className="card-head"><div><h3>Release order</h3><p>Vehicle may be released without waiting for the cheque.</p></div></div>
                       <div className="card-body stack">
                         <div className="row-between">
-                          <span className="small">Estimate approval</span>
-                          {claim.estimateStatus === "Approved" ? (
-                            <span className="badge badge-green">Approved</span>
-                          ) : (
-                            <button className="btn btn-soft btn-sm" onClick={approveClaimEstimate} disabled={!canManageInsurance}>
-                              <CheckCircle2 />
-                              Mark approved
-                            </button>
-                          )}
+                          <span className="small">Claim status</span>
+                          <span className="badge badge-slate">{claim.status}</span>
                         </div>
-                        <div className="row-between">
-                          <span className="small">Parts approval</span>
-                          {claim.partsStatus === "Approved" ? (
-                            <span className="badge badge-green">Approved</span>
-                          ) : (
-                            <button className="btn btn-soft btn-sm" onClick={approveClaimParts} disabled={!canManageInsurance}>
-                              <CheckCircle2 />
-                              Mark approved
-                            </button>
-                          )}
-                        </div>
-                        <div className="divider" />
-                        <Field label="Insurer release order no." hint="Vehicle may be released on this without waiting for the cheque.">
+                        <Field label="Insurer release order no." hint="Recorded against the claim and printed on insurance documents.">
                           <input
                             className="input"
                             value={releaseOrderNo}
@@ -2372,8 +2985,8 @@ export function JobDetailPage() {
                 <div>
                   <h3>Separate vehicle bills</h3>
                   <p>
-                    One vehicle can carry more than one bill — for example an insurer bill and a
-                    separate customer bill for the excess.
+                    Split this vehicle into insurer, customer and additional bills. Each bill locks
+                    the tasks and parts ticked onto it so nothing is billed twice.
                   </p>
                 </div>
                 <ReceiptText size={16} className="muted" />
@@ -2388,7 +3001,8 @@ export function JobDetailPage() {
                         <tr>
                           <th>Bill</th>
                           <th>Type</th>
-                          <th className="num">Amount</th>
+                          <th className="num">Items</th>
+                          <th className="num">Net payable</th>
                           <th>Recorded</th>
                           <th />
                         </tr>
@@ -2401,11 +3015,22 @@ export function JobDetailPage() {
                               {bill.notes && <div className="cell-sub">{bill.notes}</div>}
                             </td>
                             <td>
-                              <span className={`badge ${bill.kind === "Insurance" ? "badge-blue" : "badge-slate"}`}>
+                              <span
+                                className={`badge ${
+                                  bill.kind === "Insurance"
+                                    ? "badge-blue"
+                                    : bill.kind === "Additional"
+                                      ? "badge-amber"
+                                      : "badge-slate"
+                                }`}
+                              >
                                 {bill.kind}
                               </span>
                             </td>
-                            <td className="num">{money(bill.amount)}</td>
+                            <td className="num">
+                              {(bill.taskIds?.length ?? 0) + (bill.partIds?.length ?? 0)}
+                            </td>
+                            <td className="num">{money(bill.netPayable ?? bill.amount)}</td>
                             <td>
                               <div className="tiny muted">
                                 {dateTime(bill.createdAt)}
@@ -2415,10 +3040,13 @@ export function JobDetailPage() {
                             <td>
                               <button
                                 className="btn btn-ghost btn-sm"
-                                title="Remove this bill"
+                                title="Remove this bill and unlock its items"
                                 onClick={() => {
                                   removeVehicleBill(bill.id);
-                                  push(`${bill.billNo} removed from ${activeJob.vehicleNo}.`, "info");
+                                  push(
+                                    `${bill.billNo} removed. Its items are available to bill again.`,
+                                    "info",
+                                  );
                                 }}
                               >
                                 <Trash2 />
@@ -2430,52 +3058,35 @@ export function JobDetailPage() {
                     </table>
                   </div>
                 )}
-                <div className="divider" />
-                <div className="grid cols-4" style={{ gap: 10 }}>
-                  <Field label="Bill type">
-                    <select
-                      className="input"
-                      value={billKind}
-                      onChange={(event) =>
-                        setBillKind(event.target.value as "Insurance" | "Customer")
-                      }
-                    >
-                      <option value="Customer">Customer</option>
-                      <option value="Insurance">Insurance</option>
-                    </select>
-                  </Field>
-                  <Field label="Bill number" required>
-                    <input
-                      className="input"
-                      value={billHistoryNo}
-                      placeholder={billKind === "Insurance" ? "INS-2026-018" : "CUS-2026-018"}
-                      onChange={(event) => setBillHistoryNo(event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Amount (LKR)" required>
-                    <input
-                      className="input"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      value={billHistoryAmount}
-                      onChange={(event) => setBillHistoryAmount(event.target.value)}
-                    />
-                  </Field>
-                  <Field label="Note">
-                    <input
-                      className="input"
-                      value={billHistoryNotes}
-                      placeholder="Customer excess"
-                      onChange={(event) => setBillHistoryNotes(event.target.value)}
-                    />
-                  </Field>
-                </div>
-                <div className="row wrap" style={{ justifyContent: "flex-end" }}>
-                  <button className="btn btn-primary btn-sm" onClick={saveVehicleBill}>
+                <div className="row wrap">
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => openSplitBill("Insurance")}
+                    disabled={!canBill && !canSupervise}
+                  >
                     <Plus />
-                    Record separate bill
+                    New insurance bill
                   </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => openSplitBill("Customer")}
+                    disabled={!canBill && !canSupervise}
+                  >
+                    <Plus />
+                    New customer bill
+                  </button>
+                  <button
+                    className="btn btn-ghost btn-sm"
+                    onClick={() => openSplitBill("Additional")}
+                    disabled={!canBill && !canSupervise}
+                  >
+                    <Plus />
+                    New additional bill
+                  </button>
+                </div>
+                <div className="tiny muted">
+                  Items already on a bill show an “Already billed” lock in the selector and cannot
+                  be ticked twice.
                 </div>
               </div>
             </div>
@@ -2501,6 +3112,12 @@ export function JobDetailPage() {
                 <span>Parts & materials</span>
                 <span>{money(totals.parts)}</span>
               </div>
+              {totals.customerBroughtParts > 0 && (
+                <div className="kv">
+                  <span>Customer-supplied parts</span>
+                  <span>{money(totals.customerBroughtParts)}</span>
+                </div>
+              )}
               <div className="kv">
                 <span>Subtotal</span>
                 <span>{money(totals.subtotal)}</span>
@@ -2778,6 +3395,22 @@ export function JobDetailPage() {
               </select>
             </Field>
           </div>
+          {claim && (
+            <label className="toggle-row">
+              <span>
+                <strong>Non-claim / customer extra work</strong>
+                <div className="tiny muted">
+                  Insurance jobs only. Extra work is excluded from the insurance bill and
+                  pre-selected on the customer bill.
+                </div>
+              </span>
+              <input
+                type="checkbox"
+                checked={taskExtra}
+                onChange={(event) => setTaskExtra(event.target.checked)}
+              />
+            </label>
+          )}
           {taskAssignableWorkers.length === 0 ? (
             <Alert tone="warn" title="No workers marked present today">
               Mark the morning attendance on the Workshop page before assigning labour. Only present
@@ -2813,14 +3446,100 @@ export function JobDetailPage() {
         footer={
           <>
             <button className="btn btn-secondary" onClick={() => setPartOpen(false)}>Cancel</button>
-            <button className="btn btn-primary" onClick={sendPartRequest} disabled={!selectedItem}>
-              <Package />
-              Send {formatQty(Number(partQty) || 0.001, selectedItem?.measureUnit ?? selectedItem?.unit)} to stores
-            </button>
+            {partSource === "Customer_Brought" ? (
+              <button
+                className="btn btn-primary"
+                onClick={saveCustomerBroughtPart}
+                disabled={!customerPartName.trim()}
+              >
+                <Package />
+                Add customer-brought part
+              </button>
+            ) : (
+              <button className="btn btn-primary" onClick={sendPartRequest} disabled={!selectedItem}>
+                <Package />
+                Send {formatQty(Number(partQty) || 0.001, selectedItem?.measureUnit ?? selectedItem?.unit)} to stores
+              </button>
+            )}
           </>
         }
       >
         <div className="stack">
+          {claim && (
+            <div className="row wrap" style={{ gap: 8 }}>
+              <button
+                type="button"
+                className={`btn btn-sm ${partSource === "Workshop_Store" ? "btn-primary" : "btn-secondary"}`}
+                onClick={() => setPartSource("Workshop_Store")}
+              >
+                <Package />
+                Workshop store
+              </button>
+              <button
+                type="button"
+                className={`btn btn-sm ${partSource === "Customer_Brought" ? "btn-primary" : "btn-secondary"}`}
+                onClick={() => setPartSource("Customer_Brought")}
+              >
+                <UserRound />
+                Customer brought
+              </button>
+            </div>
+          )}
+          {partSource === "Customer_Brought" ? (
+            <>
+              <Alert tone="info" title="Customer-supplied part">
+                This part is billed on the insurance bill only. Stores stock is not deducted and the
+                value is excluded from workshop parts revenue.
+              </Alert>
+              <div className="form-grid">
+                <Field label="Part description" required full>
+                  <input
+                    className="input"
+                    placeholder="e.g. Genuine headlamp supplied by customer"
+                    value={customerPartName}
+                    onChange={(event) => setCustomerPartName(event.target.value)}
+                  />
+                </Field>
+                <Field label="Quantity" required>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0.001}
+                    step="any"
+                    value={customerPartQty}
+                    onChange={(event) => setCustomerPartQty(event.target.value)}
+                  />
+                </Field>
+                <Field label="Billable unit value (LKR)" required>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={customerPartValue}
+                    onChange={(event) => setCustomerPartValue(event.target.value)}
+                  />
+                </Field>
+                {sectionsEnabled && (
+                  <Field label="Section">
+                    <select
+                      className="select"
+                      value={partSectionId}
+                      onChange={(event) => setPartSectionId(event.target.value)}
+                    >
+                      <option value="">Unassigned</option>
+                      {activeSections.map((section) => (
+                        <option key={section.id} value={section.id}>
+                          {section.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
+              </div>
+            </>
+          ) : (
+            <>
           <Field label="Search in-stock parts" hint="Only matching fitment and universal items are shown.">
             <input
               className="input"
@@ -2941,6 +3660,21 @@ export function JobDetailPage() {
             </div>
           )}
 
+          {claim && (
+            <label className="toggle-row">
+              <span>
+                <strong>Non-claim / customer extra part</strong>
+                <div className="tiny muted">
+                  Excluded from the insurance bill and pre-selected on the customer bill.
+                </div>
+              </span>
+              <input
+                type="checkbox"
+                checked={partExtra}
+                onChange={(event) => setPartExtra(event.target.checked)}
+              />
+            </label>
+          )}
           <div className="alert alert-warn">
             <Package />
             <div>
@@ -2948,19 +3682,31 @@ export function JobDetailPage() {
               quantity; any balance becomes a backorder on a separate line.
             </div>
           </div>
+            </>
+          )}
         </div>
       </Modal>
 
       <Modal
         open={estimateOpen}
         onClose={() => setEstimateOpen(false)}
-        title="Create estimate"
+        title={estimateEditingId ? "Edit estimate" : "Create estimate"}
         subtitle={`${job.vehicleNo} · ${job.customerName}`}
         size="wide"
         footer={
           <>
             <button className="btn btn-secondary" onClick={() => setEstimateOpen(false)}>Cancel</button>
-            <button className="btn btn-primary" onClick={saveEstimate}>
+            <button
+              className="btn btn-primary"
+              onClick={saveEstimate}
+              disabled={
+                estimateLines.length === 0 ||
+                estimateDuplicateLineIds.size > 0 ||
+                estimateLines.every(
+                  (line) => !line.description.trim() || line.qty <= 0,
+                )
+              }
+            >
               <FileText />
               Save estimate
             </button>
@@ -2974,6 +3720,7 @@ export function JobDetailPage() {
                 className="select"
                 value={estimateKind}
                 onChange={(event) => setEstimateKind(event.target.value as JobEstimate["kind"])}
+                disabled={Boolean(estimateEditingId)}
               >
                 <option value="Initial">Initial estimate</option>
                 <option value="Supplementary">Supplementary estimate</option>
@@ -2988,93 +3735,164 @@ export function JobDetailPage() {
             </Field>
           </div>
 
+          {estimateDuplicateLineIds.size > 0 && (
+            <Alert tone="warn" title="Duplicate approved line">
+              Remove the highlighted lines. They were already approved on an earlier estimate for
+              this vehicle.
+            </Alert>
+          )}
+
           <div className="stack" style={{ gap: 8 }}>
-            {estimateLines.map((line, index) => (
-              <div className="card" key={line.id}>
-                <div className="card-body">
-                  <div className="form-grid">
-                    <Field label={`Line ${index + 1} type`}>
-                      <select
-                        className="select"
-                        value={line.type}
-                        onChange={(event) =>
-                          updateEstimateLine(line.id, {
-                            type: event.target.value as EstimateLine["type"],
-                          })
-                        }
-                      >
-                        <option value="Labour">Labour</option>
-                        <option value="Part">Part</option>
-                      </select>
-                    </Field>
-                    <Field label="Description" required>
-                      <input
-                        className="input"
-                        value={line.description}
-                        onChange={(event) =>
-                          updateEstimateLine(line.id, { description: event.target.value })
-                        }
-                      />
-                    </Field>
-                    <Field label="Quantity">
-                      <input
-                        className="input"
-                        type="number"
-                        min={1}
-                        value={line.qty}
-                        onChange={(event) =>
-                          updateEstimateLine(line.id, { qty: Number(event.target.value) || 1 })
-                        }
-                      />
-                    </Field>
-                    <Field label="Unit price (LKR)">
-                      <input
-                        className="input"
-                        type="number"
-                        min={0}
-                        value={line.unitPrice}
-                        onChange={(event) =>
-                          updateEstimateLine(line.id, { unitPrice: Number(event.target.value) || 0 })
-                        }
-                      />
-                    </Field>
-                  </div>
-                  <div className="row-between" style={{ marginTop: 8 }}>
-                    <span className="tiny muted">
-                      Line total {money(line.qty * line.unitPrice)}
-                    </span>
-                    <button
-                      className="btn btn-ghost btn-sm"
-                      onClick={() =>
-                        setEstimateLines((prev) => prev.filter((entry) => entry.id !== line.id))
-                      }
-                      disabled={estimateLines.length === 1}
-                    >
-                      <Trash2 />
-                      Remove
-                    </button>
-                  </div>
+            {estimateLines.length === 0 ? (
+              <div className="empty" style={{ padding: "26px 16px" }}>
+                <FileText size={24} className="muted" />
+                <h4>Start a clean estimate</h4>
+                <p className="small muted">
+                  No lines are pre-filled. Add labour and parts below — the estimate opens empty
+                  for both initial and supplementary work.
+                </p>
+                <div className="row wrap" style={{ justifyContent: "center", gap: 8 }}>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    onClick={() => setEstimateLines([newEstimateLine("Labour")])}
+                  >
+                    <Plus />
+                    Add labour
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setEstimateLines([newEstimateLine("Part")])}
+                  >
+                    <Plus />
+                    Add part
+                  </button>
                 </div>
               </div>
-            ))}
-            <div className="row-between wrap">
-              <button
-                className="btn btn-secondary btn-sm"
-                onClick={() => setEstimateLines((prev) => [...prev, newEstimateLine()])}
-              >
-                <Plus />
-                Add line
-              </button>
-              <span className="strong">
-                Estimate total{" "}
-                {money(estimateLines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0))}
-              </span>
-            </div>
+            ) : (
+              estimateLines.map((line, index) => {
+                const duplicate =
+                  estimateKind === "Supplementary" && line.description.trim()
+                    ? findApprovedDuplicate(
+                        state.estimates,
+                        activeJob.id,
+                        line.type,
+                        line.description,
+                        estimateEditingId ?? undefined,
+                      )
+                    : null;
+                return (
+                  <div
+                    className="card"
+                    key={line.id}
+                    style={
+                      duplicate
+                        ? { borderColor: "var(--danger)", boxShadow: "0 0 0 1px var(--danger)" }
+                        : undefined
+                    }
+                  >
+                    <div className="card-body">
+                      <div className="form-grid">
+                        <Field label={`Line ${index + 1} type`}>
+                          <select
+                            className="select"
+                            value={line.type}
+                            onChange={(event) =>
+                              updateEstimateLine(line.id, {
+                                type: event.target.value as EstimateLine["type"],
+                              })
+                            }
+                          >
+                            <option value="Labour">Labour</option>
+                            <option value="Part">Part</option>
+                          </select>
+                        </Field>
+                        <Field label="Description" required>
+                          <input
+                            className="input"
+                            value={line.description}
+                            onChange={(event) =>
+                              updateEstimateLine(line.id, { description: event.target.value })
+                            }
+                          />
+                        </Field>
+                        <Field label="Quantity">
+                          <input
+                            className="input"
+                            type="number"
+                            min={1}
+                            value={line.qty}
+                            onChange={(event) =>
+                              updateEstimateLine(line.id, { qty: Number(event.target.value) || 1 })
+                            }
+                          />
+                        </Field>
+                        <Field label="Unit price (LKR)">
+                          <input
+                            className="input"
+                            type="number"
+                            min={0}
+                            value={line.unitPrice}
+                            onChange={(event) =>
+                              updateEstimateLine(line.id, { unitPrice: Number(event.target.value) || 0 })
+                            }
+                          />
+                        </Field>
+                      </div>
+                      {duplicate && (
+                        <div className="tiny" style={{ color: "var(--danger)", marginTop: 6 }}>
+                          <XCircle size={12} /> Already approved in{" "}
+                          {estimateShortLabel(duplicate)} — remove this duplicate line.
+                        </div>
+                      )}
+                      <div className="row-between" style={{ marginTop: 8 }}>
+                        <span className="tiny muted">
+                          Line total {money(line.qty * line.unitPrice)}
+                        </span>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          onClick={() =>
+                            setEstimateLines((prev) => prev.filter((entry) => entry.id !== line.id))
+                          }
+                        >
+                          <Trash2 />
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+            {estimateLines.length > 0 && (
+              <div className="row-between wrap">
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setEstimateLines((prev) => [...prev, newEstimateLine("Labour")])}
+                  >
+                    <Plus />
+                    Add labour
+                  </button>
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => setEstimateLines((prev) => [...prev, newEstimateLine("Part")])}
+                  >
+                    <Plus />
+                    Add part
+                  </button>
+                </div>
+                <span className="strong">
+                  Estimate total{" "}
+                  {money(estimateLines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0))}
+                </span>
+              </div>
+            )}
           </div>
 
           <Alert tone="info" title="Estimate-only and supplementary work">
             Estimates can be created for vehicles already checked in, or raised as a supplementary
             estimate when hidden damage appears. Approval is recorded separately for the insurer.
+            Descriptions already approved on an earlier estimate are blocked.
           </Alert>
         </div>
       </Modal>
@@ -3316,6 +4134,397 @@ export function JobDetailPage() {
           </div>
         </Modal>
       )}
+
+      <Modal
+        open={Boolean(approvalEstimate)}
+        onClose={() => setApprovalEstimateId(null)}
+        title={
+          approvalEstimate?.status === "Approved"
+            ? "Revise approved prices"
+            : "Stage 1 · Scope approval"
+        }
+        subtitle={
+          approvalEstimate
+            ? `${estimateDisplayNumber(approvalEstimate)} · ${job.vehicleNo}`
+            : undefined
+        }
+        size="wide"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setApprovalEstimateId(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={saveApproval}>
+              <Check />
+              {approvalEstimate?.status === "Approved"
+                ? "Save approved prices"
+                : "Confirm scope approval"}
+            </button>
+          </>
+        }
+      >
+        {approvalEstimate && (
+          <div className="stack">
+            <Alert tone="info" title="Approve the scope line by line">
+              Approved lines load to the job card at the assessor price. Rejected lines are not
+              loaded and can be moved to Non-Claim / Customer Extra from the Approvals card. Parts
+              stay Requested until Stores physically issues them.
+            </Alert>
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th>Type</th>
+                    <th>Description</th>
+                    <th className="num">Qty</th>
+                    <th className="num">Quoted</th>
+                    <th>Decision</th>
+                    <th className="num">Approved unit price</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {approvalEstimate.lines.map((line) => {
+                    const decision =
+                      approvalDecisions[line.id] ?? {
+                        status: "Approved" as EstimateLineApproval,
+                        approvedUnitPrice: String(line.approvedUnitPrice ?? line.unitPrice),
+                      };
+                    const approved = decision.status === "Approved";
+                    return (
+                      <tr key={line.id}>
+                        <td><span className="chip">{line.type}</span></td>
+                        <td>{line.description}</td>
+                        <td className="num">{line.qty}</td>
+                        <td className="num">{money(line.unitPrice)}</td>
+                        <td>
+                          <div className="row" style={{ gap: 4 }}>
+                            <button
+                              type="button"
+                              className={`btn btn-sm ${approved ? "btn-primary" : "btn-ghost"}`}
+                              onClick={() =>
+                                updateApprovalDecision(line.id, { status: "Approved" })
+                              }
+                            >
+                              <Check />
+                              Approve
+                            </button>
+                            <button
+                              type="button"
+                              className={`btn btn-sm ${!approved ? "btn-secondary" : "btn-ghost"}`}
+                              onClick={() =>
+                                updateApprovalDecision(line.id, { status: "Rejected" })
+                              }
+                            >
+                              <X />
+                              Reject
+                            </button>
+                          </div>
+                        </td>
+                        <td className="num">
+                          <input
+                            className="input"
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            style={{ maxWidth: 130, textAlign: "right" }}
+                            value={decision.approvedUnitPrice}
+                            disabled={!approved}
+                            onChange={(event) =>
+                              updateApprovalDecision(line.id, {
+                                approvedUnitPrice: event.target.value,
+                              })
+                            }
+                          />
+                          {approved &&
+                            Number(decision.approvedUnitPrice) !== line.unitPrice && (
+                              <div className="cell-sub">
+                                Variance{" "}
+                                {Number(decision.approvedUnitPrice) - line.unitPrice > 0 ? "+" : ""}
+                                {money(
+                                  Number(decision.approvedUnitPrice) - line.unitPrice,
+                                )}
+                              </div>
+                            )}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+            <div className="tiny muted">
+              Approved total{" "}
+              {money(
+                approvalEstimate.lines.reduce((sum, line) => {
+                  const decision = approvalDecisions[line.id];
+                  if ((decision?.status ?? "Approved") !== "Approved") return sum;
+                  return (
+                    sum +
+                    line.qty *
+                      (Number(decision?.approvedUnitPrice) || line.unitPrice)
+                  );
+                }, 0),
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={splitBillOpen}
+        onClose={() => setSplitBillOpen(false)}
+        title={`New ${splitBillKind.toLowerCase()} bill`}
+        subtitle={`${job.vehicleNo} · tick the tasks and parts that belong on this bill`}
+        size="wide"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setSplitBillOpen(false)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={saveSplitBill}>
+              <ReceiptText />
+              Save bill · {money(splitNet)}
+            </button>
+          </>
+        }
+      >
+        <div className="stack">
+          <div className="form-grid">
+            <Field label="Bill type" required>
+              <select
+                className="select"
+                value={splitBillKind}
+                onChange={(event) => {
+                  const next = event.target.value as VehicleBill["kind"];
+                  setSplitBillKind(next);
+                  setSplitTaskIds([]);
+                  setSplitPartIds([]);
+                }}
+              >
+                <option value="Insurance">Insurance</option>
+                <option value="Customer">Customer</option>
+                <option value="Additional">Additional</option>
+              </select>
+            </Field>
+            <Field label="Bill number" required>
+              <input
+                className="input"
+                value={splitBillNo}
+                onChange={(event) => setSplitBillNo(event.target.value)}
+              />
+            </Field>
+            <Field label="Note" full>
+              <input
+                className="input"
+                placeholder="Customer excess, policy depreciation, extra work…"
+                value={splitNotes}
+                onChange={(event) => setSplitNotes(event.target.value)}
+              />
+            </Field>
+          </div>
+
+          <div>
+            <div className="row-between" style={{ marginBottom: 6 }}>
+              <strong className="small">Labour tasks</strong>
+              <span className="tiny muted">{splitTasks.length} selected</span>
+            </div>
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th />
+                    <th>Task</th>
+                    <th>Flags</th>
+                    <th className="num">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {jobTasks.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="tiny muted">No labour tasks on this job.</td>
+                    </tr>
+                  ) : (
+                    jobTasks.map((task) => {
+                      const billed = billById(task.assignedBillId);
+                      const blocked =
+                        Boolean(task.assignedBillId) ||
+                        (splitBillKind === "Insurance" && Boolean(task.isCustomerExtra));
+                      return (
+                        <tr key={task.id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={splitTaskIds.includes(task.id)}
+                              disabled={blocked}
+                              onChange={() => toggleSplitTask(task.id)}
+                            />
+                          </td>
+                          <td>{task.name}</td>
+                          <td>
+                            <div className="row wrap" style={{ gap: 4 }}>
+                              {task.isCustomerExtra && (
+                                <span className="badge badge-amber">Customer extra</span>
+                              )}
+                              {billed && (
+                                <span className="badge badge-slate">
+                                  <Lock size={10} /> Already billed ({billed.billNo})
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="num">{money(task.laborCost)}</td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div>
+            <div className="row-between" style={{ marginBottom: 6 }}>
+              <strong className="small">Parts & materials</strong>
+              <span className="tiny muted">{splitParts.length} selected</span>
+            </div>
+            <div className="table-wrap">
+              <table className="data">
+                <thead>
+                  <tr>
+                    <th />
+                    <th>Part</th>
+                    <th>Flags</th>
+                    <th className="num">Amount</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {billableParts.length === 0 ? (
+                    <tr>
+                      <td colSpan={4} className="tiny muted">No issued parts on this job.</td>
+                    </tr>
+                  ) : (
+                    billableParts.map((part) => {
+                      const billed = billById(part.assignedBillId);
+                      const blocked =
+                        Boolean(part.assignedBillId) ||
+                        (splitBillKind === "Insurance" && Boolean(part.isCustomerExtra)) ||
+                        (splitBillKind === "Customer" &&
+                          part.partSource === "Customer_Brought");
+                      return (
+                        <tr key={part.id}>
+                          <td>
+                            <input
+                              type="checkbox"
+                              checked={splitPartIds.includes(part.id)}
+                              disabled={blocked}
+                              onChange={() => toggleSplitPart(part.id)}
+                            />
+                          </td>
+                          <td>{part.itemName}</td>
+                          <td>
+                            <div className="row wrap" style={{ gap: 4 }}>
+                              {part.partSource === "Customer_Brought" && (
+                                <span className="badge badge-blue">Customer supplied</span>
+                              )}
+                              {part.isCustomerExtra && (
+                                <span className="badge badge-amber">Customer extra</span>
+                              )}
+                              {billed && (
+                                <span className="badge badge-slate">
+                                  <Lock size={10} /> Already billed ({billed.billNo})
+                                </span>
+                              )}
+                            </div>
+                          </td>
+                          <td className="num">
+                            {money(part.sellingPrice * partIssueQty(part))}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          <div className="grid cols-3" style={{ gap: 10 }}>
+            <Field label="Discount (LKR)">
+              <input
+                className="input"
+                type="number"
+                min={0}
+                step="0.01"
+                value={splitDiscount}
+                onChange={(event) => setSplitDiscount(event.target.value)}
+              />
+            </Field>
+            <Field label="VAT rate (%)" hint="Optional 18% VAT for tax invoices.">
+              <input
+                className="input"
+                type="number"
+                min={0}
+                step="0.01"
+                value={splitVat}
+                onChange={(event) => setSplitVat(event.target.value)}
+              />
+            </Field>
+            <Field label="Advance deduction (LKR)">
+              <input
+                className="input"
+                type="number"
+                min={0}
+                step="0.01"
+                value={splitAdvance}
+                onChange={(event) => setSplitAdvance(event.target.value)}
+              />
+            </Field>
+            <Field label="Policy excess (LKR)">
+              <input
+                className="input"
+                type="number"
+                min={0}
+                step="0.01"
+                value={splitExcess}
+                onChange={(event) => setSplitExcess(event.target.value)}
+              />
+            </Field>
+            <Field label="Depreciation (LKR)">
+              <input
+                className="input"
+                type="number"
+                min={0}
+                step="0.01"
+                value={splitDepreciation}
+                onChange={(event) => setSplitDepreciation(event.target.value)}
+              />
+            </Field>
+          </div>
+
+          <div className="card">
+            <div className="card-body">
+              <div className="kv"><span>Labour subtotal</span><span>{money(splitLabor)}</span></div>
+              <div className="kv"><span>Parts subtotal</span><span>{money(splitPartsTotal)}</span></div>
+              <div className="kv"><span>Discount</span><span>- {money(splitDiscountValue)}</span></div>
+              <div className="kv">
+                <span>VAT ({splitVatRate}%)</span>
+                <span>{money(splitVatAmount)}</span>
+              </div>
+              <div className="kv"><span>Advance</span><span>- {money(splitAdvanceValue)}</span></div>
+              {splitBillKind === "Insurance" && (
+                <>
+                  <div className="kv"><span>Policy excess</span><span>- {money(splitExcessValue)}</span></div>
+                  <div className="kv"><span>Depreciation</span><span>- {money(splitDepreciationValue)}</span></div>
+                </>
+              )}
+              <div className="kv" style={{ fontSize: 15 }}>
+                <span>Net payable</span>
+                <span>{money(splitNet)}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Modal>
 
       <Modal
         open={Boolean(photoView)}

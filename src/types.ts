@@ -206,6 +206,15 @@ export interface JobTask {
   createdAt: string;
   addedBy?: string;
   addedAt?: string;
+  /** Split bill this task was ticked onto. */
+  assignedBillId?: string;
+  /** Original workshop quoted labour when the assessor approved a different figure. */
+  quotedLaborCost?: number;
+  /** Insurance job only — work outside the claim, billed to the customer. */
+  isCustomerExtra?: boolean;
+  /** Estimate line that auto-loaded this task. */
+  estimateId?: string;
+  estimateLineId?: string;
 }
 
 export type PartStatus =
@@ -242,6 +251,19 @@ export interface JobPart {
   salvageRef?: string;
   createdAt: string;
   updatedAt: string;
+  /** Split bill this part was ticked onto. */
+  assignedBillId?: string;
+  /** Insurance job only — supplied by the customer, never deducted from stores. */
+  partSource?: "Workshop_Store" | "Customer_Brought";
+  /** Insurance job only — workshop parts added outside the claim. */
+  isCustomerExtra?: boolean;
+  /** Workshop quoted price retained when the assessor approves a different figure. */
+  quotedSellingPrice?: number;
+  /** Assessor approved unit price that drives the insurance bill. */
+  insuranceApprovedPrice?: number;
+  /** Estimate line that auto-loaded this part. */
+  estimateId?: string;
+  estimateLineId?: string;
 }
 
 export interface SupplierCreditNote {
@@ -257,19 +279,30 @@ export interface SupplierCreditNote {
   status: "Recorded" | "Applied";
 }
 
+export type EstimateLineApproval = "Pending" | "Approved" | "Rejected";
+
 export interface EstimateLine {
   id: string;
   type: "Labour" | "Part";
   description: string;
   qty: number;
   unitPrice: number;
+  /** Assessor scope decision. Pending lines are never loaded onto the job card. */
+  approvalStatus?: EstimateLineApproval;
+  /** Assessor approved unit price; falls back to unitPrice when blank. */
+  approvedUnitPrice?: number;
+  /** Rejection reason or assessor price note. */
+  approvalNote?: string;
 }
 
 export interface JobEstimate {
   id: string;
   jobCardId: string;
   kind: "Initial" | "Supplementary";
+  /** Globally sequential document number: EST-YYYY-0001. */
   number: string;
+  /** Supplementary sequence (1 = SUP-01). Undefined on the initial estimate. */
+  supplementaryNo?: number;
   revision: number;
   status: "Draft" | "Awaiting Approval" | "Approved" | "Rejected";
   lines: EstimateLine[];
@@ -928,14 +961,28 @@ export interface VehicleBill {
   id: string;
   jobCardId: string;
   vehicleNo: string;
-  kind: "Insurance" | "Customer";
+  kind: "Insurance" | "Customer" | "Additional";
   billNo: string;
+  /** Net payable after discount, VAT, advance, excess and depreciation. */
   amount: number;
   createdAt: string;
   createdBy?: string;
   claimId?: string;
   insurerId?: string;
   notes?: string;
+  /** Tasks ticked onto this bill. */
+  taskIds?: string[];
+  /** Parts ticked onto this bill. */
+  partIds?: string[];
+  laborSubtotal?: number;
+  partsSubtotal?: number;
+  discount?: number;
+  vatRate?: number;
+  vatAmount?: number;
+  advance?: number;
+  policyExcess?: number;
+  depreciation?: number;
+  netPayable?: number;
 }
 
 export interface AppState {

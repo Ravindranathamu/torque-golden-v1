@@ -13,6 +13,7 @@ import type {
   WorkshopSettings,
 } from "../types";
 import {
+  estimateDisplayNumber,
   formatQty,
   isDemoMode,
   money,
@@ -833,8 +834,9 @@ export function buildInsuranceBillPdf(
   insurer: InsuranceCompany | undefined,
   settings: WorkshopSettings,
   lines: { labor: number; parts: number; total: number },
+  detail?: { tasks?: JobTask[]; parts?: JobPart[] },
 ): { blob: Blob; filename: string } {
-  return buildIrdInsuranceBillPdf(job, claim, insurer, settings, lines);
+  return buildIrdInsuranceBillPdf(job, claim, insurer, settings, lines, detail);
 }
 
 export async function shareInsuranceBillWhatsApp(
@@ -844,8 +846,16 @@ export async function shareInsuranceBillWhatsApp(
   settings: WorkshopSettings,
   lines: { labor: number; parts: number; total: number },
   message: string,
+  detail?: { tasks?: JobTask[]; parts?: JobPart[] },
 ): Promise<"shared" | "downloaded" | "opened" | "queued"> {
-  const { blob, filename } = buildInsuranceBillPdf(job, claim, insurer, settings, lines);
+  const { blob, filename } = buildInsuranceBillPdf(
+    job,
+    claim,
+    insurer,
+    settings,
+    lines,
+    detail,
+  );
   return sharePdfToWhatsApp(
     blob,
     filename,
@@ -868,7 +878,7 @@ export function buildLegacyInsuranceEstimatePdf(
     doc,
     settings,
     "Insurance estimate",
-    `${estimate.number} · Rev ${estimate.revision}`,
+    `${estimateDisplayNumber(estimate)}`,
     estimate.updatedAt ?? estimate.createdAt,
   );
   const labourLines = estimate.lines.filter((line) => line.type === "Labour");
