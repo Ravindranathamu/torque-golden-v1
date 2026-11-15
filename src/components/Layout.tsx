@@ -36,6 +36,7 @@ import {
   voicePrimed,
 } from "../lib/voice";
 import { classNames, timeAgo } from "../lib/utils";
+import { DEVELOPER } from "../lib/developer";
 import { Avatar, Field, Modal } from "./ui";
 import { useToast } from "./Toast";
 import { DeveloperCredit } from "./DeveloperCredit";
@@ -254,7 +255,7 @@ export function AppShell() {
             </button>
           </div>
           <div style={{ padding: "10px 6px 0", fontSize: 9.5, color: "#5f7f85", display: "flex", justifyContent: "space-between" }}>
-            <span>Torque ERP · v1.0</span>
+            <span>{DEVELOPER.product} · v{DEVELOPER.version}</span>
             <span>Local demo</span>
           </div>
         </div>
