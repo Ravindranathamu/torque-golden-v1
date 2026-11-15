@@ -242,11 +242,6 @@ export function StoresPage() {
 
   const fulfillPartRecord = state.parts.find((part) => part.id === fulfillTargetId) ?? null;
   const fulfillItem = state.inventory.find((item) => item.id === fulfillPartRecord?.itemId) ?? null;
-  const fulfillItemHasPurchase = fulfillItem
-    ? state.purchases.some((purchase) =>
-        purchase.lines?.some((line) => line.itemId === fulfillItem.id),
-      )
-    : false;
   const fulfillJob = state.jobCards.find((job) => job.id === fulfillPartRecord?.jobCardId) ?? null;
   const swapPartRecord = state.parts.find((part) => part.id === swapTargetId) ?? null;
   const swapJob = state.jobCards.find((job) => job.id === swapPartRecord?.jobCardId) ?? null;
@@ -264,6 +259,21 @@ export function StoresPage() {
   const fulfillQtyNumber = Math.max(0.001, Number(fulfillQty) || 0.001);
   const fulfillSelling =
     Math.round((Number(fulfillCost) || 0) * (1 + (Number(fulfillMargin) || 0) / 100) * 100) / 100;
+  const fulfillUnit = fulfillItem?.measureUnit ?? fulfillItem?.unit ?? "pc";
+  const fulfillRequested = fulfillPartRecord
+    ? Math.max(0, fulfillPartRecord.qtyRequested - fulfillPartRecord.qtyIssued) ||
+      fulfillPartRecord.qtyRequested
+    : 0;
+  const fulfillMaxQty = Math.max(0.001, fulfillRequested);
+  const fulfillStock = Math.max(0, fulfillItem?.stock ?? 0);
+  const fulfillShortfall = Math.max(
+    0,
+    Math.round((fulfillQtyNumber - fulfillStock) * 1000) / 1000,
+  );
+  const fulfillNeedsPurchase = fulfillShortfall > 0.0001;
+  const fulfillSupplierRecord = state.suppliers.find(
+    (supplier) => supplier.id === fulfillSupplier,
+  );
   const swapSelling =
     Math.round((Number(swapCost) || 0) * (1 + (Number(swapMargin) || 0) / 100) * 100) / 100;
 
@@ -305,8 +315,12 @@ export function StoresPage() {
       push("Enter a valid margin percentage.", "error");
       return;
     }
-    if (fulfillItem.type !== "Consumable" && fulfillItemHasPurchase && !fulfillInvoice.trim()) {
-      push("Record the supplier purchase invoice number.", "error");
+    if (fulfillNeedsPurchase && !fulfillInvoice.trim()) {
+      push("Stock is short. Record the supplier purchase invoice number for the purchased quantity.", "error");
+      return;
+    }
+    if (fulfillNeedsPurchase && !fulfillSupplier) {
+      push("Choose the supplier for the purchased quantity.", "error");
       return;
     }
     const result = fulfillPart(fulfillPartRecord.id, {
@@ -1511,7 +1525,7 @@ export function StoresPage() {
       <Modal
         open={Boolean(fulfillPartRecord)}
         onClose={() => setFulfillTargetId(null)}
-        title="Issue part from stock"
+        title={fulfillNeedsPurchase ? "Purchase & issue part" : "Issue part from stock"}
         subtitle={
           fulfillPartRecord && fulfillJob
             ? `${fulfillJob.vehicleNo} · ${fulfillPartRecord.itemName}`
@@ -1522,7 +1536,8 @@ export function StoresPage() {
             <button className="btn btn-secondary" onClick={() => setFulfillTargetId(null)}>Cancel</button>
             <button className="btn btn-primary" onClick={saveFulfill}>
               <Package />
-              Issue {formatQty(fulfillQtyNumber, fulfillItem?.measureUnit ?? fulfillItem?.unit)}
+              {fulfillNeedsPurchase ? "Purchase & issue" : "Issue"}{" "}
+              {formatQty(fulfillQtyNumber, fulfillUnit)}
             </button>
           </>
         }
@@ -1533,19 +1548,20 @@ export function StoresPage() {
               <div className="mini-stat card">
                 <div className="label">Requested</div>
                 <div className="value" style={{ fontSize: 15 }}>
-                  {formatQty(
-                    Math.max(0, fulfillPartRecord.qtyRequested - fulfillPartRecord.qtyIssued) || fulfillPartRecord.qtyRequested,
-                    fulfillItem.measureUnit ?? fulfillItem.unit,
-                  )}
+                  {formatQty(fulfillRequested, fulfillUnit)}
                 </div>
                 <div className="meta">{fulfillPartRecord.status}</div>
               </div>
               <div className="mini-stat card">
                 <div className="label">In stock</div>
                 <div className="value" style={{ fontSize: 15 }}>
-                  {formatQty(fulfillItem.stock, fulfillItem.measureUnit ?? fulfillItem.unit)}
+                  {formatQty(fulfillItem.stock, fulfillUnit)}
                 </div>
-                <div className="meta">Strict limit</div>
+                <div className="meta">
+                  {fulfillNeedsPurchase
+                    ? `Short ${formatQty(fulfillShortfall, fulfillUnit)}`
+                    : "Available to issue"}
+                </div>
               </div>
               <div className="mini-stat card">
                 <div className="label">Selling price</div>
@@ -1554,14 +1570,27 @@ export function StoresPage() {
               </div>
             </div>
 
+            {fulfillNeedsPurchase && (
+              <Alert tone="warn" title="Stock short — purchase the balance">
+                {formatQty(fulfillShortfall, fulfillUnit)} is not in stock. This issue records a direct
+                cash purchase{fulfillSupplierRecord ? ` from ${fulfillSupplierRecord.name}` : ""} and
+                requires the supplier invoice number. The purchased quantity is added to stock and
+                immediately issued to the job.
+              </Alert>
+            )}
+
             <div className="form-grid">
-              <Field label="Issue quantity" required hint={`Measured issue — up to ${formatQty(Math.min(fulfillItem.stock, Math.max(0, fulfillPartRecord.qtyRequested - fulfillPartRecord.qtyIssued) || fulfillPartRecord.qtyRequested), fulfillItem.measureUnit ?? fulfillItem.unit)}.`}>
+              <Field
+                label="Issue quantity"
+                required
+                hint={`Measured issue — up to ${formatQty(fulfillRequested, fulfillUnit)}. Any shortage is purchased before issuing.`}
+              >
                 <input
                   className="input"
                   type="number"
                   min={0.001}
                   step="any"
-                  max={Math.min(fulfillItem.stock, Math.max(0, fulfillPartRecord.qtyRequested - fulfillPartRecord.qtyIssued) || fulfillPartRecord.qtyRequested)}
+                  max={fulfillMaxQty}
                   value={fulfillQty}
                   onChange={(event) => setFulfillQty(event.target.value)}
                 />
@@ -1584,7 +1613,15 @@ export function StoresPage() {
                   onChange={(event) => setFulfillMargin(event.target.value)}
                 />
               </Field>
-              <Field label="Supplier" hint="Used for warranty traceability.">
+              <Field
+                label="Supplier"
+                required={fulfillNeedsPurchase}
+                hint={
+                  fulfillNeedsPurchase
+                    ? "Required for the direct purchase."
+                    : "Used for warranty traceability."
+                }
+              >
                 <select className="select" value={fulfillSupplier} onChange={(event) => setFulfillSupplier(event.target.value)}>
                   <option value="">Not set</option>
                   {state.suppliers.map((supplier) => (
@@ -1592,40 +1629,42 @@ export function StoresPage() {
                   ))}
                 </select>
               </Field>
-              <Field
-                label="Supplier invoice no."
-                required={fulfillItem.type !== "Consumable" && fulfillItemHasPurchase}
-                hint={
-                  fulfillItem.type === "Consumable"
-                    ? "Optional for consumables drawn from warehouse stock."
-                    : fulfillItemHasPurchase
-                      ? "Purchase invoice this stock was bought on. Required for warranty claims."
-                      : "Optional — this stock came from opening stock, not a supplier purchase."
-                }
-              >
-                <input
-                  className="input"
-                  placeholder="HZL/26/1841"
-                  value={fulfillInvoice}
-                  onChange={(event) => setFulfillInvoice(event.target.value)}
-                />
-              </Field>
+              {fulfillNeedsPurchase && (
+                <Field
+                  label="Supplier invoice no."
+                  required
+                  hint="Required for the purchased quantity. Recorded as a direct cash purchase."
+                >
+                  <input
+                    className="input"
+                    placeholder="HZL/26/1841"
+                    value={fulfillInvoice}
+                    onChange={(event) => setFulfillInvoice(event.target.value)}
+                  />
+                </Field>
+              )}
             </div>
 
-            {Number(fulfillQty) < Math.max(1, fulfillPartRecord.qtyRequested - fulfillPartRecord.qtyIssued) && (
+            {fulfillQtyNumber < fulfillRequested - 0.0001 && (
               <Alert tone="warn" title="Partial issue creates a backorder">
-                The remaining{" "}
-                {Math.max(1, fulfillPartRecord.qtyRequested - fulfillPartRecord.qtyIssued) - Number(fulfillQty || 0)}{" "}
-                unit(s) will stay on a backordered line until stock arrives. The customer invoice only
-                includes issued quantities.
+                The remaining {formatQty(fulfillRequested - fulfillQtyNumber, fulfillUnit)} will stay
+                on a backordered line until stock arrives. The customer invoice only includes issued
+                quantities.
               </Alert>
             )}
 
             <div className="alert alert-info">
               <Package />
               <div>
-                Issuing deducts <strong>{fulfillQtyNumber} {fulfillItem.unit}(s)</strong> from stock and updates
-                the last selling price to <strong>{money(fulfillSelling)}</strong>. The job line updates in place.
+                Issuing deducts <strong>{formatQty(fulfillQtyNumber, fulfillUnit)}</strong> from stock
+                and updates the last selling price to <strong>{money(fulfillSelling)}</strong>. The job
+                line updates in place.
+                {fulfillNeedsPurchase && (
+                  <>
+                    {" "}The shortfall of <strong>{formatQty(fulfillShortfall, fulfillUnit)}</strong>{" "}
+                    is purchased first and recorded against the supplier invoice.
+                  </>
+                )}
               </div>
             </div>
           </div>

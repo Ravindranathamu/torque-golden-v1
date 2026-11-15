@@ -1139,13 +1139,6 @@ export function JobDetailPage() {
       push("Enter a valid quantity.", "error");
       return;
     }
-    if (qty > selectedItem.stock) {
-      push(
-        `Only ${formatQty(selectedItem.stock, selectedItem.measureUnit ?? selectedItem.unit)} in stock.`,
-        "error",
-      );
-      return;
-    }
     const result = requestPart(activeJob.id, selectedItem.id, qty, partSectionId || undefined, {
       isCustomerExtra: partExtra || undefined,
     });
@@ -3540,7 +3533,10 @@ export function JobDetailPage() {
             </>
           ) : (
             <>
-          <Field label="Search in-stock parts" hint="Only matching fitment and universal items are shown.">
+          <Field
+            label="Search parts"
+            hint="Matching fitment and universal items are shown. Out-of-stock parts are purchased by Stores when issued."
+          >
             <input
               className="input"
               placeholder="Search by part name or code…"
@@ -3560,8 +3556,12 @@ export function JobDetailPage() {
                   <div>
                     <div className="row wrap" style={{ gap: 6 }}>
                       <strong style={{ fontSize: 13 }}>{selectedItem.name}</strong>
-                      <span className="badge badge-green">
-                        {formatQty(selectedItem.stock, selectedItem.measureUnit ?? selectedItem.unit)} in stock
+                      <span
+                        className={`badge ${selectedItem.stock > 0 ? "badge-green" : "badge-amber"}`}
+                      >
+                        {selectedItem.stock > 0
+                          ? `${formatQty(selectedItem.stock, selectedItem.measureUnit ?? selectedItem.unit)} in stock`
+                          : "Out of stock · Stores will purchase"}
                       </span>
                     </div>
                     <div className="tiny muted" style={{ marginTop: 3 }}>
@@ -3577,14 +3577,17 @@ export function JobDetailPage() {
                   <Field
                     label={`Quantity (${selectedItem.measureUnit ?? selectedItem.unit})`}
                     required
-                    hint={`Maximum available: ${formatQty(selectedItem.stock, selectedItem.measureUnit ?? selectedItem.unit)}. Fractional quantities are allowed for consumables.`}
+                    hint={
+                      selectedItem.stock > 0
+                        ? `In stock: ${formatQty(selectedItem.stock, selectedItem.measureUnit ?? selectedItem.unit)}. Any shortage is purchased by Stores at issue. Fractional quantities are allowed for consumables.`
+                        : "Out of stock. Stores will purchase this quantity and issue it against a supplier invoice."
+                    }
                   >
                     <input
                       className="input"
                       type="number"
                       min={0.001}
                       step="any"
-                      max={selectedItem.stock}
                       value={partQty}
                       onChange={(event) => setPartQty(event.target.value)}
                     />
@@ -3626,7 +3629,7 @@ export function JobDetailPage() {
             >
               {fitmentItems.length === 0 ? (
                 <div className="empty" style={{ padding: "22px 14px" }}>
-                  <p>No in-stock part matches this vehicle. Add the part under Stores first.</p>
+                  <p>No part matches this vehicle. Add the part under Stores first.</p>
                 </div>
               ) : (
                 fitmentItems.map((item) => (
@@ -3678,8 +3681,8 @@ export function JobDetailPage() {
           <div className="alert alert-warn">
             <Package />
             <div>
-              Strict stock enforcement is active. Stores cannot issue more than the available
-              quantity; any balance becomes a backorder on a separate line.
+              Requests are not limited by stock. If the item is short, Stores purchases the
+              balance and issues it — the supplier invoice number is required for that purchase.
             </div>
           </div>
             </>

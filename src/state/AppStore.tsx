@@ -1699,7 +1699,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ): ActionResult => {
       const item = state.inventory.find((i) => i.id === itemId);
       if (!item) return { ok: false, message: "Item not found." };
-      if (item.stock <= 0) return { ok: false, message: `${item.name} is out of stock.` };
       const job = state.jobCards.find((j) => j.id === jobId);
       if (!job) return { ok: false, message: "Job card not found." };
       const requestedQty = Math.max(0.001, Number(qty) || 1);
@@ -1818,29 +1817,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!part) return { ok: false, message: "Part request not found." };
       const item = state.inventory.find((i) => i.id === part.itemId);
       if (!item) return { ok: false, message: "Inventory item not found." };
-      const hasPurchaseHistory = state.purchases.some((purchase) =>
-        purchase.lines?.some((line) => line.itemId === item.id),
-      );
-      if (item.type !== "Consumable" && hasPurchaseHistory && !data.supplierInvoiceNo.trim()) {
-        return {
-          ok: false,
-          message: "Enter the supplier purchase invoice number before issuing this part.",
-        };
-      }
       const unit = item.measureUnit || item.unit;
       const remaining = Math.max(0, part.qtyRequested - part.qtyIssued);
       const requested = part.qtyIssued > 0 ? remaining : part.qtyRequested;
       const rawQty = Number(data.qtyIssued) || requested;
       const qty = Math.max(0.001, Math.min(rawQty, requested));
-      if (item.stock < qty) {
+      const stockAvailable = Math.max(0, item.stock);
+      const shortfall = Math.max(0, Math.round((qty - stockAvailable) * 1000) / 1000);
+      const needsPurchase = shortfall > 0.0001;
+      const invoiceNo = data.supplierInvoiceNo.trim();
+      const purchaseSupplierId = data.supplierId || part.supplierId || item.supplierId;
+      if (needsPurchase && !invoiceNo) {
         return {
           ok: false,
-          message: `Only ${formatQty(item.stock, unit)} in stock. Issue a smaller quantity and backorder the rest.`,
+          message: `Stock is short by ${formatQty(shortfall, unit)}. Enter the supplier purchase invoice number to buy the balance and issue it.`,
         };
+      }
+      if (needsPurchase && !purchaseSupplierId) {
+        return {
+          ok: false,
+          message: "Choose the supplier for the purchased quantity.",
+        };
+      }
+      if (
+        needsPurchase &&
+        !state.suppliers.some((supplier) => supplier.id === purchaseSupplierId)
+      ) {
+        return { ok: false, message: "The selected supplier no longer exists." };
       }
       const selling = Math.round(data.costPrice * (1 + data.marginPercent / 100) * 100) / 100;
       const now = new Date().toISOString();
       const job = state.jobCards.find((j) => j.id === part.jobCardId);
+      const user = state.users.find((entry) => entry.id === state.currentUserId);
 
       setState((prev) => {
         const nextParts = prev.parts.map((p) =>
@@ -1858,8 +1866,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                       ? p.sellingPrice
                       : selling,
                 status: "Issued" as const,
-                supplierId: data.supplierId ?? p.supplierId,
-                supplierInvoiceNo: data.supplierInvoiceNo.trim() || undefined,
+                supplierId: purchaseSupplierId ?? p.supplierId,
+                supplierInvoiceNo: invoiceNo || p.supplierInvoiceNo,
                 measuredQty: p.measuredQty || qty % 1 !== 0,
                 updatedAt: now,
               }
@@ -1890,24 +1898,66 @@ export function AppProvider({ children }: { children: ReactNode }) {
             : i,
         );
         const updatedItem = nextInventory.find((i) => i.id === item.id);
-        const movement: StockMovement = {
-          id: uid("stk"),
-          itemId: item.id,
-          itemName: item.name,
-          date: now,
-          type: "Job_Issue",
-          qty: -qty,
-          reference: part.jobCardId,
-          note: `Issued ${formatQty(qty, unit)} to ${part.jobCardId}`,
-          createdBy: state.users.find((entry) => entry.id === state.currentUserId)?.name,
-        };
+        const movements: StockMovement[] = [
+          {
+            id: uid("stk"),
+            itemId: item.id,
+            itemName: item.name,
+            date: now,
+            type: "Job_Issue",
+            qty: -qty,
+            reference: part.jobCardId,
+            note: `Issued ${formatQty(qty, unit)} to ${part.jobCardId}`,
+            createdBy: user?.name,
+          },
+        ];
+        const nextPurchases = [...prev.purchases];
+        if (needsPurchase && purchaseSupplierId) {
+          movements.unshift({
+            id: uid("stk"),
+            itemId: item.id,
+            itemName: item.name,
+            date: now,
+            type: "Purchase",
+            qty: shortfall,
+            reference: invoiceNo,
+            note: `Direct purchase for ${part.jobCardId}${job ? ` · ${job.vehicleNo}` : ""}`,
+            createdBy: user?.name,
+          });
+          nextPurchases.unshift({
+            id: `PO-${8843 + prev.purchases.length}`,
+            supplierId: purchaseSupplierId,
+            invoiceNo,
+            amount: Math.round(shortfall * data.costPrice * 100) / 100,
+            type: "Cash",
+            creditDays: 0,
+            purchaseDate: now,
+            status: "Paid",
+            description: `Direct purchase for ${part.jobCardId}${job ? ` · ${job.vehicleNo}` : ""} · ${item.name}`,
+            lines: [
+              {
+                id: uid("pl"),
+                itemId: item.id,
+                itemName: item.name,
+                qty: shortfall,
+                costPrice: data.costPrice,
+                sellingPrice: selling,
+              },
+            ],
+            goodsConfirmedBy: user?.name,
+            goodsConfirmedAt: now,
+            paidBy: user?.name,
+            paidAt: now,
+            paymentMethod: "Cash",
+          });
+        }
         let notifications = prev.notifications;
         if (job) {
           notifications = notify(
             { ...prev, notifications },
             ["Supervisor"],
-            "Part issued",
-            `${formatQty(qty, unit)} of ${item.name} issued to ${job.id} (${job.vehicleNo}). Selling price updated.`,
+            needsPurchase ? "Part purchased and issued" : "Part issued",
+            `${formatQty(qty, unit)} of ${item.name} issued to ${job.id} (${job.vehicleNo}).${needsPurchase ? ` ${formatQty(shortfall, unit)} purchased on ${invoiceNo}.` : ""} Selling price updated.`,
             "normal",
             `/jobs/${job.id}`,
             { vehicleNo: job.vehicleNo, eventType: "inventory" },
@@ -1925,11 +1975,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
             { eventType: "inventory" },
           );
         }
-        return { ...prev, parts: nextParts, inventory: nextInventory, notifications, stockMovements: [movement, ...prev.stockMovements] };
+        return {
+          ...prev,
+          parts: nextParts,
+          inventory: nextInventory,
+          purchases: nextPurchases,
+          notifications,
+          stockMovements: [...movements, ...prev.stockMovements],
+        };
       });
       return { ok: true };
     },
-    [state.parts, state.inventory, state.purchases, state.jobCards, state.users, state.currentUserId],
+    [state.parts, state.inventory, state.suppliers, state.jobCards, state.users, state.currentUserId],
   );
 
   const requestExchange = useCallback((partId: string) => {
