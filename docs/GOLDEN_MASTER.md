@@ -147,7 +147,7 @@ by the service role. They are not exposed to `anon` or `authenticated`.
      version, released_at, title, changes, migration_files, channel, is_latest, notes
    ) values (
      '1.5.0', current_date, 'Release title', 'What changed.',
-     array['0005_new_migration.sql'], 'Stable', true, 'Golden master updated.'
+     array['20261201000100_new_migration.sql'], 'Stable', true, 'Golden master updated.'
    );
 
    update public.developer_releases set is_latest = false where version <> '1.5.0';

@@ -1694,7 +1694,7 @@ insert into public.developer_releases (
   version, released_at, title, changes, migration_files, channel, is_latest, notes
 ) values (
   '1.5.0', current_date, 'Release title', 'What changed.',
-  array['0005_next_change.sql'], 'Stable', true, 'Golden master updated.'
+  array['20261201000100_next_change.sql'], 'Stable', true, 'Golden master updated.'
 )
 on conflict (version) do update
   set released_at = excluded.released_at,
