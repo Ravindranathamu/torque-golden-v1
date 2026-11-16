@@ -77,7 +77,6 @@ export function CashierPage() {
   const [billPaymentMethod, setBillPaymentMethod] =
     useState<VehicleBillPaymentMethod>("Cash");
   const [billDiscount, setBillDiscount] = useState("0");
-  const [billTaxEnabled, setBillTaxEnabled] = useState(true);
 
   const queue = state.jobCards
     .filter((job) => job.status === "Repair Completed")
@@ -376,7 +375,6 @@ export function CashierPage() {
   function billCharges(
     bill: VehicleBill,
     discountInput: string = billDiscount,
-    taxEnabled: boolean = billTaxEnabled,
   ) {
     const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
     const tasks = billTasks(bill);
@@ -402,16 +400,15 @@ export function CashierPage() {
       Math.max(0, Math.round((Number(discountInput) || 0) * 100) / 100),
     );
     const supply = Math.max(0, gross - discount);
+    // VAT is fixed on the bill when it is created, before it is sent out.
     const vatRate =
       !hasLines && isShortfall
         ? 0
-        : taxEnabled
-          ? Math.max(
-              0,
-              bill.vatRate ??
-                (job?.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0),
-            )
-          : 0;
+        : Math.max(
+            0,
+            bill.vatRate ??
+              (job?.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0),
+          );
     const vatAmount =
       isShortfall || vatRate === 0 ? 0 : Math.round(supply * vatRate) / 100;
     const net = Math.max(
@@ -555,11 +552,6 @@ export function CashierPage() {
     setReleaseOrderNo(bill.releaseOrderNo ?? "");
     setReleaseAmount(String(billNet(bill)));
     setBillDiscount(String(bill.discount ?? 0));
-    const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
-    setBillTaxEnabled(
-      (bill.vatRate ?? (job?.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0)) >
-        0,
-    );
     setPaymentBillId(null);
   }
 
@@ -567,11 +559,6 @@ export function CashierPage() {
     setPaymentBillId(bill.id);
     setBillPaymentMethod("Cash");
     setBillDiscount(String(bill.discount ?? 0));
-    const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
-    setBillTaxEnabled(
-      (bill.vatRate ?? (job?.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0)) >
-        0,
-    );
     setReleaseBillId(null);
   }
 
@@ -590,7 +577,6 @@ export function CashierPage() {
       releaseOrderNo: releaseOrderNo.trim(),
       releaseOrderAmount: releaseApproved,
       discount: Number(billDiscount) || 0,
-      taxEnabled: billTaxEnabled,
     });
     if (!result.ok) {
       push(result.message ?? "Could not release the insurance bill.", "error");
@@ -611,7 +597,6 @@ export function CashierPage() {
       method: billPaymentMethod,
       amount: billCharges(paymentBill).net,
       discount: Number(billDiscount) || 0,
-      taxEnabled: billTaxEnabled,
     });
     if (!result.ok) {
       push(result.message ?? "Could not collect the bill payment.", "error");
@@ -1413,6 +1398,7 @@ export function CashierPage() {
               </Field>
               <Field
                 label="Cashier discount (LKR)"
+                full
                 hint="Applied before tax. Use it to settle a negotiated adjustment."
               >
                 <input
@@ -1423,16 +1409,6 @@ export function CashierPage() {
                   value={billDiscount}
                   onChange={(event) => setBillDiscount(event.target.value)}
                 />
-              </Field>
-              <Field label="Tax on this bill" hint="Cashier chooses whether VAT is added.">
-                <select
-                  className="select"
-                  value={billTaxEnabled ? "on" : "off"}
-                  onChange={(event) => setBillTaxEnabled(event.target.value === "on")}
-                >
-                  <option value="on">Add VAT</option>
-                  <option value="off">No tax on this bill</option>
-                </select>
               </Field>
             </div>
             <div className="card">
@@ -1448,6 +1424,10 @@ export function CashierPage() {
                 <div className="kv">
                   <span>Net payable by insurer</span>
                   <span className="strong">{money(releaseNet)}</span>
+                </div>
+                <div className="tiny muted" style={{ marginTop: 6 }}>
+                  VAT is chosen on the bill before it is sent to the insurer. Releasing only
+                  records the insurer settlement.
                 </div>
               </div>
             </div>
@@ -1530,6 +1510,7 @@ export function CashierPage() {
             <div className="form-grid">
               <Field
                 label="Cashier discount (LKR)"
+                full
                 hint="Applied before tax. Printed on the bill."
               >
                 <input
@@ -1540,16 +1521,6 @@ export function CashierPage() {
                   value={billDiscount}
                   onChange={(event) => setBillDiscount(event.target.value)}
                 />
-              </Field>
-              <Field label="Tax on this bill" hint="Cashier chooses whether VAT is added.">
-                <select
-                  className="select"
-                  value={billTaxEnabled ? "on" : "off"}
-                  onChange={(event) => setBillTaxEnabled(event.target.value === "on")}
-                >
-                  <option value="on">Add VAT</option>
-                  <option value="off">No tax on this bill</option>
-                </select>
               </Field>
             </div>
             <div className="card">
@@ -1565,6 +1536,10 @@ export function CashierPage() {
                 <div className="kv">
                   <span>Net payable by customer</span>
                   <span className="strong">{money(paymentNet)}</span>
+                </div>
+                <div className="tiny muted" style={{ marginTop: 6 }}>
+                  VAT is fixed on the bill when it is created. Change it on the bill before it
+                  is sent; this screen only records payment.
                 </div>
               </div>
             </div>

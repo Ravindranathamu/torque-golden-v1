@@ -192,6 +192,7 @@ export function JobDetailPage() {
   const [salvageReference, setSalvageReference] = useState("");
   const [billNo, setBillNo] = useState("");
   const [billAmount, setBillAmount] = useState("");
+  const [billVatChoice, setBillVatChoice] = useState<"on" | "off" | "">("");
   const [customerBillNo, setCustomerBillNo] = useState("");
   const [customerBillAmount, setCustomerBillAmount] = useState("");
   const [chequeNo, setChequeNo] = useState("");
@@ -320,6 +321,23 @@ export function JobDetailPage() {
   const insurancePdfData = claim
     ? { claim, insurer: insurer ?? undefined }
     : undefined;
+  const billVatEnabled = billVatChoice
+    ? billVatChoice === "on"
+    : Boolean(claim?.isVatInvoice || (claim?.vatRateApplied ?? 0) > 0);
+  const billVatRate = billVatEnabled
+    ? Math.max(
+        0,
+        claim?.vatRateApplied || state.settings.defaultVatRate || 18,
+      )
+    : 0;
+  const billEnteredAmount =
+    Number(billAmount) || claim?.insuranceBillAmount || activeTotals.total;
+  const billEnteredVat =
+    billVatRate > 0
+      ? Math.round(
+          (billEnteredAmount - billEnteredAmount / (1 + billVatRate / 100)) * 100,
+        ) / 100
+      : 0;
   const jobAdvances = state.advancePayments.filter(
     (advance) => advance.jobCardId === activeJob.id,
   );
@@ -897,9 +915,16 @@ export function JobDetailPage() {
       insuranceBillNo: billNo.trim() || claim.insuranceBillNo || `INS-${claim.claimNo}`,
       insuranceBillAmount: amount,
       insuranceBillAt: new Date().toISOString(),
+      isVatInvoice: billVatRate > 0,
+      vatRateApplied: billVatRate,
+      vatAmount: billEnteredVat,
       status: "Awaiting Payment",
     });
-    push("Insurance bill recorded and marked awaiting payment.");
+    push(
+      billVatRate > 0
+        ? `Insurance bill recorded at ${money(amount)} including VAT ${money(billEnteredVat)}.`
+        : "Insurance bill recorded without VAT and marked awaiting payment.",
+    );
   }
 
   function saveCustomerBill() {
@@ -2737,7 +2762,10 @@ export function JobDetailPage() {
                               onChange={(event) => setBillNo(event.target.value)}
                             />
                           </Field>
-                          <Field label="Bill amount (LKR)">
+                          <Field
+                            label="Bill amount (LKR)"
+                            hint="Total the insurer should pay, including VAT when selected."
+                          >
                             <input
                               className="input"
                               type="number"
@@ -2746,6 +2774,22 @@ export function JobDetailPage() {
                               placeholder={String(claim.insuranceBillAmount ?? activeTotals.total)}
                               onChange={(event) => setBillAmount(event.target.value)}
                             />
+                          </Field>
+                          <Field
+                            label="VAT on this bill"
+                            full
+                            hint="Choose VAT before the bill PDF is sent to the insurer."
+                          >
+                            <select
+                              className="select"
+                              value={billVatEnabled ? "on" : "off"}
+                              onChange={(event) =>
+                                setBillVatChoice(event.target.value as "on" | "off")
+                              }
+                            >
+                              <option value="off">No VAT</option>
+                              <option value="on">Add VAT ({billVatRate || state.settings.defaultVatRate || 18}%)</option>
+                            </select>
                           </Field>
                         </div>
                         <div className="row wrap">
@@ -2764,6 +2808,9 @@ export function JobDetailPage() {
                         </div>
                         <div className="tiny muted">
                           Current bill: {claim.insuranceBillAmount ? money(claim.insuranceBillAmount) : "not recorded"}.
+                          {billVatRate > 0
+                            ? ` This bill will show VAT ${money(billEnteredVat)} (${billVatRate}%) inside a ${money(billEnteredAmount)} total.`
+                            : " No VAT will be added to this bill."}
                         </div>
                       </div>
                     </div>
@@ -4670,15 +4717,26 @@ export function JobDetailPage() {
                 onChange={(event) => setSplitDiscount(event.target.value)}
               />
             </Field>
-            <Field label="VAT rate (%)" hint="Optional 18% VAT for tax invoices.">
-              <input
-                className="input"
-                type="number"
-                min={0}
-                step="0.01"
-                value={splitVat}
-                onChange={(event) => setSplitVat(event.target.value)}
-              />
+            <Field
+              label="VAT on this bill"
+              hint="Choose before this bill is sent to the insurer or customer."
+            >
+              <select
+                className="select"
+                value={splitVatRate > 0 ? "on" : "off"}
+                onChange={(event) =>
+                  setSplitVat(
+                    event.target.value === "on"
+                      ? String(state.settings.defaultVatRate ?? 18)
+                      : "0",
+                  )
+                }
+              >
+                <option value="off">No VAT</option>
+                <option value="on">
+                  Add VAT ({state.settings.defaultVatRate ?? 18}%)
+                </option>
+              </select>
             </Field>
             <Field label="Advance deduction (LKR)">
               <input

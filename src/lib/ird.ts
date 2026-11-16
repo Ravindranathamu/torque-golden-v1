@@ -979,7 +979,7 @@ export function buildIrdInsuranceBillPdf(
   );
   const supply = roundCurrency(Math.max(0, lines.total - vatAmount));
   const data: IrdDocument = {
-    title: job.isVatInvoice ? "TAX INVOICE" : "INVOICE",
+    title: job.isVatInvoice || claim.isVatInvoice ? "TAX INVOICE" : "INVOICE",
     referenceLabel: "Invoice No",
     reference: claim.insuranceBillNo || job.id,
     documentNumber: `No: ${claim.insuranceBillNo || job.id}`,

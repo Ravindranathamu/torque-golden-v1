@@ -417,8 +417,6 @@ interface AppStoreValue {
       amount?: number;
       releaseOrderNo?: string;
       releaseOrderAmount?: number;
-      /** Cashier may waive tax on this bill. */
-      taxEnabled?: boolean;
       /** Cashier discount in rupees, applied before VAT. */
       discount?: number;
     },
@@ -4791,8 +4789,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         amount?: number;
         releaseOrderNo?: string;
         releaseOrderAmount?: number;
-        /** Cashier may waive tax on this bill. */
-        taxEnabled?: boolean;
         /** Cashier discount in rupees, applied before VAT. */
         discount?: number;
       },
@@ -4843,13 +4839,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const appliedVatRate =
         isShortfall && !hasLines
           ? 0
-          : input.taxEnabled === false
-            ? 0
-            : Math.max(
-                0,
-                bill.vatRate ??
-                  (job.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0),
-              );
+          : Math.max(
+              0,
+              bill.vatRate ??
+                (job.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0),
+            );
       const supply = Math.max(0, gross - appliedDiscount);
       const vatAmount =
         isShortfall || appliedVatRate === 0

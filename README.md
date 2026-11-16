@@ -237,9 +237,9 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   brand colour. Estimates omit the Date of Supply and Place of Supply rows and
   support PDF, print and WhatsApp for both normal and insurance jobs.
 - Owner setup stores company TIN, VAT registration number, default VAT rate
-  (18%) and place of supply; cashier chooses **With VAT** or **Without VAT** per
-  bill and can add a cashier discount before tax. VAT rate and amount are saved
-  on the job and insurance claim.
+  (18%) and place of supply; **VAT is chosen when the bill is created**, before
+  it is sent to the insurer or customer, and the cashier can add a discount at
+  collection. VAT rate and amount are saved on the bill, job and insurance claim.
 - Insurance, customer and additional bills all print as **INVOICE** or **TAX
   INVOICE** — never "Insurance Invoice" or "Additional Invoice". Customer-brought
   parts print at their agreed value on the insurance bill, with no

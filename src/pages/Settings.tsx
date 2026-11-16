@@ -1425,9 +1425,11 @@ export function SettingsPage() {
                 </Field>
               </div>
               <Alert tone="info" title="When VAT applies">
-                The cashier chooses With VAT or Without VAT at billing. With VAT prints a TAX
-                INVOICE with the 18% (or chosen) VAT row; without VAT prints a standard INVOICE.
-                Insurance estimates and bills always use the standard A4 IRD layout.
+                VAT is chosen when a bill is created, before it is sent to the insurer or customer.
+                With VAT prints a TAX INVOICE with the 18% (or chosen) VAT row; without VAT prints a
+                standard INVOICE. Cashier collection only records payment, so the printed bill and
+                the amount collected stay aligned. Insurance estimates and bills always use the
+                standard A4 IRD layout.
               </Alert>
             </div>
           </div>

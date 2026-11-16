@@ -459,9 +459,12 @@ Operational notes:
   customer. Never mutate the insurance bill to absorb the shortfall. The basis is
   the insurance bill grand total after tax, less any customer-brought value
   already included in that bill and paid by the customer.
-- Cashier may add a discount before tax and may choose **With VAT** or **Without
-  VAT** on each bill. The release/payment preview shows the resulting supply, VAT
-  and net payable before the bill is settled.
+- VAT is chosen when each bill is created, before it is sent to the insurer or
+  customer: the **New insurance bill** modal and the insurance tab's **Record
+  bill** card both include an **Add VAT / No VAT** choice. Cashier may add a
+  discount at collection, but cannot switch VAT on or off after the bill has
+  been sent. The release/payment preview shows the stored VAT, supply and net
+  payable before the bill is settled.
 - Repair sections estimate, work and bill independently. The consolidated final
   bill is available only when at least two section bills exist and every one is
   settled; it totals all section bills and applies the same insurance
@@ -502,7 +505,8 @@ Operational notes:
   intake lists only active insurers; historical claims and PDFs stay readable.
 - Configure the company TIN, VAT registration number, default VAT rate (18%),
   place of supply and footer lines during setup or under **Settings → Printing &
-  tax**. The cashier chooses With VAT or Without VAT per invoice.
+  tax**. Choose With VAT or Without VAT when creating each bill, before it is
+  sent; the cashier does not change VAT at collection.
 - Keep the standard paper setting at A4 for IRD documents. Thermal widths are
   58 mm or 80 mm; test both from **Settings → Printing & tax → Test thermal
   print** before going live.
