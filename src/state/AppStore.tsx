@@ -409,6 +409,15 @@ interface AppStoreValue {
     depreciation?: number;
     netPayable?: number;
   }) => ActionResult;
+  prepareVehicleBill: (
+    billId: string,
+    input: {
+      /** Cashier discount in rupees, applied before VAT. */
+      discount: number;
+      /** 0 for No VAT, otherwise the VAT percentage. */
+      vatRate: number;
+    },
+  ) => ActionResult;
   removeVehicleBill: (billId: string) => void;
   settleVehicleBill: (
     billId: string,
@@ -4709,7 +4718,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         policyExcess: input.policyExcess,
         depreciation: input.depreciation,
         netPayable: Math.round(netPayable * 100) / 100,
-        status: input.kind === "Insurance" ? "Awaiting Release Order" : "Unpaid",
+        status: "Draft",
       };
       setState((prev) => ({
         ...prev,
@@ -4720,46 +4729,164 @@ export function AppProvider({ children }: { children: ReactNode }) {
         parts: prev.parts.map((part) =>
           partIds.includes(part.id) ? { ...part, assignedBillId: bill.id } : part,
         ),
-        insuranceJobs:
-          bill.claimId && bill.kind === "Insurance"
-            ? prev.insuranceJobs.map((claim) =>
-                claim.id === bill.claimId
-                  ? {
-                      ...claim,
-                      insuranceBillNo: billNo,
-                      insuranceBillAmount: bill.netPayable,
-                      insuranceBillAt: bill.createdAt,
-                      status:
-                        claim.status === "Settled"
-                          ? ("Settled" as const)
-                          : ("Awaiting Payment" as const),
-                    }
-                  : claim,
-              )
-            : bill.claimId && bill.kind === "Customer"
-              ? prev.insuranceJobs.map((claim) =>
-                  claim.id === bill.claimId
-                    ? {
-                        ...claim,
-                        customerBillNo: billNo,
-                        customerBillAmount: bill.netPayable,
-                      }
-                    : claim,
-                )
-              : prev.insuranceJobs,
         notifications: notify(
           prev,
           ["Cashier", "Accounting"],
-          `${input.kind} bill recorded`,
-          `${job.vehicleNo} · ${billNo} · ${money(netPayable)}. ${taskIds.length} task(s) and ${partIds.length} part(s) locked to this bill.`,
+          `${input.kind} draft bill saved`,
+          `${job.vehicleNo} · ${billNo} · ${money(netPayable)}. ${taskIds.length} task(s) and ${partIds.length} part(s) locked to this draft. Cashier sets VAT and sends it.`,
           "normal",
-          "/accounting",
+          "/cashier",
           { vehicleNo: job.vehicleNo, eventType: "payment" },
         ),
       }));
       return { ok: true, reference: bill.id };
     },
     [state.jobCards, state.vehicleBills, state.tasks, state.parts, state.users, state.currentUserId],
+  );
+
+  const prepareVehicleBill = useCallback(
+    (
+      billId: string,
+      input: { discount: number; vatRate: number },
+    ): ActionResult => {
+      const bill = state.vehicleBills.find((entry) => entry.id === billId);
+      if (!bill) return { ok: false, message: "Bill not found." };
+      if (bill.status === "Paid" || bill.status === "Release Order") {
+        return { ok: false, message: "This bill is already settled." };
+      }
+      if (bill.status !== "Draft") {
+        return {
+          ok: false,
+          message:
+            "This bill has already been sent. VAT is fixed before sending, so it can no longer be changed.",
+        };
+      }
+      const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
+      if (!job) return { ok: false, message: "Job card not found." };
+      const user = state.users.find((entry) => entry.id === state.currentUserId);
+      const now = new Date().toISOString();
+      const billTasks = state.tasks.filter((task) => bill.taskIds?.includes(task.id));
+      const billParts = state.parts.filter((part) => bill.partIds?.includes(part.id));
+      const laborRevenue = billTasks.reduce((sum, task) => sum + task.laborCost, 0);
+      const dueParts =
+        bill.kind === "Insurance"
+          ? billParts
+          : billParts.filter((part) => part.partSource !== "Customer_Brought");
+      const partsSubtotal = dueParts.reduce(
+        (sum, part) => sum + part.sellingPrice * partIssueQty(part),
+        0,
+      );
+      const hasLines = billTasks.length > 0 || billParts.length > 0;
+      const isShortfall = Boolean(bill.parentBillId);
+      // Auto-created shortfall bills store their payable total without line items.
+      const gross =
+        isShortfall && !hasLines
+          ? Math.max(0, Math.round((bill.netPayable ?? bill.amount ?? 0) * 100) / 100)
+          : laborRevenue + partsSubtotal;
+      const discount = Math.max(
+        0,
+        Math.min(
+          Math.round((Number(input.discount) || 0) * 100) / 100,
+          gross,
+        ),
+      );
+      // VAT belongs to the shortfall parent bill, never to the adjustment bill.
+      const vatRate =
+        isShortfall && !hasLines
+          ? 0
+          : Math.max(0, Math.round((Number(input.vatRate) || 0) * 100) / 100);
+      const supply = Math.max(0, gross - discount);
+      const vatAmount =
+        vatRate === 0 ? 0 : Math.round(supply * vatRate) / 100;
+      const net = Math.max(
+        0,
+        Math.round(
+          (supply +
+            vatAmount -
+            (bill.policyExcess ?? 0) -
+            (bill.depreciation ?? 0) -
+            (bill.advance ?? 0)) *
+            100,
+        ) / 100,
+      );
+      if (net <= 0) return { ok: false, message: "This bill has no payable amount." };
+      const status =
+        bill.kind === "Insurance" ? ("Awaiting Release Order" as const) : ("Unpaid" as const);
+      const sendLabel =
+        bill.kind === "Insurance" ? "sent to the insurer" : "ready for customer billing";
+      setState((prev) => ({
+        ...prev,
+        vehicleBills: prev.vehicleBills.map((entry) =>
+          entry.id === bill.id
+            ? {
+                ...entry,
+                ...(hasLines
+                  ? {
+                      laborSubtotal: Math.round(laborRevenue * 100) / 100,
+                      partsSubtotal: Math.round(partsSubtotal * 100) / 100,
+                    }
+                  : {}),
+                discount,
+                vatRate,
+                vatAmount,
+                netPayable: net,
+                amount: net,
+                status,
+                sentAt: now,
+                sentBy: user?.name,
+              }
+            : entry,
+        ),
+        insuranceJobs: bill.claimId
+          ? prev.insuranceJobs.map((claim) => {
+              if (claim.id !== bill.claimId) return claim;
+              if (bill.kind === "Insurance") {
+                return {
+                  ...claim,
+                  insuranceBillNo: bill.billNo,
+                  insuranceBillAmount: net,
+                  insuranceBillAt: now,
+                  isVatInvoice: vatRate > 0,
+                  vatRateApplied: vatRate,
+                  vatAmount,
+                  status:
+                    claim.status === "Settled"
+                      ? ("Settled" as const)
+                      : ("Awaiting Payment" as const),
+                };
+              }
+              if (bill.kind === "Customer") {
+                return {
+                  ...claim,
+                  customerBillNo: bill.billNo,
+                  customerBillAmount: net,
+                };
+              }
+              return claim;
+            })
+          : prev.insuranceJobs,
+        notifications: notify(
+          prev,
+          ["Cashier", "Accounting"],
+          `${bill.kind} bill ${sendLabel}`,
+          `${job.vehicleNo} · ${bill.billNo} · ${money(net)}${
+            vatRate > 0 ? ` including VAT ${money(vatAmount)} at ${vatRate}%` : " with no VAT"
+          }.`,
+          "normal",
+          "/cashier",
+          { vehicleNo: job.vehicleNo, eventType: "payment" },
+        ),
+      }));
+      return { ok: true, reference: bill.id };
+    },
+    [
+      state.vehicleBills,
+      state.jobCards,
+      state.tasks,
+      state.parts,
+      state.users,
+      state.currentUserId,
+    ],
   );
 
   const removeVehicleBill = useCallback((billId: string) => {
@@ -6634,6 +6761,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dispatchJob,
       overrideBillingGate,
       addVehicleBill,
+      prepareVehicleBill,
       removeVehicleBill,
       settleVehicleBill,
       backupToDrive,
@@ -6750,6 +6878,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       dispatchJob,
       overrideBillingGate,
       addVehicleBill,
+      prepareVehicleBill,
       removeVehicleBill,
       settleVehicleBill,
       backupToDrive,

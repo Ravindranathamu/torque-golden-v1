@@ -2355,6 +2355,9 @@ function makeVehicleBills(): VehicleBill[] {
       claimId: "clm_1",
       insurerId: "ins_ceylinco",
       notes: "Insurer share for the accident repair.",
+      sentAt: daysAgoISO(2, 16),
+      sentBy: "Nimal Perera",
+      status: "Awaiting Release Order",
     },
     {
       id: "bill_2",
@@ -2372,6 +2375,9 @@ function makeVehicleBills(): VehicleBill[] {
       createdBy: "Nimal Perera",
       claimId: "clm_1",
       notes: "Customer excess, courtesy wash and consumables, billed separately.",
+      sentAt: daysAgoISO(2, 16),
+      sentBy: "Nimal Perera",
+      status: "Unpaid",
     },
   ];
 }

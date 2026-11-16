@@ -141,14 +141,16 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   an appointment-day list drive confirm, reschedule, cancel, arrived and no-show
   actions, with WhatsApp notes to the customer.
 - **Multiple bills per vehicle**: separate customer and insurance bills can be
-  recorded against the same job with independent numbers, amounts and notes.
-  Insurance bills are created as **Awaiting Release Order** and appear in the
-  cashier as *Waiting for releasing order*. A release order below the insurance
-  bill creates an **Additional** customer bill for the shortfall after tax; the
-  shortfall is reduced by any customer-brought parts already valued on the
-  insurance bill, and the additional bill prints that credit as a deduction. When
-  a vehicle has bills for more than one repair section, Cashier prints one
-  consolidated **Final bill** only after every section bill is settled.
+  drafted against the same job with independent numbers, amounts and notes.
+  Bills are saved as **Drafts** and appear in **Cashier → Separate bills**, where
+  the cashier chooses **No VAT** or **Add VAT** and marks the bill sent. Sent
+  insurance bills become **Awaiting Release Order** (*Waiting for releasing
+  order*). A release order below the insurance bill creates an **Additional**
+  customer bill for the shortfall after tax; the shortfall is reduced by any
+  customer-brought parts already valued on the insurance bill, and the additional
+  bill prints that credit as a deduction. When a vehicle has bills for more than
+  one repair section, Cashier prints one consolidated **Final bill** only after
+  every section bill is settled.
 - **PRO billing-gate override**: the PRO can release an unpaid completed vehicle
   with a mandatory reason. The job becomes *Released on Credit*, a 7-day customer
   credit opens, and Owner/Cashier/Accounting are notified.
@@ -209,12 +211,15 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   and never go to Stores; a swap or return is handed back to the customer with a
   WhatsApp message.
 - Insurance workflow: section estimates → estimate approval → parts approval →
-  supplementary estimates → insurance bill → customer bill → release order →
-  salvage submission → cheque receipt and clearing.
-- Insurance billing roles: release order, insurance bill, customer bill, cheque
-  and settlement are cashier/accounting work (owner can override). Supervisors
-  and storekeepers handle salvage submission. The **Insurance desk** collects
-  post-release salvage and cheque work in one queue after the vehicle has left.
+  supplementary estimates → draft insurance and customer bills → cashier sets
+  VAT and sends → release order → salvage submission → cheque receipt and
+  clearing.
+- Insurance billing roles: the job **Invoice** tab drafts insurance/customer
+  bills; **Cashier → Separate bills** sets VAT and sends them, then records the
+  release order or customer payment. Cheque and settlement are
+  cashier/accounting work (owner can override). Supervisors and storekeepers
+  handle salvage submission. The **Insurance desk** collects post-release salvage
+  and cheque work in one queue after the vehicle has left.
 - Vehicles can be released on the insurer's **release note** without waiting for
   the cheque or salvage; salvage submission remains a workshop duty tracked per
   part (`Pending`, `Submitted`, `Not Required`).
@@ -237,9 +242,10 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   brand colour. Estimates omit the Date of Supply and Place of Supply rows and
   support PDF, print and WhatsApp for both normal and insurance jobs.
 - Owner setup stores company TIN, VAT registration number, default VAT rate
-  (18%) and place of supply; **VAT is chosen when the bill is created**, before
-  it is sent to the insurer or customer, and the cashier can add a discount at
-  collection. VAT rate and amount are saved on the bill, job and insurance claim.
+  (18%) and place of supply. **VAT is chosen in Cashier before a bill is sent**
+  to the insurer or corporate customer; once sent, the VAT is fixed and the
+  cashier can still apply a discount at collection. VAT rate and amount are
+  saved on the bill, job and insurance claim.
 - Insurance, customer and additional bills all print as **INVOICE** or **TAX
   INVOICE** — never "Insurance Invoice" or "Additional Invoice". Customer-brought
   parts print at their agreed value on the insurance bill, with no

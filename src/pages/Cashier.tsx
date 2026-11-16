@@ -8,10 +8,12 @@ import {
   CreditCard,
   Download,
   MessageCircle,
+  Percent,
   Phone,
   Plus,
   Printer,
   ReceiptText,
+  Send,
   ShieldCheck,
   Star,
   UserRound,
@@ -49,7 +51,7 @@ import type {
 type CashierTab = "queue" | "bills" | "advances" | "settled" | "credits";
 
 export function CashierPage() {
-  const { state, currentUser, checkoutJob, recordAdvancePayment, settleVehicleBill } = useApp();
+  const { state, currentUser, checkoutJob, recordAdvancePayment, prepareVehicleBill, settleVehicleBill } = useApp();
   const { push } = useToast();
   const [tab, setTab] = useState<CashierTab>("queue");
   const [checkoutTargetId, setCheckoutTargetId] = useState<string | null>(null);
@@ -77,6 +79,9 @@ export function CashierPage() {
   const [billPaymentMethod, setBillPaymentMethod] =
     useState<VehicleBillPaymentMethod>("Cash");
   const [billDiscount, setBillDiscount] = useState("0");
+  const [prepareBillId, setPrepareBillId] = useState<string | null>(null);
+  const [prepareVatEnabled, setPrepareVatEnabled] = useState(false);
+  const [prepareDiscount, setPrepareDiscount] = useState("0");
 
   const queue = state.jobCards
     .filter((job) => job.status === "Repair Completed")
@@ -128,6 +133,15 @@ export function CashierPage() {
     state.vehicleBills.find((bill) => bill.id === releaseBillId) ?? null;
   const paymentBill =
     state.vehicleBills.find((bill) => bill.id === paymentBillId) ?? null;
+  const prepareBill =
+    state.vehicleBills.find((bill) => bill.id === prepareBillId) ?? null;
+  const prepareVatRate = Math.max(
+    0,
+    prepareBill?.vatRate || state.settings.defaultVatRate || 18,
+  );
+  const prepareCharges = prepareBill
+    ? billCharges(prepareBill, prepareDiscount, prepareVatEnabled)
+    : null;
   const releaseNet = releaseBill ? billCharges(releaseBill).net : 0;
   const paymentNet = paymentBill ? billCharges(paymentBill).net : 0;
   const releaseApproved = Number(releaseAmount) || 0;
@@ -375,6 +389,7 @@ export function CashierPage() {
   function billCharges(
     bill: VehicleBill,
     discountInput: string = billDiscount,
+    vatOverride?: boolean,
   ) {
     const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
     const tasks = billTasks(bill);
@@ -400,15 +415,22 @@ export function CashierPage() {
       Math.max(0, Math.round((Number(discountInput) || 0) * 100) / 100),
     );
     const supply = Math.max(0, gross - discount);
-    // VAT is fixed on the bill when it is created, before it is sent out.
+    // VAT is chosen in Cashier before the bill is sent, then fixed on the bill.
     const vatRate =
       !hasLines && isShortfall
         ? 0
-        : Math.max(
-            0,
-            bill.vatRate ??
-              (job?.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0),
-          );
+        : vatOverride === undefined
+          ? Math.max(
+              0,
+              bill.vatRate ??
+                (job?.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0),
+            )
+          : vatOverride
+            ? Math.max(
+                0,
+                bill.vatRate || state.settings.defaultVatRate || 18,
+              )
+            : 0;
     const vatAmount =
       isShortfall || vatRate === 0 ? 0 : Math.round(supply * vatRate) / 100;
     const net = Math.max(
@@ -545,6 +567,37 @@ export function CashierPage() {
     } finally {
       setBusy("");
     }
+  }
+
+  function openPrepareBill(bill: VehicleBill) {
+    const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
+    setPrepareBillId(bill.id);
+    setPrepareVatEnabled(
+      (bill.vatRate ?? (job?.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0)) >
+        0,
+    );
+    setPrepareDiscount(String(bill.discount ?? 0));
+    setReleaseBillId(null);
+    setPaymentBillId(null);
+  }
+
+  function confirmPrepareBill() {
+    if (!prepareBill) return;
+    const result = prepareVehicleBill(prepareBill.id, {
+      discount: Number(prepareDiscount) || 0,
+      vatRate: prepareVatEnabled ? prepareVatRate : 0,
+    });
+    if (!result.ok) {
+      push(result.message ?? "Could not prepare the bill.", "error");
+      return;
+    }
+    push(
+      prepareBill.kind === "Insurance"
+        ? `${prepareBill.billNo} sent to the insurer${prepareVatEnabled ? ` with VAT ${prepareVatRate}%` : " without VAT"}. It now waits for the release order.`
+        : `${prepareBill.billNo} ready for customer billing${prepareVatEnabled ? ` with VAT ${prepareVatRate}%` : " without VAT"}.`,
+    );
+    setPrepareBillId(null);
+    setTab("bills");
   }
 
   function openReleaseBill(bill: VehicleBill) {
@@ -1050,7 +1103,18 @@ export function CashierPage() {
                                   {(bill.taskIds?.length ?? 0) + (bill.partIds?.length ?? 0)}
                                 </td>
                                 <td className="num strong">{money(billNet(bill))}</td>
-                                <td><StatusBadge status={bill.status === "Awaiting Release Order" ? "Waiting for releasing order" : bill.status ?? "Unpaid"} /></td>
+                                <td>
+                                  <StatusBadge
+                                    status={
+                                      bill.status === "Awaiting Release Order"
+                                        ? "Waiting for releasing order"
+                                        : bill.status ?? "Unpaid"
+                                    }
+                                  />
+                                  {bill.status === "Draft" && (
+                                    <div className="cell-sub">Set VAT before sending</div>
+                                  )}
+                                </td>
                                 <td className="tiny muted">
                                   {bill.status === "Release Order" ? (
                                     <>
@@ -1070,44 +1134,61 @@ export function CashierPage() {
                                         {bill.paidBy ? ` · ${bill.paidBy}` : ""}
                                       </div>
                                     </>
+                                  ) : bill.sentAt ? (
+                                    <>
+                                      Sent {shortDate(bill.sentAt)}
+                                      <div className="cell-sub">{bill.sentBy ?? "—"}</div>
+                                    </>
                                   ) : (
                                     "—"
                                   )}
                                 </td>
                                 <td>
                                   <div className="row" style={{ justifyContent: "flex-end", gap: 3 }}>
-                                    <button
-                                      className="btn btn-ghost btn-sm"
-                                      title="Print this bill (A4)"
-                                      onClick={() => printBillDocument(bill)}
-                                    >
-                                      <Printer />
-                                    </button>
-                                    <button
-                                      className="btn btn-ghost btn-sm"
-                                      title="Download this bill as PDF"
-                                      disabled={busy === `bill_download_${bill.id}`}
-                                      onClick={() => downloadBillDocument(bill)}
-                                    >
-                                      <Download />
-                                    </button>
-                                    {bill.kind === "Insurance" && !settled && (
+                                    {bill.status === "Draft" ? (
                                       <button
                                         className="btn btn-primary btn-sm"
-                                        onClick={() => openReleaseBill(bill)}
+                                        onClick={() => openPrepareBill(bill)}
                                       >
-                                        <ShieldCheck />
-                                        Release on order
+                                        <Percent />
+                                        Set VAT & send
                                       </button>
-                                    )}
-                                    {bill.kind !== "Insurance" && !settled && (
-                                      <button
-                                        className="btn btn-primary btn-sm"
-                                        onClick={() => openPaymentBill(bill)}
-                                      >
-                                        <Wallet />
-                                        Collect payment
-                                      </button>
+                                    ) : (
+                                      <>
+                                        <button
+                                          className="btn btn-ghost btn-sm"
+                                          title="Print this bill (A4)"
+                                          onClick={() => printBillDocument(bill)}
+                                        >
+                                          <Printer />
+                                        </button>
+                                        <button
+                                          className="btn btn-ghost btn-sm"
+                                          title="Download this bill as PDF"
+                                          disabled={busy === `bill_download_${bill.id}`}
+                                          onClick={() => downloadBillDocument(bill)}
+                                        >
+                                          <Download />
+                                        </button>
+                                        {bill.kind === "Insurance" && !settled && (
+                                          <button
+                                            className="btn btn-primary btn-sm"
+                                            onClick={() => openReleaseBill(bill)}
+                                          >
+                                            <ShieldCheck />
+                                            Release on order
+                                          </button>
+                                        )}
+                                        {bill.kind !== "Insurance" && !settled && (
+                                          <button
+                                            className="btn btn-primary btn-sm"
+                                            onClick={() => openPaymentBill(bill)}
+                                          >
+                                            <Wallet />
+                                            Collect payment
+                                          </button>
+                                        )}
+                                      </>
                                     )}
                                   </div>
                                 </td>
@@ -1118,8 +1199,9 @@ export function CashierPage() {
                       </table>
                     </div>
                     <div className="tiny muted">
-                      Insurance bills settle on the insurer release order. Customer and additional
-                      bills are collected in full by the cashier. A short release order creates an
+                      Set VAT on each draft bill here before it is sent to the insurer or customer.
+                      Insurance bills then settle on the insurer release order; customer and
+                      additional bills are collected in full. A short release order creates an
                       additional customer bill for the difference automatically.
                     </div>
                   </div>
@@ -1332,6 +1414,139 @@ export function CashierPage() {
       )}
 
       <Modal
+        open={Boolean(prepareBill)}
+        onClose={() => setPrepareBillId(null)}
+        title={
+          prepareBill
+            ? `Prepare ${prepareBill.kind.toLowerCase()} bill`
+            : "Prepare bill"
+        }
+        subtitle={
+          prepareBill
+            ? `${prepareBill.billNo} · ${prepareBill.vehicleNo} · set VAT before sending`
+            : undefined
+        }
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setPrepareBillId(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={confirmPrepareBill}>
+              <Send />
+              Save & mark sent
+            </button>
+          </>
+        }
+      >
+        {prepareBill && prepareCharges && (
+          <div className="stack">
+            <div className="card">
+              <div className="card-body">
+                <div className="kv"><span>Bill</span><span>{prepareBill.billNo}</span></div>
+                <div className="kv"><span>Type</span><span>{prepareBill.kind}</span></div>
+                <div className="kv">
+                  <span>Vehicle</span>
+                  <span>{prepareBill.vehicleNo}</span>
+                </div>
+                <div className="kv">
+                  <span>
+                    {prepareBill.kind === "Insurance" ? "Insurer" : "Customer"}
+                  </span>
+                  <span>
+                    {prepareBill.kind === "Insurance"
+                      ? insuranceForBill(prepareBill)?.insurer?.name ?? "—"
+                      : state.jobCards.find((job) => job.id === prepareBill.jobCardId)
+                          ?.customerName ?? "—"}
+                  </span>
+                </div>
+                {prepareBill.kind === "Insurance" &&
+                  insuranceForBill(prepareBill)?.claim && (
+                    <div className="kv">
+                      <span>Claim</span>
+                      <span>{insuranceForBill(prepareBill)?.claim.claimNo}</span>
+                    </div>
+                  )}
+              </div>
+            </div>
+            <div className="form-grid">
+              <Field
+                label="VAT on this bill"
+                full
+                hint="Choose this before the bill is sent. It cannot be changed after sending."
+              >
+                <select
+                  className="select"
+                  value={prepareVatEnabled ? "on" : "off"}
+                  onChange={(event) => setPrepareVatEnabled(event.target.value === "on")}
+                >
+                  <option value="off">No VAT — standard INVOICE</option>
+                  <option value="on">
+                    Add VAT ({prepareVatRate}%) — TAX INVOICE
+                  </option>
+                </select>
+              </Field>
+              <Field
+                label="Cashier discount (LKR)"
+                full
+                hint="Applied before VAT. Leave zero if no discount applies."
+              >
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={prepareDiscount}
+                  onChange={(event) => setPrepareDiscount(event.target.value)}
+                />
+              </Field>
+            </div>
+            <div className="card">
+              <div className="card-body">
+                <div className="kv">
+                  <span>Supply after discount</span>
+                  <span>{money(prepareCharges.supply)}</span>
+                </div>
+                <div className="kv">
+                  <span>VAT {prepareCharges.vatRate.toFixed(2)}%</span>
+                  <span>{money(prepareCharges.vatAmount)}</span>
+                </div>
+                {prepareBill.policyExcess ? (
+                  <div className="kv">
+                    <span>Policy excess</span>
+                    <span>- {money(prepareBill.policyExcess)}</span>
+                  </div>
+                ) : null}
+                {prepareBill.depreciation ? (
+                  <div className="kv">
+                    <span>Depreciation</span>
+                    <span>- {money(prepareBill.depreciation)}</span>
+                  </div>
+                ) : null}
+                {prepareBill.advance ? (
+                  <div className="kv">
+                    <span>Advance deducted</span>
+                    <span>- {money(prepareBill.advance)}</span>
+                  </div>
+                ) : null}
+                <div className="kv">
+                  <span>Net payable</span>
+                  <span className="strong">{money(prepareCharges.net)}</span>
+                </div>
+              </div>
+            </div>
+            <div className="alert alert-info">
+              <Send />
+              <div>
+                {prepareBill.kind === "Insurance"
+                  ? "Saving marks this bill as sent and moves it to Waiting for releasing order. The insurer release order will be compared with this VAT-inclusive total."
+                  : "Saving marks this bill ready for customer billing. Collect the full net payable afterwards; VAT is fixed at this step."}
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
         open={Boolean(releaseBill)}
         onClose={() => setReleaseBillId(null)}
         title="Release insurance bill on order"
@@ -1426,8 +1641,8 @@ export function CashierPage() {
                   <span className="strong">{money(releaseNet)}</span>
                 </div>
                 <div className="tiny muted" style={{ marginTop: 6 }}>
-                  VAT is chosen on the bill before it is sent to the insurer. Releasing only
-                  records the insurer settlement.
+                  VAT was set in Cashier before this bill was sent. Releasing only records the
+                  insurer settlement.
                 </div>
               </div>
             </div>
@@ -1538,8 +1753,8 @@ export function CashierPage() {
                   <span className="strong">{money(paymentNet)}</span>
                 </div>
                 <div className="tiny muted" style={{ marginTop: 6 }}>
-                  VAT is fixed on the bill when it is created. Change it on the bill before it
-                  is sent; this screen only records payment.
+                  VAT was set in Cashier before this bill was sent. This screen only records
+                  payment.
                 </div>
               </div>
             </div>

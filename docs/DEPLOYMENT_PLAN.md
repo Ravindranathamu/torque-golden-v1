@@ -1495,9 +1495,11 @@ If you use the browser webhook for the pilot, the receiver must:
 - [ ] Insurance and multi-section modules match the client contract in
       Settings → Modules; disabled modules are absent from navigation.
 - [ ] Insurance smoke test: estimate approval loads unassigned tasks, supervisor
-      assigns workers, part source is chosen, insurance bill shows *Waiting for
-      releasing order*, a short release order creates the Additional bill, and
-      the Additional bill can be collected in Cashier.
+      assigns workers, part source is chosen, the **Insurance** tab shows approvals
+      and cheque settlement only, the **Invoice** tab saves draft bills, Cashier
+      sets No VAT/Add VAT and sends the insurance bill (*Waiting for releasing
+      order*), a short release order creates the Additional bill, and the
+      Additional bill can be collected in Cashier.
 - [ ] Multi-section smoke test: two section bills settle independently, the final
       bill is blocked until both settle, then totals both section bills.
 - [ ] Insurance desk smoke test: released vehicle shows salvage and cheque

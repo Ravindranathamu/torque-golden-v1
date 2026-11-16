@@ -147,6 +147,7 @@ const statusTone: Record<string, string> = {
   Backordered: "red",
   Unpaid: "red",
   "Awaiting Release Order": "amber",
+  Draft: "slate",
   "Waiting for releasing order": "amber",
   "Partially Paid": "amber",
   Settled: "green",

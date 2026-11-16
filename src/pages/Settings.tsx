@@ -1425,10 +1425,10 @@ export function SettingsPage() {
                 </Field>
               </div>
               <Alert tone="info" title="When VAT applies">
-                VAT is chosen when a bill is created, before it is sent to the insurer or customer.
-                With VAT prints a TAX INVOICE with the 18% (or chosen) VAT row; without VAT prints a
-                standard INVOICE. Cashier collection only records payment, so the printed bill and
-                the amount collected stay aligned. Insurance estimates and bills always use the
+                The cashier chooses No VAT or Add VAT on a draft bill in Cashier → Separate bills,
+                before it is sent to the insurer or corporate customer. With VAT prints a TAX
+                INVOICE with the 18% (or chosen) VAT row; without VAT prints a standard INVOICE.
+                Once sent, the bill's VAT is fixed. Insurance estimates and bills always use the
                 standard A4 IRD layout.
               </Alert>
             </div>

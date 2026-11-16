@@ -977,6 +977,7 @@ export interface WorkshopLoanPayment {
 }
 
 export type VehicleBillStatus =
+  | "Draft"
   | "Unpaid"
   | "Awaiting Release Order"
   | "Paid"
@@ -1014,6 +1015,9 @@ export interface VehicleBill {
   policyExcess?: number;
   depreciation?: number;
   netPayable?: number;
+  /** Set when the cashier chooses VAT and sends the bill to the insurer/customer. */
+  sentAt?: string;
+  sentBy?: string;
   /** Unpaid until the insurer release order or customer payment settles it. */
   status?: VehicleBillStatus;
   paidAmount?: number;

@@ -56,7 +56,6 @@ import {
 import { acceptanceMessage, checkoutMessage } from "../lib/messages";
 import {
   buildEstimatePdf,
-  buildInsuranceBillPdf,
   buildInsuranceEstimatePdf,
   downloadInvoice,
   downloadVehicleBill,
@@ -64,7 +63,6 @@ import {
   printInvoice,
   printVehicleBill,
   shareEstimateWhatsApp,
-  shareInsuranceBillWhatsApp,
   shareInsuranceEstimateWhatsApp,
   shareInvoiceWhatsApp,
   totalsForInvoice,
@@ -188,13 +186,6 @@ export function JobDetailPage() {
     assessorName: "",
     assessorPhone: "",
   });
-  const [releaseOrderNo, setReleaseOrderNo] = useState("");
-  const [salvageReference, setSalvageReference] = useState("");
-  const [billNo, setBillNo] = useState("");
-  const [billAmount, setBillAmount] = useState("");
-  const [billVatChoice, setBillVatChoice] = useState<"on" | "off" | "">("");
-  const [customerBillNo, setCustomerBillNo] = useState("");
-  const [customerBillAmount, setCustomerBillAmount] = useState("");
   const [chequeNo, setChequeNo] = useState("");
   const [chequeAmount, setChequeAmount] = useState("");
   const [chequeBank, setChequeBank] = useState("");
@@ -321,23 +312,6 @@ export function JobDetailPage() {
   const insurancePdfData = claim
     ? { claim, insurer: insurer ?? undefined }
     : undefined;
-  const billVatEnabled = billVatChoice
-    ? billVatChoice === "on"
-    : Boolean(claim?.isVatInvoice || (claim?.vatRateApplied ?? 0) > 0);
-  const billVatRate = billVatEnabled
-    ? Math.max(
-        0,
-        claim?.vatRateApplied || state.settings.defaultVatRate || 18,
-      )
-    : 0;
-  const billEnteredAmount =
-    Number(billAmount) || claim?.insuranceBillAmount || activeTotals.total;
-  const billEnteredVat =
-    billVatRate > 0
-      ? Math.round(
-          (billEnteredAmount - billEnteredAmount / (1 + billVatRate / 100)) * 100,
-        ) / 100
-      : 0;
   const jobAdvances = state.advancePayments.filter(
     (advance) => advance.jobCardId === activeJob.id,
   );
@@ -348,10 +322,6 @@ export function JobDetailPage() {
     Boolean(currentUser?.isOwner) ||
     hasDepartment(currentUser, "Cashier") ||
     hasDepartment(currentUser, "Accounting");
-  const canManageSalvage =
-    Boolean(currentUser?.isOwner) ||
-    canSupervise ||
-    hasDepartment(currentUser, "Stores");
   const warrantyPart = state.parts.find((part) => part.id === warrantyPartId) ?? null;
   const billableParts = jobParts.filter(
     (part) =>
@@ -881,69 +851,6 @@ export function JobDetailPage() {
     push("Insurer parts approval recorded.");
   }
 
-  function saveReleaseOrder() {
-    if (!claim) return;
-    if (!releaseOrderNo.trim()) {
-      push("Enter the insurer release order number.", "error");
-      return;
-    }
-    updateInsuranceClaim(claim.id, {
-      releaseOrderNo: releaseOrderNo.trim(),
-      releaseOrderReceivedAt: new Date().toISOString(),
-    });
-    push("Release order recorded. The vehicle can be released without waiting for the cheque.");
-  }
-
-  function saveSalvageSubmission() {
-    if (!claim) return;
-    updateInsuranceClaim(claim.id, {
-      salvageStatus: "Submitted",
-      salvageSubmittedAt: new Date().toISOString(),
-      salvageReference: salvageReference.trim() || claim.salvageReference,
-    });
-    push("Salvage submission recorded against the claim.");
-  }
-
-  function saveInsuranceBill() {
-    if (!claim) return;
-    const amount = Number(billAmount) || claim.insuranceBillAmount || activeTotals.total;
-    if (!Number.isFinite(amount) || amount <= 0) {
-      push("Enter a valid insurance bill amount.", "error");
-      return;
-    }
-    updateInsuranceClaim(claim.id, {
-      insuranceBillNo: billNo.trim() || claim.insuranceBillNo || `INS-${claim.claimNo}`,
-      insuranceBillAmount: amount,
-      insuranceBillAt: new Date().toISOString(),
-      isVatInvoice: billVatRate > 0,
-      vatRateApplied: billVatRate,
-      vatAmount: billEnteredVat,
-      status: "Awaiting Payment",
-    });
-    push(
-      billVatRate > 0
-        ? `Insurance bill recorded at ${money(amount)} including VAT ${money(billEnteredVat)}.`
-        : "Insurance bill recorded without VAT and marked awaiting payment.",
-    );
-  }
-
-  function saveCustomerBill() {
-    if (!claim || !activeJob) return;
-    const amount = customerBillAmount.trim()
-      ? Number(customerBillAmount)
-      : (claim.customerBillAmount ?? activeTotals.total);
-    if (!Number.isFinite(amount) || amount < 0) {
-      push("Enter a valid customer bill amount.", "error");
-      return;
-    }
-    updateInsuranceClaim(claim.id, {
-      customerBillNo:
-        customerBillNo.trim() || claim.customerBillNo || activeJob.id,
-      customerBillAmount: amount,
-    });
-    push("Customer bill recorded for this insurance job.");
-  }
-
   function saveCheque() {
     if (!claim) return;
     const amount = Number(chequeAmount);
@@ -982,41 +889,6 @@ export function JobDetailPage() {
       return;
     }
     push("Insurance claim settled and posted to the ledger.");
-  }
-
-  function insuranceBillLines() {
-    const parts = activeTotals.parts + activeTotals.customerBroughtParts;
-    return {
-      labor: activeTotals.labor,
-      parts,
-      total: claim?.insuranceBillAmount ?? activeTotals.labor + parts,
-    };
-  }
-
-  function insuranceBillDetail() {
-    return {
-      tasks: jobTasks.filter((task) => !task.isCustomerExtra),
-      parts: billableParts.filter((part) => !part.isCustomerExtra),
-    };
-  }
-
-  function downloadInsuranceBill() {
-    if (!claim) return;
-    const { blob, filename } = buildInsuranceBillPdf(
-      activeJob,
-      claim,
-      insurer ?? undefined,
-      state.settings,
-      insuranceBillLines(),
-      insuranceBillDetail(),
-    );
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 4000);
-    push("Insurance bill PDF downloaded.");
   }
 
   function estimatePdf(estimate: JobEstimate) {
@@ -1100,27 +972,6 @@ export function JobDetailPage() {
       `Dear ${insurer?.name ?? "Assessor"},\n\nPlease find attached estimate ${estimateDisplayNumber(estimate)} for ${activeJob.vehicleNo} (${activeJob.make} ${activeJob.model}), policy ${claim.policyNo}, claim ${claim.claimNo}.\n\nThe estimated total is ${money(estimate.lines.reduce((sum, line) => sum + line.qty * line.unitPrice, 0))}. The PDF has been downloaded — attach it to this email before sending.\n\nRegards,\n${state.settings.companyName}\n${state.settings.phone}`,
     );
     window.location.href = `mailto:${insurer?.email ?? ""}?subject=${subject}&body=${body}`;
-  }
-
-  async function shareInsuranceBill() {
-    if (!claim) return;
-    setBusyAction("insurance_share");
-    try {
-      await shareInsuranceBillWhatsApp(
-        activeJob,
-        claim,
-        insurer ?? undefined,
-        state.settings,
-        insuranceBillLines(),
-        `Insurance bill for ${activeJob.vehicleNo} · claim ${claim.claimNo} · ${money(insuranceBillLines().total)}. ${state.settings.companyName}.`,
-        insuranceBillDetail(),
-      );
-      push("Insurance bill prepared for WhatsApp.", "info");
-    } catch {
-      push("Could not prepare the insurance bill.", "error");
-    } finally {
-      setBusyAction("");
-    }
   }
 
   function openWarrantyClaim(partId: string) {
@@ -2459,9 +2310,6 @@ export function JobDetailPage() {
                           <div className="kv"><span>Assessor</span><span>{claim.assessorName ?? "—"} {claim.assessorPhone ? `· ${claim.assessorPhone}` : ""}</span></div>
                         </div>
                         <div>
-                          <div className="kv"><span>Release order</span><span>{claim.releaseOrderNo ?? "Not received"}</span></div>
-                          <div className="kv"><span>Insurance bill</span><span>{claim.insuranceBillAmount ? money(claim.insuranceBillAmount) : "Not billed"}</span></div>
-                          <div className="kv"><span>Customer bill</span><span>{claim.customerBillAmount !== undefined ? money(claim.customerBillAmount) : "Not billed"}</span></div>
                           <div className="kv"><span>Cheque</span><span>{claim.chequeNo ? `${claim.chequeNo} · ${money(claim.chequeAmount ?? 0)}` : "Not received"}</span></div>
                           <div className="kv"><span>Salvage submitted</span><span>{claim.salvageSubmittedAt ? shortDate(claim.salvageSubmittedAt) : "Pending"}</span></div>
                         </div>
@@ -2698,156 +2546,8 @@ export function JobDetailPage() {
                     </div>
                   </div>
 
-                  <div className="grid cols-2">
+                  <div className="stack">
                     {canManageBilling && (
-                    <div className="card">
-                      <div className="card-head"><div><h3>Release order</h3><p>Vehicle may be released without waiting for the cheque.</p></div></div>
-                      <div className="card-body stack">
-                        <div className="row-between">
-                          <span className="small">Claim status</span>
-                          <span className="badge badge-slate">{claim.status}</span>
-                        </div>
-                        <Field label="Insurer release order no." hint="Recorded against the claim and printed on insurance documents.">
-                          <input
-                            className="input"
-                            value={releaseOrderNo}
-                            placeholder={claim.releaseOrderNo ?? "RO-2026-018"}
-                            onChange={(event) => setReleaseOrderNo(event.target.value)}
-                          />
-                        </Field>
-                        <div className="row wrap">
-                          <button className="btn btn-secondary btn-sm" onClick={saveReleaseOrder} disabled={!canManageBilling}>
-                            <ShieldCheck />
-                            Record release order
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                    )}
-
-                    <div className="card">
-                      <div className="card-head"><div><h3>Salvage submission</h3><p>Per-part salvage data lives under Parts & materials.</p></div></div>
-                      <div className="card-body stack">
-                        <div className="kv"><span>Status</span><span>{claim.salvageStatus}</span></div>
-                        <Field label="Salvage reference / handover note">
-                          <input
-                            className="input"
-                            placeholder="Salvage handed to assessor"
-                            value={salvageReference}
-                            onChange={(event) => setSalvageReference(event.target.value)}
-                          />
-                        </Field>
-                        <button className="btn btn-secondary btn-sm" onClick={saveSalvageSubmission} disabled={!canManageSalvage}>
-                          <Package />
-                          Mark salvage submitted
-                        </button>
-                        <div className="tiny muted">
-                          {jobParts.filter((part) => part.salvageStatus === "Pending").length} part line(s)
-                          still pending salvage. Update each line in the parts tab.
-                        </div>
-                      </div>
-                    </div>
-
-                    {canManageBilling && (
-                    <>
-                    <div className="card">
-                      <div className="card-head"><div><h3>Insurance bill</h3><p>Bill the insurer and share the PDF.</p></div></div>
-                      <div className="card-body stack">
-                        <div className="form-grid">
-                          <Field label="Bill number">
-                            <input
-                              className="input"
-                              value={billNo}
-                              placeholder={claim.insuranceBillNo ?? `INS-${claim.claimNo}`}
-                              onChange={(event) => setBillNo(event.target.value)}
-                            />
-                          </Field>
-                          <Field
-                            label="Bill amount (LKR)"
-                            hint="Total the insurer should pay, including VAT when selected."
-                          >
-                            <input
-                              className="input"
-                              type="number"
-                              min={0}
-                              value={billAmount}
-                              placeholder={String(claim.insuranceBillAmount ?? activeTotals.total)}
-                              onChange={(event) => setBillAmount(event.target.value)}
-                            />
-                          </Field>
-                          <Field
-                            label="VAT on this bill"
-                            full
-                            hint="Choose VAT before the bill PDF is sent to the insurer."
-                          >
-                            <select
-                              className="select"
-                              value={billVatEnabled ? "on" : "off"}
-                              onChange={(event) =>
-                                setBillVatChoice(event.target.value as "on" | "off")
-                              }
-                            >
-                              <option value="off">No VAT</option>
-                              <option value="on">Add VAT ({billVatRate || state.settings.defaultVatRate || 18}%)</option>
-                            </select>
-                          </Field>
-                        </div>
-                        <div className="row wrap">
-                          <button className="btn btn-primary btn-sm" onClick={saveInsuranceBill} disabled={!canManageBilling}>
-                            <FileText />
-                            Record bill
-                          </button>
-                          <button className="btn btn-secondary btn-sm" onClick={downloadInsuranceBill}>
-                            <Download />
-                            PDF
-                          </button>
-                          <button className="btn btn-secondary btn-sm" onClick={shareInsuranceBill} disabled={busyAction === "insurance_share"}>
-                            <MessageCircle />
-                            WhatsApp
-                          </button>
-                        </div>
-                        <div className="tiny muted">
-                          Current bill: {claim.insuranceBillAmount ? money(claim.insuranceBillAmount) : "not recorded"}.
-                          {billVatRate > 0
-                            ? ` This bill will show VAT ${money(billEnteredVat)} (${billVatRate}%) inside a ${money(billEnteredAmount)} total.`
-                            : " No VAT will be added to this bill."}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="card">
-                      <div className="card-head"><div><h3>Customer bill</h3><p>Invoice issued to the vehicle owner.</p></div></div>
-                      <div className="card-body stack">
-                        <div className="form-grid">
-                          <Field label="Bill number">
-                            <input
-                              className="input"
-                              value={customerBillNo}
-                              placeholder={claim.customerBillNo ?? activeJob.id}
-                              onChange={(event) => setCustomerBillNo(event.target.value)}
-                            />
-                          </Field>
-                          <Field label="Bill amount (LKR)">
-                            <input
-                              className="input"
-                              type="number"
-                              min={0}
-                              value={customerBillAmount}
-                              placeholder={String(claim.customerBillAmount ?? activeTotals.total)}
-                              onChange={(event) => setCustomerBillAmount(event.target.value)}
-                            />
-                          </Field>
-                        </div>
-                        <button className="btn btn-secondary btn-sm" onClick={saveCustomerBill} disabled={!canManageBilling}>
-                          <FileText />
-                          Record customer bill
-                        </button>
-                        <div className="tiny muted">
-                          Current customer bill: {claim.customerBillAmount !== undefined ? money(claim.customerBillAmount) : "not recorded"}.
-                        </div>
-                      </div>
-                    </div>
-
                     <div className="card">
                       <div className="card-head"><div><h3>Cheque & settlement</h3><p>Track the insurer cheque through to clearance.</p></div></div>
                       <div className="card-body stack">
@@ -2928,7 +2628,6 @@ export function JobDetailPage() {
                         </div>
                       </div>
                     </div>
-                    </>
                     )}
                   </div>
                 </>
@@ -3147,8 +2846,9 @@ export function JobDetailPage() {
                 <div>
                   <h3>Separate vehicle bills</h3>
                   <p>
-                    Split this vehicle into insurer, customer and additional bills. Each bill locks
-                    the tasks and parts ticked onto it so nothing is billed twice.
+                    Split this vehicle into insurer, customer and additional bills. Each bill
+                    locks the tasks and parts ticked onto it so nothing is billed twice. Bills are
+                    saved as drafts here; Cashier sets the final VAT and sends them.
                   </p>
                 </div>
                 <ReceiptText size={16} className="muted" />
@@ -4518,7 +4218,7 @@ export function JobDetailPage() {
             </button>
             <button className="btn btn-primary" onClick={saveSplitBill}>
               <ReceiptText />
-              Save bill · {money(splitNet)}
+              Save draft bill · {money(splitNet)}
             </button>
           </>
         }
@@ -4719,7 +4419,7 @@ export function JobDetailPage() {
             </Field>
             <Field
               label="VAT on this bill"
-              hint="Choose before this bill is sent to the insurer or customer."
+              hint="Cashier confirms the final VAT and sends this bill."
             >
               <select
                 className="select"
