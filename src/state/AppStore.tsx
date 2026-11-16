@@ -76,6 +76,10 @@ import {
   nextEstimateNumber,
   normalizePhone,
   partIssueQty,
+  taskCommission,
+  taskCommissionShares,
+  taskWorkerIds,
+  taskWorkers,
   uid,
 } from "../lib/utils";
 import { uploadBackupToDrive } from "../lib/driveBackup";
@@ -227,7 +231,7 @@ interface AppStoreValue {
     jobId: string,
     name: string,
     laborCost: number,
-    workerId: string,
+    workerIds: string[],
     catalogueItemId?: string,
     sectionId?: string,
     options?: { isCustomerExtra?: boolean },
@@ -238,7 +242,7 @@ interface AppStoreValue {
     data: {
       name: string;
       laborCost: number;
-      workerId: string;
+      workerIds: string[];
       sectionId?: string;
       isCustomerExtra?: boolean;
     },
@@ -677,6 +681,18 @@ function normaliseState(raw: AppState): AppState {
         sectionIds: legacy.sectionIds ?? [],
         ...legacy,
       } as JobCard;
+    }),
+    tasks: (raw.tasks ?? []).map((task) => {
+      const workerIds = (task.workerIds ?? []).filter(Boolean);
+      return {
+        ...task,
+        workerIds:
+          workerIds.length > 0
+            ? Array.from(new Set(workerIds))
+            : task.workerId
+              ? [task.workerId]
+              : [],
+      };
     }),
     parts: (raw.parts ?? []).map((part) => {
       const legacy = part as Partial<JobPart>;
@@ -1758,21 +1774,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
       jobId: string,
       name: string,
       laborCost: number,
-      workerId: string,
+      workerIds: string[],
       catalogueItemId?: string,
       sectionId?: string,
       options?: { isCustomerExtra?: boolean },
     ): ActionResult => {
       const today = localDateKey();
       const user = state.users.find((entry) => entry.id === state.currentUserId);
-      const attendance = state.attendance.find(
-        (record) => record.workerId === workerId && record.date === today,
-      );
-      if (!attendance || attendance.status !== "Present") {
+      const uniqueWorkerIds = Array.from(new Set(workerIds.filter(Boolean)));
+      if (uniqueWorkerIds.length === 0) {
+        return { ok: false, message: "Assign at least one technician to this task." };
+      }
+      const notPresent = uniqueWorkerIds.filter((workerId) => {
+        const attendance = state.attendance.find(
+          (record) => record.workerId === workerId && record.date === today,
+        );
+        return !attendance || attendance.status !== "Present";
+      });
+      if (notPresent.length > 0) {
+        const names = notPresent
+          .map(
+            (workerId) =>
+              state.workers.find((worker) => worker.id === workerId)?.fullName ??
+              "worker",
+          )
+          .join(", ");
         return {
           ok: false,
-          message:
-            "Mark this worker present in morning attendance before assigning a labour task.",
+          message: `Mark ${names} present in morning attendance before assigning a labour task.`,
         };
       }
       setState((prev) => ({
@@ -1784,7 +1813,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             jobCardId: jobId,
             name,
             laborCost,
-            workerId,
+            workerIds: uniqueWorkerIds,
+            workerId: uniqueWorkerIds[0],
             sectionId,
             catalogueItemId,
             createdAt: new Date().toISOString(),
@@ -1796,7 +1826,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }));
       return { ok: true };
     },
-    [state.attendance, state.users, state.currentUserId],
+    [state.attendance, state.users, state.currentUserId, state.workers],
   );
 
   const removeTask = useCallback((taskId: string) => {
@@ -1809,7 +1839,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       data: {
         name: string;
         laborCost: number;
-        workerId: string;
+        workerIds: string[];
         sectionId?: string;
         isCustomerExtra?: boolean;
       },
@@ -1821,8 +1851,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!Number.isFinite(data.laborCost) || data.laborCost <= 0) {
         return { ok: false, message: "Enter the labour charge." };
       }
-      if (!data.workerId) {
-        return { ok: false, message: "Choose the technician who performed the task." };
+      const uniqueWorkerIds = Array.from(new Set(data.workerIds.filter(Boolean)));
+      if (uniqueWorkerIds.length === 0) {
+        return { ok: false, message: "Assign at least one technician to this task." };
       }
       setState((prev) => ({
         ...prev,
@@ -1832,7 +1863,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 ...entry,
                 name,
                 laborCost: data.laborCost,
-                workerId: data.workerId,
+                workerIds: uniqueWorkerIds,
+                workerId: uniqueWorkerIds[0],
                 sectionId: data.sectionId,
                 isCustomerExtra: data.isCustomerExtra || undefined,
               }
@@ -2810,7 +2842,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         laborCost:
           Math.round(line.qty * (line.approvedUnitPrice ?? line.unitPrice) * 100) / 100,
         quotedLaborCost: Math.round(line.qty * line.unitPrice * 100) / 100,
-        workerId: "",
+        workerIds: [],
         sectionId: estimate.sectionId ?? job.sectionIds?.[0],
         createdAt: now,
         addedBy: user?.name,
@@ -3025,7 +3057,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               jobCardId: job.id,
               name: line.description,
               laborCost: Math.round(line.qty * line.unitPrice * 100) / 100,
-              workerId: "",
+              workerIds: [],
               sectionId: estimate.sectionId ?? job.sectionIds?.[0],
               createdAt: now,
               addedBy: user?.name,
@@ -4075,11 +4107,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const job = state.jobCards.find((entry) => entry.id === jobId);
       if (!job) return { ok: false, message: "Job card not found." };
       const jobTasks = state.tasks.filter((task) => task.jobCardId === jobId);
-      const unassigned = jobTasks.filter((task) => !task.workerId);
+      const unassigned = jobTasks.filter((task) => taskWorkerIds(task).length === 0);
       if (unassigned.length > 0) {
         return {
           ok: false,
-          message: `${unassigned.length} task(s) have no technician. Assign a worker to every task before completing the repair — ${unassigned
+          message: `${unassigned.length} task(s) have no technician. Assign at least one worker to every task before completing the repair — ${unassigned
             .map((task) => task.name)
             .slice(0, 3)
             .join(", ")}${unassigned.length > 3 ? "…" : ""}.`,
@@ -4248,9 +4280,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       };
       activeTasks.forEach((task) => {
         const row = sectionRow(task.sectionId ?? sectionFallback);
-        const worker = state.workers.find((entry) => entry.id === task.workerId);
         row.laborRevenue += task.laborCost;
-        row.commission += (task.laborCost * (worker?.commissionRate ?? 0)) / 100;
+        row.commission += taskCommission(task, state.workers);
       });
       state.parts
         .filter(
@@ -4277,12 +4308,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 jobCardId: jobId,
                 name: "Workshop labour",
                 laborCost: totals.labor,
-                workerId: "",
+                workerIds: [],
                 createdAt: now,
               },
             ];
       distributed.forEach((task, index) => {
-        const worker = state.workers.find((w) => w.id === task.workerId);
+        const commissionShares = taskCommissionShares(task, state.workers);
         ledgerEntries.push({
           id: uid("led"),
           jobCardId: jobId,
@@ -4290,10 +4321,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
           laborRevenue: task.laborCost,
           partsRevenue: index === 0 ? totals.parts : 0,
           partsCost: index === 0 ? totals.partsCost : 0,
-          commission: (task.laborCost * (worker?.commissionRate ?? 0)) / 100,
+          commission: taskCommission(task, state.workers),
           discount: index === 0 ? totals.discount : 0,
           paymentMethod: input.paymentMethod,
-          workerId: task.workerId || undefined,
+          workerId: taskWorkerIds(task)[0],
+          workerCommissions:
+            commissionShares.length > 0
+              ? commissionShares.map((share) => ({
+                  workerId: share.workerId,
+                  commission: share.commission,
+                }))
+              : undefined,
           driverCommission: index === 0 ? driverCommission : 0,
           insuranceClaimId: job.insuranceClaimId,
           sectionBreakdown: index === 0 ? sectionBreakdown : undefined,
@@ -4492,10 +4530,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
               repairType: job.repairType,
               tasks: jobTasks.map((task) => ({
                 name: task.name,
-                workerId: task.workerId,
-                workerName:
-                  prev.workers.find((worker) => worker.id === task.workerId)?.fullName ??
-                  "Unassigned",
+                workerId: taskWorkerIds(task)[0] ?? "",
+                workerName: taskWorkers(task, prev.workers)
+                  .map((worker) => worker.fullName)
+                  .join(", ") || "Unassigned",
                 laborCost: task.laborCost,
               })),
               parts: jobParts.map((partEntry) => ({
@@ -4989,10 +5027,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
       );
       if (net <= 0) return { ok: false, message: "This bill has no payable amount." };
 
-      const commission = billTasks.reduce((sum, task) => {
-        const worker = state.workers.find((entry) => entry.id === task.workerId);
-        return sum + (task.laborCost * (worker?.commissionRate ?? 0)) / 100;
-      }, 0);
+      const commissionShareRows = billTasks.flatMap((task) =>
+        taskCommissionShares(task, state.workers),
+      );
+      const commission = Math.round(
+        commissionShareRows.reduce((sum, share) => sum + share.commission, 0) * 100,
+      ) / 100;
+      const commissionByWorker = new Map<string, number>();
+      commissionShareRows.forEach((share) => {
+        commissionByWorker.set(
+          share.workerId,
+          Math.round(((commissionByWorker.get(share.workerId) ?? 0) + share.commission) * 100) /
+            100,
+        );
+      });
+      const workerCommissions = Array.from(commissionByWorker.entries())
+        .filter(([, amount]) => amount > 0)
+        .map(([workerId, amount]) => ({ workerId, commission: amount }));
       const discount = appliedDiscount;
       const driverCommission = driverCommissionFor(job, {
         labor: laborRevenue,
@@ -5071,6 +5122,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           discount,
           paymentMethod: "Insurance" as const,
           settlementAmount: paidAmount,
+          workerId: workerCommissions[0]?.workerId,
+          workerCommissions:
+            workerCommissions.length > 0 ? workerCommissions : undefined,
           driverCommission,
           insuranceClaimId: job.insuranceClaimId,
           description: `${job.vehicleNo} — ${bill.kind} bill ${bill.billNo}`,
@@ -5210,6 +5264,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           ? "Insurance Settlement"
           : input.method) as "Cash" | "Card" | "Bank Transfer" | "Cheque" | "Insurance Settlement",
         settlementAmount: net,
+        workerId: isShortfall ? undefined : workerCommissions[0]?.workerId,
+        workerCommissions:
+          !isShortfall && workerCommissions.length > 0 ? workerCommissions : undefined,
         driverCommission: isShortfall ? 0 : driverCommission,
         insuranceClaimId: job.insuranceClaimId,
         description: isShortfall

@@ -21,6 +21,7 @@ import {
   normalizePhone,
   partIssueQty,
   shortDate,
+  taskWorkerNames,
   waLink,
   type JobTotals,
 } from "./utils";
@@ -178,12 +179,18 @@ export function buildLegacyInvoicePdf(
   doc.setFont("helvetica", "normal");
   tasks.forEach((task) => {
     ensureSpace(10);
-    const worker = workers.find((w) => w.id === task.workerId);
+    const workerNames = taskWorkerNames(task, workers, "");
     doc.setFontSize(9);
     doc.text(task.name, margin + 2, y, { maxWidth: 110 });
     doc.setFontSize(8);
     doc.setTextColor(100, 116, 139);
-    if (worker) doc.text(`Technician: ${worker.fullName}`, margin + 2, y + 4);
+    if (workerNames) {
+      doc.text(
+        `${workerNames.includes(", ") ? "Technicians" : "Technician"}: ${workerNames}`,
+        margin + 2,
+        y + 4,
+      );
+    }
     doc.setTextColor(30, 41, 59);
     doc.setFontSize(9);
     doc.text(money(task.laborCost, 2), right - 3, y, { align: "right" });
@@ -1216,8 +1223,11 @@ export function printLegacyInvoice(
     .join("");
   const taskRows = tasks
     .map((task) => {
-      const worker = workers.find((w) => w.id === task.workerId);
-      return `<tr><td>${esc(task.name)}<br><small>${esc(worker?.fullName ?? "")}</small></td><td class="right">${money(task.laborCost, 2)}</td></tr>`;
+      const workerNames = taskWorkerNames(task, workers, "");
+      const workerLabel = workerNames
+        ? `${workerNames.includes(", ") ? "Technicians" : "Technician"}: ${workerNames}`
+        : "";
+      return `<tr><td>${esc(task.name)}<br><small>${esc(workerLabel)}</small></td><td class="right">${money(task.laborCost, 2)}</td></tr>`;
     })
     .join("");
   const html = `<!doctype html>

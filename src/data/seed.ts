@@ -41,7 +41,7 @@ import type {
   WorkshopUser,
   WorkerProfile,
 } from "../types";
-import { daysAgoISO, isoDaysFrom, jobTotals, uid } from "../lib/utils";
+import { daysAgoISO, isoDaysFrom, jobTotals, taskWorkerIds, taskWorkers, uid } from "../lib/utils";
 import { localDateKey, monthBounds } from "../lib/payroll";
 import { allFeatureFlags } from "../lib/features";
 
@@ -983,7 +983,7 @@ function makeJobCards(): JobCard[] {
 }
 
 function makeTasks(): JobTask[] {
-  return [
+  const tasks: JobTask[] = [
     {
       id: "tsk_1",
       jobCardId: "JC-1001",
@@ -1110,6 +1110,10 @@ function makeTasks(): JobTask[] {
       createdAt: daysAgoISO(2, 15),
     },
   ];
+  return tasks.map((task) => ({
+    ...task,
+    workerIds: taskWorkerIds(task),
+  }));
 }
 
 function part(
@@ -2600,9 +2604,11 @@ function makeServiceRecords(
         repairType: job.repairType,
         tasks: jobTasks.map((task) => ({
           name: task.name,
-          workerId: task.workerId,
+          workerId: taskWorkerIds(task)[0] ?? "",
           workerName:
-            workers.find((worker) => worker.id === task.workerId)?.fullName ?? "Unassigned",
+            taskWorkers(task, workers)
+              .map((worker) => worker.fullName)
+              .join(", ") || "Unassigned",
           laborCost: task.laborCost,
         })),
         parts: jobParts.map((part) => ({

@@ -1,4 +1,5 @@
 import type { AppState, WorkerProfile } from "../types";
+import { ledgerCommissionForWorker } from "./utils";
 
 export function localDateKey(value: string | Date = new Date()): string {
   if (typeof value === "string") {
@@ -106,11 +107,13 @@ export function monthlyPayrollRow(
     ? state.ledger
         .filter(
           (entry) =>
-            entry.workerId === worker.id &&
             localDateKey(entry.date) >= start &&
             localDateKey(entry.date) <= end,
         )
-        .reduce((sum, entry) => sum + entry.commission, 0)
+        .reduce(
+          (sum, entry) => sum + ledgerCommissionForWorker(entry, worker.id),
+          0,
+        )
     : 0;
   const gross = basic + commission;
   const loanDeduction = state.staffLoans
@@ -179,11 +182,13 @@ export function dailyWageDue(
     includeCommission && worker.commissionEnabled
       ? state.ledger
           .filter((entry) => {
-            if (entry.workerId !== worker.id) return false;
             const key = localDateKey(entry.date);
             return key > from && key <= today;
           })
-          .reduce((sum, entry) => sum + entry.commission, 0)
+          .reduce(
+            (sum, entry) => sum + ledgerCommissionForWorker(entry, worker.id),
+            0,
+          )
       : 0;
   return {
     days,

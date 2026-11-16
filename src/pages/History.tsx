@@ -17,7 +17,7 @@ import {
   Wrench,
 } from "lucide-react";
 import { useApp } from "../state/AppStore";
-import { daysBetween, driverCommissionFor, jobTotals, money, shortDate, waLink } from "../lib/utils";
+import { daysBetween, driverCommissionFor, jobTotals, money, shortDate, taskWorkerNames, waLink } from "../lib/utils";
 import { EmptyState, PageHeader, StatCard, StatusBadge } from "../components/ui";
 import type { JobCard } from "../types";
 
@@ -368,14 +368,12 @@ export function HistoryPage() {
                               <div className="tiny muted">No labour tasks recorded.</div>
                             ) : (
                               jobTasks.map((task) => {
-                                const worker = state.workers.find(
-                                  (entry) => entry.id === task.workerId,
-                                );
+                                const workerNames = taskWorkerNames(task, state.workers);
                                 return (
                                   <div className="history-line" key={task.id}>
                                     <span>
                                       {task.name}
-                                      <small> · {worker?.fullName ?? "Unassigned"}</small>
+                                      <small> · {workerNames}</small>
                                     </span>
                                     <span>{money(task.laborCost)}</span>
                                   </div>

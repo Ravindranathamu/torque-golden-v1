@@ -1502,6 +1502,10 @@ If you use the browser webhook for the pilot, the receiver must:
       Additional bill can be collected in Cashier.
 - [ ] Multi-section smoke test: two section bills settle independently, the final
       bill is blocked until both settle, then totals both section bills.
+- [ ] Multi-technician smoke test: assign two or three present workers to one
+      task, confirm the preview splits labour equally at each worker's rate, then
+      settle a bill and verify each worker's share in payroll and analytics and
+      that the invoice lists every technician.
 - [ ] Insurance desk smoke test: released vehicle shows salvage and cheque
       queues; supervisor/storekeeper and cashier/accounting see only their queues.
 - [ ] Demo mode still on until client sign-off.

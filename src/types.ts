@@ -200,7 +200,10 @@ export interface JobTask {
   jobCardId: string;
   name: string;
   laborCost: number;
-  workerId: string;
+  /** One or more technicians on this task. Labour and commission split equally. */
+  workerIds?: string[];
+  /** @deprecated Legacy single-technician field kept for older saved data. */
+  workerId?: string;
   sectionId?: string;
   catalogueItemId?: string;
   createdAt: string;
@@ -650,6 +653,8 @@ export interface LedgerEntry {
   paymentMethod: LedgerPaymentMethod;
   settlementAmount?: number;
   workerId?: string;
+  /** Per-worker commission when several technicians share one task. */
+  workerCommissions?: { workerId: string; commission: number }[];
   driverCommission?: number;
   insuranceClaimId?: string;
   sectionBreakdown?: LedgerSectionBreakdown[];

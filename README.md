@@ -14,11 +14,13 @@ installations start on a **30-day trial** and are activated with an offline
 RAVsoft licence key.
 
 Every worker can hold a fixed basic salary plus labour commission, with optional
-EPF/ETF, salary advances and staff loans. Insurance jobs support estimates,
-supplementary estimates, parts approval, insurer and customer bills, release
-orders, per-part salvage and cheque tracking. A standard Sri Lankan labour price
-catalogue, supplier invoice numbers, warranty returns, morning attendance, daily
-wage payouts and optional driver commissions are built in.
+EPF/ETF, salary advances and staff loans. Two or three technicians can share one
+task, splitting its labour and commission equally at their own rates. Insurance
+jobs support estimates, supplementary estimates, parts approval, insurer and
+customer bills, release orders, per-part salvage and cheque tracking. A standard
+Sri Lankan labour price catalogue, supplier invoice numbers, warranty returns,
+morning attendance, daily wage payouts and optional driver commissions are built
+in.
 
 **Developed and maintained by RAVsoft.**  
 Email: [ravindranath@hotmail.co.uk](mailto:ravindranath@hotmail.co.uk) · Phone:
@@ -110,9 +112,11 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   Sri Lankan mobile number and mileage; returning-vehicle autofill.
 - PRO acceptance as **Repair** or **Estimate**, with safety/damage notes and
   multiple damage photos, organised by job number (Google Drive–ready).
-- Job cards with labour tasks, worker assignment and commission. Tasks are free
-  text with autosuggest from past jobs and their last-used prices — no static
-  labour catalogue to maintain.
+- Job cards with labour tasks, multi-technician assignment and commission. A task
+  can be shared by two or three workers; its labour and commission are split
+  equally, and each worker earns their own commission rate on their share. Tasks
+  are free text with autosuggest from past jobs and their last-used prices — no
+  static labour catalogue to maintain.
 - Multi-department staff (for example Supervisor + Stores) with one login.
 - Model-specific parts matching, multi-quantity requests, strict stock
   enforcement, partial issuing, backorders, exchanges and returns.
@@ -204,7 +208,9 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
 - Estimate-only jobs hide **Add task**, **Request parts** and **Complete repair**
   until approval; approval copies the estimate lines into tasks/parts and moves
   the job to **In Progress**. Approved tasks load **unassigned** — the supervisor
-  must assign a technician to every task before the repair can be completed.
+  must assign at least one technician to every task before the repair can be
+  completed. Several technicians can share one task; its labour and commission
+  are split equally between them.
 - Estimate parts load without a source. Before stores sees a request, the
   supervisor marks each part **Store supplied** or **Customer brought**.
   Customer-brought parts are valued on the insurance bill, skip stock deduction,
@@ -260,7 +266,8 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
 
 ### Payroll & HR
 - Fixed basic salary plus labour commission per worker; monthly or daily pay
-  basis.
+  basis. When several technicians share a task, its commission is divided
+  equally and each technician earns their own rate on their share.
 - Optional EPF and ETF contribution toggles per worker, with configurable
   employee/employer percentages and company working days.
 - Salary advances and staff loans that automatically deduct from net salary.

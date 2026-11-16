@@ -1,5 +1,5 @@
 import type { AppState, ExpenseCategory, LedgerEntry } from "../types";
-import { isWithinRange } from "./utils";
+import { isWithinRange, ledgerCommissionForWorker } from "./utils";
 import { monthBounds, monthlyPayrollRow } from "./payroll";
 
 function payrollForMonth(state: AppState, date: Date = new Date()): number {
@@ -307,11 +307,11 @@ export function commissionsByWorker(
       workerId: worker.id,
       name: worker.fullName,
       commission: state.ledger
-        .filter(
-          (entry) =>
-            entry.workerId === worker.id && isWithinRange(entry.date, period),
-        )
-        .reduce((sum, entry) => sum + entry.commission, 0),
+        .filter((entry) => isWithinRange(entry.date, period))
+        .reduce(
+          (sum, entry) => sum + ledgerCommissionForWorker(entry, worker.id),
+          0,
+        ),
       baseSalary:
         worker.payType === "Daily"
           ? worker.dailyRate * state.settings.workingDays.length * 4.33 * (period === "year" ? 12 : 1)

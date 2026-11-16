@@ -471,7 +471,10 @@ Operational notes:
   settled; it totals all section bills and applies the same insurance
   release-order/additional-bill rules to the combined total.
 - Estimate approval never auto-assigns a technician. A job cannot be marked
-  repair-completed while any labour task has no worker.
+  repair-completed while any labour task has no worker. Assign one, two or three
+  technicians to a task; the task labour and commission are divided equally, and
+  each technician earns their own commission rate on their share. Every newly
+  assigned worker must be marked present in the morning attendance.
 - Estimate parts load with no source. The supervisor must choose **Store
   supplied** or **Customer brought** before the request reaches stores. Store
   supply deducts stock normally; customer-brought marks the part issued without a
@@ -949,7 +952,7 @@ npx vercel --prod
 | Daily wage not accumulating | Attendance not marked | Mark Present on each worked day before payout |
 | Advance not reducing the bill | Advance recorded against another job | Check the job number on the advance receipt |
 | Insurance job cannot be released | Bill is still a draft or release order not recorded | Set VAT and send the bill in Cashier → Separate bills, then release it against the insurer release note in Cashier |
-| Repair completion blocked | Estimate-approved task has no technician | Assign a worker to every labour task in Job → Labour & tasks |
+| Repair completion blocked | Estimate-approved task has no technician | Assign at least one worker to every labour task in Job → Labour & tasks (two or three workers can share a task; commission splits equally) |
 | Stores does not see an estimate part | Supervisor has not chosen the part source | In Job → Parts & materials choose Store supplied or Customer brought |
 | Final bill button is missing | Bills are not tagged to two or more sections | Tag each section bill with its repair section; settle every section bill first |
 | Insurance desk shows nothing | Vehicle not released, or salvage/claim already closed | Release the vehicle, then check salvage per part and the claim cheque status |

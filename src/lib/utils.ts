@@ -5,6 +5,7 @@ import type {
   JobEstimate,
   JobPart,
   JobTask,
+  LedgerEntry,
   WorkerProfile,
 } from "../types";
 
@@ -32,6 +33,84 @@ export function formatQty(value: number, unit?: string): string {
 export function partIssueQty(part: Pick<JobPart, "qtyIssued" | "qtyRequested">): number {
   if (part.qtyIssued > 0) return part.qtyIssued;
   return Math.max(0, part.qtyRequested);
+}
+
+type TaskWorkerInput = Pick<JobTask, "laborCost"> & {
+  workerIds?: string[];
+  workerId?: string;
+};
+
+/** All technicians on a task, including the legacy single-worker field. */
+export function taskWorkerIds(task: Pick<JobTask, "workerIds" | "workerId">): string[] {
+  const ids = (task.workerIds ?? []).filter(Boolean);
+  if (ids.length > 0) return Array.from(new Set(ids));
+  return task.workerId ? [task.workerId] : [];
+}
+
+export function taskWorkers(
+  task: Pick<JobTask, "workerIds" | "workerId">,
+  workers: WorkerProfile[],
+): WorkerProfile[] {
+  return taskWorkerIds(task)
+    .map((workerId) => workers.find((worker) => worker.id === workerId))
+    .filter((worker): worker is WorkerProfile => Boolean(worker));
+}
+
+export function taskWorkerNames(
+  task: Pick<JobTask, "workerIds" | "workerId">,
+  workers: WorkerProfile[],
+  fallback = "Unassigned",
+): string {
+  const names = taskWorkers(task, workers).map((worker) => worker.fullName);
+  return names.length > 0 ? names.join(", ") : fallback;
+}
+
+export interface TaskCommissionShare {
+  workerId: string;
+  workerName: string;
+  commissionRate: number;
+  laborShare: number;
+  commission: number;
+}
+
+/**
+ * A task's labour is split equally between its technicians, and each
+ * technician earns their own commission rate on their share.
+ */
+export function taskCommissionShares(
+  task: TaskWorkerInput,
+  workers: WorkerProfile[],
+): TaskCommissionShare[] {
+  const workerIds = taskWorkerIds(task);
+  if (workerIds.length === 0 || task.laborCost <= 0) return [];
+  const laborShare = task.laborCost / workerIds.length;
+  return workerIds.map((workerId) => {
+    const worker = workers.find((entry) => entry.id === workerId);
+    const commissionRate = Math.max(0, worker?.commissionRate ?? 0);
+    return {
+      workerId,
+      workerName: worker?.fullName ?? "Unassigned",
+      commissionRate,
+      laborShare: Math.round(laborShare * 100) / 100,
+      commission: Math.round(laborShare * commissionRate) / 100,
+    };
+  });
+}
+
+export function taskCommission(task: TaskWorkerInput, workers: WorkerProfile[]): number {
+  const total = taskCommissionShares(task, workers).reduce(
+    (sum, share) => sum + share.commission,
+    0,
+  );
+  return Math.round(total * 100) / 100;
+}
+
+/** Reads split commission when present, else the legacy single-worker entry. */
+export function ledgerCommissionForWorker(entry: LedgerEntry, workerId: string): number {
+  const split = entry.workerCommissions?.find((row) => row.workerId === workerId);
+  if (split) return split.commission;
+  if (entry.workerCommissions && entry.workerCommissions.length > 0) return 0;
+  return entry.workerId === workerId ? entry.commission : 0;
 }
 
 export function shortDate(iso?: string): string {
@@ -206,10 +285,10 @@ export function jobTotals(
         : job.discount;
   }
   discount = Math.min(discount, subtotal);
-  const commission = activeTasks.reduce((sum, t) => {
-    const worker = workers.find((w) => w.id === t.workerId);
-    return sum + (t.laborCost * (worker?.commissionRate ?? 0)) / 100;
-  }, 0);
+  const commission = activeTasks.reduce(
+    (sum, task) => sum + taskCommission(task, workers),
+    0,
+  );
   const vat = Math.max(0, job.vatAmount ?? 0);
   return {
     labor,

@@ -46,6 +46,11 @@ import {
   jobTotals,
   money,
   partIssueQty,
+  taskCommission,
+  taskCommissionShares,
+  taskWorkerIds,
+  taskWorkerNames,
+  taskWorkers,
   dateTime,
   timeAgo,
   waLink,
@@ -129,7 +134,7 @@ export function JobDetailPage() {
   const [taskEditingId, setTaskEditingId] = useState<string | null>(null);
   const [taskName, setTaskName] = useState("");
   const [taskLabor, setTaskLabor] = useState("");
-  const [taskWorker, setTaskWorker] = useState(state.workers.find((worker) => worker.status === "Active")?.id ?? "");
+  const [taskWorkerSelection, setTaskWorkerSelection] = useState<string[]>([]);
   const [taskSectionId, setTaskSectionId] = useState("");
   const [partOpen, setPartOpen] = useState(false);
   const [partSearch, setPartSearch] = useState("");
@@ -237,7 +242,17 @@ export function JobDetailPage() {
       .filter((record) => record.date === todayKey && record.status === "Present")
       .map((record) => record.workerId),
   );
-  const selectedWorker = workers.find((worker) => worker.id === taskWorker);
+  const selectedTaskWorkers = state.workers.filter((worker) =>
+    taskWorkerSelection.includes(worker.id),
+  );
+  const taskCommissionPreview = taskCommissionShares(
+    { laborCost: Number(taskLabor) || 0, workerIds: taskWorkerSelection },
+    state.workers,
+  );
+  const taskCommissionPreviewTotal = taskCommissionPreview.reduce(
+    (sum, share) => sum + share.commission,
+    0,
+  );
 
   const fitmentItems = useMemo(() => {
     if (!job) return [];
@@ -399,6 +414,20 @@ export function JobDetailPage() {
   const taskAssignableWorkers = taskSectionWorkers.filter((worker) =>
     presentWorkerIds.has(worker.id),
   );
+  /**
+   * Editing keeps already-assigned workers visible even if they are no longer
+   * present or no longer belong to the selected section. New assignments are
+   * still limited to present workers in the section.
+   */
+  const taskSelectableWorkers = state.workers.filter((worker) => {
+    if (taskWorkerSelection.includes(worker.id)) return true;
+    if (worker.status !== "Active") return false;
+    return (
+      !taskSectionId ||
+      (worker.sectionIds ?? []).length === 0 ||
+      (worker.sectionIds ?? []).includes(taskSectionId)
+    );
+  });
 
   function openTaskModal(task?: JobTask) {
     setTaskEditingId(task?.id ?? null);
@@ -407,7 +436,7 @@ export function JobDetailPage() {
     setTaskExtra(Boolean(task?.isCustomerExtra));
     if (task) {
       setTaskSectionId(task.sectionId ?? "");
-      setTaskWorker(task.workerId);
+      setTaskWorkerSelection(taskWorkerIds(task));
       setTaskOpen(true);
       return;
     }
@@ -419,10 +448,17 @@ export function JobDetailPage() {
         (worker.sectionIds ?? []).length === 0 ||
         (worker.sectionIds ?? []).includes(defaultSection),
     );
-    setTaskWorker(
-      eligible.find((worker) => presentWorkerIds.has(worker.id))?.id ?? "",
-    );
+    const defaultWorker = eligible.find((worker) => presentWorkerIds.has(worker.id));
+    setTaskWorkerSelection(defaultWorker ? [defaultWorker.id] : []);
     setTaskOpen(true);
+  }
+
+  function toggleTaskWorker(workerId: string) {
+    setTaskWorkerSelection((prev) =>
+      prev.includes(workerId)
+        ? prev.filter((id) => id !== workerId)
+        : [...prev, workerId],
+    );
   }
 
   function applyTaskSuggestion(suggestion: { name: string; price: number }) {
@@ -440,15 +476,16 @@ export function JobDetailPage() {
       push("Enter the labour charge.", "error");
       return;
     }
-    if (!taskWorker) {
-      push("Choose the technician who performed the task.", "error");
+    const workerIds = Array.from(new Set(taskWorkerSelection.filter(Boolean)));
+    if (workerIds.length === 0) {
+      push("Choose at least one technician who performed the task.", "error");
       return;
     }
     const result = taskEditingId
       ? updateTask(taskEditingId, {
           name: taskName.trim(),
           laborCost: labor,
-          workerId: taskWorker,
+          workerIds,
           sectionId: taskSectionId || undefined,
           isCustomerExtra: taskExtra || undefined,
         })
@@ -456,7 +493,7 @@ export function JobDetailPage() {
           activeJob.id,
           taskName.trim(),
           labor,
-          taskWorker,
+          workerIds,
           undefined,
           taskSectionId || undefined,
           { isCustomerExtra: taskExtra || undefined },
@@ -1568,7 +1605,7 @@ export function JobDetailPage() {
               <div className="card-head">
                 <div>
                   <h3>Labour & technician tasks</h3>
-                  <p>Assign work to workers — commission is computed from their rate.</p>
+                  <p>Assign one or more workers — commission is split equally between them.</p>
                 </div>
                 {canEdit && (
                   <button className="btn btn-primary btn-sm" onClick={() => openTaskModal()}>
@@ -1582,7 +1619,7 @@ export function JobDetailPage() {
                   <EmptyState
                     icon={<Wrench size={22} />}
                     title="No labour tasks yet"
-                    message="Assign each repair task to the technician who does the work. This creates the basis for commission and warranty traceability."
+                    message="Assign each repair task to one or more technicians. Their labour share and commission are split equally for payroll and warranty traceability."
                     action={
                       canEdit ? (
                         <button className="btn btn-primary" onClick={() => openTaskModal()}>
@@ -1594,7 +1631,8 @@ export function JobDetailPage() {
                   />
                 ) : (
                   jobTasks.map((task) => {
-                    const worker = state.workers.find((entry) => entry.id === task.workerId);
+                    const assignedWorkers = taskWorkers(task, state.workers);
+                    const taskCommissionValue = taskCommission(task, state.workers);
                     return (
                       <div className="list-row" key={task.id}>
                         <span className="part-icon" style={{ background: "var(--brand-soft)", color: "var(--brand)" }}>
@@ -1603,8 +1641,14 @@ export function JobDetailPage() {
                         <div className="list-main">
                           <strong>{task.name}</strong>
                           <span>
-                            {worker?.fullName ?? "Unassigned"} · commission{" "}
-                            {worker ? `${worker.commissionRate}%` : "0%"} · added {timeAgo(task.createdAt)}
+                            {assignedWorkers.length > 0
+                              ? assignedWorkers.map((worker) => worker.fullName).join(" + ")
+                              : "Unassigned"}{" "}
+                            · commission {money(taskCommissionValue)}
+                            {assignedWorkers.length > 1
+                              ? ` (split equally across ${assignedWorkers.length})`
+                              : ""}{" "}
+                            · added {timeAgo(task.createdAt)}
                           </span>
                           <div className="row wrap" style={{ gap: 4, marginTop: 4 }}>
                             {task.isCustomerExtra && (
@@ -1626,7 +1670,7 @@ export function JobDetailPage() {
                         <div style={{ textAlign: "right" }}>
                           <div className="strong small">{money(task.laborCost)}</div>
                           <div className="tiny muted">
-                            {money((task.laborCost * (worker?.commissionRate ?? 0)) / 100)} commission
+                            {money(taskCommissionValue)} commission
                           </div>
                         </div>
                         {canEdit && (
@@ -2680,7 +2724,7 @@ export function JobDetailPage() {
                               <td>
                                 {task.name}
                                 <div className="cell-sub">
-                                  {state.workers.find((worker) => worker.id === task.workerId)?.fullName}
+                                  {taskWorkerNames(task, state.workers)}
                                 </div>
                               </td>
                               <td className="num">1</td>
@@ -3252,23 +3296,18 @@ export function JobDetailPage() {
                   onChange={(event) => {
                     const nextSection = event.target.value;
                     setTaskSectionId(nextSection);
-                    const stillEligible = workers.some(
+                    const eligible = workers.filter(
                       (worker) =>
-                        worker.id === taskWorker &&
                         (!nextSection ||
                           (worker.sectionIds ?? []).length === 0 ||
-                          (worker.sectionIds ?? []).includes(nextSection)),
+                          (worker.sectionIds ?? []).includes(nextSection)) &&
+                        presentWorkerIds.has(worker.id),
                     );
-                    if (!stillEligible) {
-                      const eligible = workers.filter(
-                        (worker) =>
-                          (!nextSection ||
-                            (worker.sectionIds ?? []).length === 0 ||
-                            (worker.sectionIds ?? []).includes(nextSection)) &&
-                          presentWorkerIds.has(worker.id),
-                      );
-                      setTaskWorker(eligible[0]?.id ?? "");
-                    }
+                    const eligibleIds = new Set(eligible.map((worker) => worker.id));
+                    const kept = taskWorkerSelection.filter((id) => eligibleIds.has(id));
+                    setTaskWorkerSelection(
+                      kept.length > 0 ? kept : eligible[0] ? [eligible[0].id] : [],
+                    );
                   }}
                 >
                   <option value="">Unassigned</option>
@@ -3280,19 +3319,47 @@ export function JobDetailPage() {
                 </select>
               </Field>
             )}
-            <Field label="Technician" required>
-              <select
-                className="select"
-                value={taskWorker}
-                onChange={(event) => setTaskWorker(event.target.value)}
-              >
-                <option value="">Select technician</option>
-                {taskAssignableWorkers.map((worker) => (
-                  <option key={worker.id} value={worker.id}>
-                    {worker.fullName} · {worker.commissionRate}% commission
-                  </option>
-                ))}
-              </select>
+            <Field
+              label="Technicians"
+              required
+              full
+              hint="Select one or more present workers. Labour and commission are split equally."
+            >
+              <div className="stack" style={{ gap: 8 }}>
+                {taskSelectableWorkers.map((worker) => {
+                  const checked = taskWorkerSelection.includes(worker.id);
+                  const isPresent = presentWorkerIds.has(worker.id);
+                  return (
+                    <label className="toggle-row" key={worker.id}>
+                      <span>
+                        <strong>{worker.fullName}</strong>
+                        <div className="tiny muted">
+                          {worker.commissionRate}% commission
+                          {!isPresent ? " · not marked present today" : ""}
+                          {worker.status !== "Active" ? " · inactive" : ""}
+                        </div>
+                      </span>
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={!isPresent && !checked}
+                        onChange={() => toggleTaskWorker(worker.id)}
+                      />
+                    </label>
+                  );
+                })}
+                {taskSelectableWorkers.length === 0 && (
+                  <div className="tiny muted">
+                    No workers are available for this section.
+                  </div>
+                )}
+                {taskSelectableWorkers.length > 0 &&
+                  taskAssignableWorkers.length === 0 && (
+                    <div className="tiny muted">
+                      None of these workers are marked present today.
+                    </div>
+                  )}
+              </div>
             </Field>
           </div>
           {claim && (
@@ -3325,13 +3392,22 @@ export function JobDetailPage() {
           <div className="alert alert-info">
             <Percent />
             <div>
-              Commission on this task:{" "}
-              <strong>
-                {money(
-                  (Number(taskLabor || 0) * (selectedWorker?.commissionRate ?? 0)) / 100,
-                )}
-              </strong>{" "}
-              at {selectedWorker?.commissionRate ?? 0}%.
+              <div>
+                Commission on this task: <strong>{money(taskCommissionPreviewTotal)}</strong>
+                {selectedTaskWorkers.length > 1
+                  ? ` split equally across ${selectedTaskWorkers.length} technicians.`
+                  : "."}
+              </div>
+              {taskCommissionPreview.length > 0 && (
+                <div className="tiny" style={{ marginTop: 4 }}>
+                  {taskCommissionPreview
+                    .map(
+                      (share) =>
+                        `${share.workerName}: ${money(share.laborShare)} × ${share.commissionRate}% = ${money(share.commission)}`,
+                    )
+                    .join(" · ")}
+                </div>
+              )}
             </div>
           </div>
         </div>
