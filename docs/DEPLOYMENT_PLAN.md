@@ -1492,6 +1492,16 @@ If you use the browser webhook for the pilot, the receiver must:
 - [ ] Portal registration complete; exactly one real client row.
 - [ ] Licence poll returns the correct plan/expiry and updates `last_seen_at`.
 - [ ] Deploy run queued and recorded.
+- [ ] Insurance and multi-section modules match the client contract in
+      Settings → Modules; disabled modules are absent from navigation.
+- [ ] Insurance smoke test: estimate approval loads unassigned tasks, supervisor
+      assigns workers, part source is chosen, insurance bill shows *Waiting for
+      releasing order*, a short release order creates the Additional bill, and
+      the Additional bill can be collected in Cashier.
+- [ ] Multi-section smoke test: two section bills settle independently, the final
+      bill is blocked until both settle, then totals both section bills.
+- [ ] Insurance desk smoke test: released vehicle shows salvage and cheque
+      queues; supervisor/storekeeper and cashier/accounting see only their queues.
 - [ ] Demo mode still on until client sign-off.
 
 ---
@@ -1727,7 +1737,8 @@ commit;
 7. **Apply migrations** — service role only, in order.
 8. **Deploy the frontend** — from the client branch.
 9. **Smoke test** — login, licence, one invoice, one estimate, one thermal
-   receipt, custom-build badge.
+   receipt, custom-build badge, insurance release-order shortfall, multi-section
+   final bill and the insurance desk queues.
 10. **Record the result** — `record_client_update_result(run_id, 'Deployed', …)`.
 11. **Keep the backup** until the client confirms normal operation.
 

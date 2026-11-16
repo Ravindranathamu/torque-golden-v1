@@ -13,6 +13,7 @@ import { WorkshopPage } from "./pages/Workshop";
 import { JobDetailPage } from "./pages/JobDetail";
 import { StoresPage } from "./pages/Stores";
 import { CashierPage } from "./pages/Cashier";
+import { InsuranceDeskPage } from "./pages/InsuranceDesk";
 import { AccountingPage } from "./pages/Accounting";
 import { MarketingPage } from "./pages/Marketing";
 import { HistoryPage } from "./pages/History";
@@ -119,6 +120,18 @@ export default function App() {
           element={
             <RequireDepartment departments={["Cashier"]}>
               <CashierPage />
+            </RequireDepartment>
+          }
+        />
+        <Route
+          path="insurance-desk"
+          element={
+            <RequireDepartment
+              departments={["Cashier", "Accounting", "Supervisor", "Stores"]}
+            >
+              <RequireFeature any={["enable_insurance_module"]}>
+                <InsuranceDeskPage />
+              </RequireFeature>
             </RequireDepartment>
           }
         />

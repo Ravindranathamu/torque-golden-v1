@@ -103,6 +103,8 @@ export function JobDetailPage() {
     removePart,
     requestExchange,
     requestReturn,
+    setPartSource: setJobPartSource,
+    returnCustomerBroughtPart,
     requestWarrantyClaim,
     updatePartSalvage,
     createEstimate,
@@ -142,6 +144,7 @@ export function JobDetailPage() {
   const [busyAction, setBusyAction] = useState("");
   const [estimateOpen, setEstimateOpen] = useState(false);
   const [estimateKind, setEstimateKind] = useState<JobEstimate["kind"]>("Initial");
+  const [estimateSectionId, setEstimateSectionId] = useState("");
   const [estimateNotes, setEstimateNotes] = useState("");
   const [estimateLines, setEstimateLines] = useState<EstimateLine[]>([]);
   const [estimateEditingId, setEstimateEditingId] = useState<string | null>(null);
@@ -153,6 +156,7 @@ export function JobDetailPage() {
   const [splitBillOpen, setSplitBillOpen] = useState(false);
   const [splitBillKind, setSplitBillKind] = useState<VehicleBill["kind"]>("Insurance");
   const [splitBillNo, setSplitBillNo] = useState("");
+  const [splitSectionId, setSplitSectionId] = useState("");
   const [splitTaskIds, setSplitTaskIds] = useState<string[]>([]);
   const [splitPartIds, setSplitPartIds] = useState<string[]>([]);
   const [splitDiscount, setSplitDiscount] = useState("0");
@@ -322,6 +326,14 @@ export function JobDetailPage() {
   const advanceTotal = jobAdvances.reduce((sum, advance) => sum + advance.amount, 0);
   const driverCommission = driverCommissionFor(activeJob, activeTotals);
   const canManageInsurance = canSupervise || Boolean(currentUser?.isOwner);
+  const canManageBilling =
+    Boolean(currentUser?.isOwner) ||
+    hasDepartment(currentUser, "Cashier") ||
+    hasDepartment(currentUser, "Accounting");
+  const canManageSalvage =
+    Boolean(currentUser?.isOwner) ||
+    canSupervise ||
+    hasDepartment(currentUser, "Stores");
   const warrantyPart = state.parts.find((part) => part.id === warrantyPartId) ?? null;
   const billableParts = jobParts.filter(
     (part) =>
@@ -488,6 +500,9 @@ export function JobDetailPage() {
   function openEstimate(kind: JobEstimate["kind"] = "Initial", existing?: JobEstimate) {
     setEstimateEditingId(existing?.id ?? null);
     setEstimateKind(existing?.kind ?? kind);
+    setEstimateSectionId(
+      existing?.sectionId ?? activeJob.sectionIds?.[0] ?? "",
+    );
     setEstimateNotes(existing?.notes ?? "");
     setEstimateLines(existing ? existing.lines.map((line) => ({ ...line })) : []);
     setEstimateOpen(true);
@@ -525,6 +540,7 @@ export function JobDetailPage() {
           estimateKind,
           lines.map((line) => ({ ...line, description: line.description.trim() })),
           estimateNotes,
+          estimateSectionId || undefined,
         );
     if (!result.ok) {
       push(result.message ?? "Could not save the estimate.", "error");
@@ -632,7 +648,7 @@ export function JobDetailPage() {
       approveClaimEstimate();
     }
     push(
-      "Estimate approved. Only approved lines were loaded at the assessor prices; parts remain Requested until Stores issues them.",
+      "Estimate approved. Only approved lines were loaded at the assessor prices; the supervisor now assigns workers and chooses each part's source before stores receives it.",
     );
     setApprovalEstimateId(null);
   }
@@ -676,6 +692,7 @@ export function JobDetailPage() {
     ).length;
     const prefix = kind === "Insurance" ? "INS" : kind === "Customer" ? "CUS" : "ADD";
     setSplitBillNo(`${prefix}-${activeJob.id}-${count + 1}`);
+    setSplitSectionId(activeJob.sectionIds?.[0] ?? "");
     setSplitDiscount("0");
     setSplitVat(
       activeJob.isVatInvoice ? String(state.settings.defaultVatRate ?? 18) : "0",
@@ -741,6 +758,7 @@ export function JobDetailPage() {
       billNo: splitBillNo,
       amount: splitNet,
       netPayable: splitNet,
+      sectionId: splitSectionId || undefined,
       claimId: claim?.id,
       insurerId: claim?.insurerId,
       notes: splitNotes,
@@ -1164,12 +1182,56 @@ export function JobDetailPage() {
     push("Return request sent to stores for physical verification.", "info");
   }
 
+  function choosePartSource(
+    partId: string,
+    source: "Workshop_Store" | "Customer_Brought",
+  ) {
+    const result = setJobPartSource(partId, source);
+    if (!result.ok) {
+      push(result.message ?? "Could not set the part source.", "error");
+      return;
+    }
+    push(
+      source === "Customer_Brought"
+        ? "Marked customer-brought. No stock request was sent to stores."
+        : "Sent to stores as a store-supplied part.",
+    );
+  }
+
+  function handBackCustomerPart(partId: string, mode: "Return" | "Swap") {
+    const part = jobParts.find((entry) => entry.id === partId);
+    const result = returnCustomerBroughtPart(partId, mode);
+    if (!result.ok) {
+      push(result.message ?? "Could not return the part.", "error");
+      return;
+    }
+    const message =
+      mode === "Swap"
+        ? `${state.settings.companyName}: ${part?.itemName ?? "The customer-brought part"} has been handed back to you. Please bring the replacement part for ${activeJob.vehicleNo} (${activeJob.make} ${activeJob.model}). Thank you.`
+        : `${state.settings.companyName}: ${part?.itemName ?? "Your customer-brought part"} has been handed back to you. Please collect it when you visit for ${activeJob.vehicleNo} (${activeJob.make} ${activeJob.model}). Thank you.`;
+    const win = window.open(
+      waLink(activeJob.phone, message),
+      "_blank",
+      "noopener,noreferrer",
+    );
+    push(
+      win
+        ? `Part returned to the customer — WhatsApp opened. It was not sent to stores.`
+        : "Part returned to the customer. Allow pop-ups to open WhatsApp.",
+      win ? "info" : "error",
+    );
+  }
+
   function completeRepair() {
-    if (jobTasks.length === 0 && activeTotals.issuedParts.length === 0) {
+    if (jobTasks.length === 0 && activeTotals.billableParts.length === 0) {
       push("Add at least one labour task or issued part before completing the repair.", "error");
       return;
     }
-    markRepairCompleted(activeJob.id);
+    const result = markRepairCompleted(activeJob.id);
+    if (!result.ok) {
+      push(result.message ?? "Could not complete the repair.", "error");
+      return;
+    }
     setCompleteOpen(false);
     setTab("invoice");
     push("Repair completed. The cashier has been notified.");
@@ -1787,6 +1849,16 @@ export function JobDetailPage() {
                             {part.partSource === "Customer_Brought" && (
                               <span className="badge badge-blue">Customer supplied</span>
                             )}
+                            {!part.partSource && part.status === "Requested" && (
+                              <span className="badge badge-amber">Choose part source</span>
+                            )}
+                            {part.customerReturnMode && (
+                              <span className="badge badge-slate">
+                                {part.customerReturnMode === "Swap"
+                                  ? "Returned to customer — swap"
+                                  : "Returned to customer"}
+                              </span>
+                            )}
                             {part.isCustomerExtra && (
                               <span className="badge badge-amber">Customer extra</span>
                             )}
@@ -1875,24 +1947,66 @@ export function JobDetailPage() {
                             <Trash2 />
                           </button>
                         )}
-                        {canEdit && part.status === "Issued" && (
-                          <div className="row" style={{ gap: 4 }}>
-                            <button
-                              className="btn btn-ghost btn-sm"
-                              title="Request exchange"
-                              onClick={() => requestSwap(part.id)}
-                            >
-                              <RefreshCcw />
-                            </button>
-                            <button
-                              className="btn btn-ghost btn-sm"
-                              title="Request return"
-                              onClick={() => requestShelfReturn(part.id)}
-                            >
-                              <XCircle />
-                            </button>
-                          </div>
+                        {canEdit && part.status === "Requested" && !part.partSource && (
+                          <select
+                            className="select"
+                            style={{ width: 150, fontSize: 11 }}
+                            title="Choose who supplies this part before the request is sent"
+                            value=""
+                            onChange={(event) => {
+                              const value = event.target.value as
+                                | "Workshop_Store"
+                                | "Customer_Brought"
+                                | "";
+                              if (!value) return;
+                              choosePartSource(part.id, value);
+                            }}
+                          >
+                            <option value="">Choose source…</option>
+                            <option value="Workshop_Store">Store supplied</option>
+                            <option value="Customer_Brought">Customer brought</option>
+                          </select>
                         )}
+                        {canEdit &&
+                          part.status === "Issued" &&
+                          part.partSource !== "Customer_Brought" && (
+                            <div className="row" style={{ gap: 4 }}>
+                              <button
+                                className="btn btn-ghost btn-sm"
+                                title="Request exchange"
+                                onClick={() => requestSwap(part.id)}
+                              >
+                                <RefreshCcw />
+                              </button>
+                              <button
+                                className="btn btn-ghost btn-sm"
+                                title="Request return"
+                                onClick={() => requestShelfReturn(part.id)}
+                              >
+                                <XCircle />
+                              </button>
+                            </div>
+                          )}
+                        {canEdit &&
+                          part.status === "Issued" &&
+                          part.partSource === "Customer_Brought" && (
+                            <div className="row" style={{ gap: 4 }}>
+                              <button
+                                className="btn btn-ghost btn-sm"
+                                title="Swap with the customer"
+                                onClick={() => handBackCustomerPart(part.id, "Swap")}
+                              >
+                                <RefreshCcw />
+                              </button>
+                              <button
+                                className="btn btn-ghost btn-sm"
+                                title="Return this part to the customer"
+                                onClick={() => handBackCustomerPart(part.id, "Return")}
+                              >
+                                <XCircle />
+                              </button>
+                            </div>
+                          )}
                         {canSupervise &&
                           part.status === "Issued" &&
                           part.warrantyStatus !== "Claimed" &&
@@ -2560,6 +2674,7 @@ export function JobDetailPage() {
                   </div>
 
                   <div className="grid cols-2">
+                    {canManageBilling && (
                     <div className="card">
                       <div className="card-head"><div><h3>Release order</h3><p>Vehicle may be released without waiting for the cheque.</p></div></div>
                       <div className="card-body stack">
@@ -2576,13 +2691,14 @@ export function JobDetailPage() {
                           />
                         </Field>
                         <div className="row wrap">
-                          <button className="btn btn-secondary btn-sm" onClick={saveReleaseOrder} disabled={!canManageInsurance}>
+                          <button className="btn btn-secondary btn-sm" onClick={saveReleaseOrder} disabled={!canManageBilling}>
                             <ShieldCheck />
                             Record release order
                           </button>
                         </div>
                       </div>
                     </div>
+                    )}
 
                     <div className="card">
                       <div className="card-head"><div><h3>Salvage submission</h3><p>Per-part salvage data lives under Parts & materials.</p></div></div>
@@ -2596,7 +2712,7 @@ export function JobDetailPage() {
                             onChange={(event) => setSalvageReference(event.target.value)}
                           />
                         </Field>
-                        <button className="btn btn-secondary btn-sm" onClick={saveSalvageSubmission} disabled={!canManageInsurance}>
+                        <button className="btn btn-secondary btn-sm" onClick={saveSalvageSubmission} disabled={!canManageSalvage}>
                           <Package />
                           Mark salvage submitted
                         </button>
@@ -2607,6 +2723,8 @@ export function JobDetailPage() {
                       </div>
                     </div>
 
+                    {canManageBilling && (
+                    <>
                     <div className="card">
                       <div className="card-head"><div><h3>Insurance bill</h3><p>Bill the insurer and share the PDF.</p></div></div>
                       <div className="card-body stack">
@@ -2631,7 +2749,7 @@ export function JobDetailPage() {
                           </Field>
                         </div>
                         <div className="row wrap">
-                          <button className="btn btn-primary btn-sm" onClick={saveInsuranceBill} disabled={!canManageInsurance}>
+                          <button className="btn btn-primary btn-sm" onClick={saveInsuranceBill} disabled={!canManageBilling}>
                             <FileText />
                             Record bill
                           </button>
@@ -2673,7 +2791,7 @@ export function JobDetailPage() {
                             />
                           </Field>
                         </div>
-                        <button className="btn btn-secondary btn-sm" onClick={saveCustomerBill} disabled={!canManageInsurance}>
+                        <button className="btn btn-secondary btn-sm" onClick={saveCustomerBill} disabled={!canManageBilling}>
                           <FileText />
                           Record customer bill
                         </button>
@@ -2741,14 +2859,14 @@ export function JobDetailPage() {
                           </Field>
                         </div>
                         <div className="row wrap">
-                          <button className="btn btn-secondary btn-sm" onClick={saveCheque} disabled={!canManageInsurance}>
+                          <button className="btn btn-secondary btn-sm" onClick={saveCheque} disabled={!canManageBilling}>
                             <Banknote />
                             Record cheque
                           </button>
                           <button
                             className="btn btn-primary btn-sm"
                             onClick={settleClaim}
-                            disabled={!canManageInsurance || !claim.chequeAmount || claim.status === "Settled"}
+                            disabled={!canManageBilling || !claim.chequeAmount || claim.status === "Settled"}
                           >
                             <CheckCircle2 />
                             Settle claim
@@ -2763,6 +2881,8 @@ export function JobDetailPage() {
                         </div>
                       </div>
                     </div>
+                    </>
+                    )}
                   </div>
                 </>
               )}
@@ -3068,7 +3188,7 @@ export function JobDetailPage() {
                                 >
                                   <Download />
                                 </button>
-                                {bill.status !== "Paid" && bill.status !== "Release Order" && (
+                                {canManageBilling && bill.status !== "Paid" && bill.status !== "Release Order" && (
                                   <button
                                     className="btn btn-ghost btn-sm"
                                     title="Remove this bill and unlock its items"
@@ -3095,7 +3215,7 @@ export function JobDetailPage() {
                   <button
                     className="btn btn-primary btn-sm"
                     onClick={() => openSplitBill("Insurance")}
-                    disabled={!canBill && !canSupervise}
+                    disabled={!canManageBilling}
                   >
                     <Plus />
                     New insurance bill
@@ -3103,7 +3223,7 @@ export function JobDetailPage() {
                   <button
                     className="btn btn-secondary btn-sm"
                     onClick={() => openSplitBill("Customer")}
-                    disabled={!canBill && !canSupervise}
+                    disabled={!canManageBilling}
                   >
                     <Plus />
                     New customer bill
@@ -3111,7 +3231,7 @@ export function JobDetailPage() {
                   <button
                     className="btn btn-ghost btn-sm"
                     onClick={() => openSplitBill("Additional")}
-                    disabled={!canBill && !canSupervise}
+                    disabled={!canManageBilling}
                   >
                     <Plus />
                     New additional bill
@@ -3769,6 +3889,30 @@ export function JobDetailPage() {
                 <option value="Supplementary">Supplementary estimate</option>
               </select>
             </Field>
+            {sectionsEnabled && (
+              <Field
+                label="Repair section"
+                hint="Each section can hold its own estimate, work and bill."
+              >
+                <select
+                  className="select"
+                  value={estimateSectionId}
+                  onChange={(event) => setEstimateSectionId(event.target.value)}
+                  disabled={Boolean(estimateEditingId)}
+                >
+                  <option value="">Whole job / no section</option>
+                  {activeJob.sectionIds?.map((sectionId) => {
+                    const section = state.sections.find((entry) => entry.id === sectionId);
+                    if (!section) return null;
+                    return (
+                      <option key={section.id} value={section.id}>
+                        {section.name}
+                      </option>
+                    );
+                  })}
+                </select>
+              </Field>
+            )}
             <Field label="Notes" hint="Assessor comments, exclusions or approval context.">
               <input
                 className="input"
@@ -4209,9 +4353,10 @@ export function JobDetailPage() {
         {approvalEstimate && (
           <div className="stack">
             <Alert tone="info" title="Approve the scope line by line">
-              Approved lines load to the job card at the assessor price. Rejected lines are not
-              loaded and can be moved to Non-Claim / Customer Extra from the Approvals card. Parts
-              stay Requested until Stores physically issues them.
+              Approved lines load to the job card at the assessor price with no technician
+              assigned. The supervisor assigns a worker to every task, then chooses whether each
+              part is store-supplied or customer-brought. Stores only sees store-supplied
+              requests.
             </Alert>
             <div className="table-wrap">
               <table className="data">
@@ -4356,6 +4501,29 @@ export function JobDetailPage() {
                 onChange={(event) => setSplitBillNo(event.target.value)}
               />
             </Field>
+            {sectionsEnabled && (
+              <Field
+                label="Repair section"
+                hint="Section bills stay separate; the final bill totals all sections."
+              >
+                <select
+                  className="select"
+                  value={splitSectionId}
+                  onChange={(event) => setSplitSectionId(event.target.value)}
+                >
+                  <option value="">Whole job / no section</option>
+                  {activeJob.sectionIds?.map((sectionId) => {
+                    const section = state.sections.find((entry) => entry.id === sectionId);
+                    if (!section) return null;
+                    return (
+                      <option key={section.id} value={section.id}>
+                        {section.name}
+                      </option>
+                    );
+                  })}
+                </select>
+              </Field>
+            )}
             <Field label="Note" full>
               <input
                 className="input"

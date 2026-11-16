@@ -196,10 +196,10 @@ interface AppStoreValue {
   togglePartIncludedInLabor: (partId: string, included: boolean) => void;
   updateJobSections: (jobId: string, sectionIds: string[]) => void;
   syncLicence: () => Promise<ActionResult>;
-  addUser: (user: Omit<WorkshopUser, "id" | "createdAt">) => void;
+  addUser: (user: Omit<WorkshopUser, "id" | "createdAt">) => string;
   updateUser: (user: WorkshopUser) => void;
   removeUser: (userId: string) => ActionResult;
-  addWorker: (worker: Omit<WorkerProfile, "id">) => void;
+  addWorker: (worker: Omit<WorkerProfile, "id">) => string;
   updateWorker: (worker: WorkerProfile) => void;
   submitCheckIn: (input: NewCheckInInput) => ActionResult;
   lookupVehicle: (vehicleNo: string) => {
@@ -267,6 +267,13 @@ interface AppStoreValue {
   ) => ActionResult;
   requestExchange: (partId: string) => void;
   requestReturn: (partId: string) => void;
+  /** Supervisor chooses store-supplied vs customer-brought before a request reaches stores. */
+  setPartSource: (
+    partId: string,
+    source: "Workshop_Store" | "Customer_Brought",
+  ) => ActionResult;
+  /** Customer-brought parts go back to the customer, never into stores. */
+  returnCustomerBroughtPart: (partId: string, mode: "Return" | "Swap") => ActionResult;
   approveExchange: (
     partId: string,
     data: {
@@ -291,6 +298,7 @@ interface AppStoreValue {
     kind: JobEstimate["kind"],
     lines: EstimateLine[],
     notes: string,
+    sectionId?: string,
   ) => ActionResult;
   updateEstimate: (
     estimateId: string,
@@ -376,7 +384,7 @@ interface AppStoreValue {
   updateInsuranceCompany: (company: InsuranceCompany) => void;
   removeInsuranceCompany: (companyId: string) => void;
   activateLicence: (key: string) => ActionResult;
-  markRepairCompleted: (jobId: string) => void;
+  markRepairCompleted: (jobId: string) => ActionResult;
   checkoutJob: (jobId: string, input: CheckoutInput) => ActionResult;
   dispatchJob: (jobId: string) => void;
   overrideBillingGate: (jobId: string, reason: string) => ActionResult;
@@ -385,6 +393,7 @@ interface AppStoreValue {
     kind: VehicleBill["kind"];
     billNo: string;
     amount: number;
+    sectionId?: string;
     claimId?: string;
     insurerId?: string;
     notes?: string;
@@ -408,6 +417,10 @@ interface AppStoreValue {
       amount?: number;
       releaseOrderNo?: string;
       releaseOrderAmount?: number;
+      /** Cashier may waive tax on this bill. */
+      taxEnabled?: boolean;
+      /** Cashier discount in rupees, applied before VAT. */
+      discount?: number;
     },
   ) => ActionResult;
   backupToDrive: (manual?: boolean) => Promise<ActionResult>;
@@ -1144,6 +1157,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const assignUserSections = useCallback((userId: string, sectionIds: string[]) => {
     setState((prev) => {
       const target = prev.users.find((user) => user.id === userId);
+      const sectionSet = new Set(sectionIds);
+      const supervises = Boolean(target?.departments.includes("Supervisor"));
+      const keepsStores = Boolean(target?.departments.includes("Stores"));
       return {
         ...prev,
         users: prev.users.map((user) =>
@@ -1154,6 +1170,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
             ? { ...worker, sectionIds }
             : worker,
         ),
+        sections: prev.sections.map((section) => ({
+          ...section,
+          supervisorIds:
+            target && supervises && sectionSet.has(section.id)
+              ? Array.from(new Set([...section.supervisorIds, userId]))
+              : section.supervisorIds.filter((entry) => entry !== userId),
+          storekeeperIds:
+            target && keepsStores && sectionSet.has(section.id)
+              ? Array.from(new Set([...section.storekeeperIds, userId]))
+              : section.storekeeperIds.filter((entry) => entry !== userId),
+          workerIds: target?.workerId
+            ? sectionSet.has(section.id)
+              ? Array.from(new Set([...section.workerIds, target.workerId]))
+              : section.workerIds.filter((entry) => entry !== target.workerId)
+            : section.workerIds,
+        })),
       };
     });
   }, []);
@@ -1433,20 +1465,59 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const addUser = useCallback((user: Omit<WorkshopUser, "id" | "createdAt">) => {
-    setState((prev) => ({
-      ...prev,
-      users: [
-        ...prev.users,
-        { ...user, id: uid("usr"), createdAt: new Date().toISOString() },
-      ],
-    }));
+    const id = uid("usr");
+    setState((prev) => {
+      const sectionIds = new Set(user.sectionIds ?? []);
+      const supervises = user.departments.includes("Supervisor");
+      const keepsStores = user.departments.includes("Stores");
+      return {
+        ...prev,
+        users: [
+          ...prev.users,
+          { ...user, id, createdAt: new Date().toISOString() },
+        ],
+        workers: prev.workers.map((worker) =>
+          user.workerId && worker.id === user.workerId
+            ? { ...worker, sectionIds: Array.from(sectionIds) }
+            : worker,
+        ),
+        sections: prev.sections.map((section) => ({
+          ...section,
+          supervisorIds:
+            supervises && sectionIds.has(section.id)
+              ? Array.from(new Set([...section.supervisorIds, id]))
+              : section.supervisorIds.filter((entry) => entry !== id),
+          storekeeperIds:
+            keepsStores && sectionIds.has(section.id)
+              ? Array.from(new Set([...section.storekeeperIds, id]))
+              : section.storekeeperIds.filter((entry) => entry !== id),
+        })),
+      };
+    });
+    return id;
   }, []);
 
   const updateUser = useCallback((user: WorkshopUser) => {
-    setState((prev) => ({
-      ...prev,
-      users: prev.users.map((u) => (u.id === user.id ? user : u)),
-    }));
+    setState((prev) => {
+      const sectionIds = new Set(user.sectionIds ?? []);
+      const supervises = user.departments.includes("Supervisor");
+      const keepsStores = user.departments.includes("Stores");
+      return {
+        ...prev,
+        users: prev.users.map((u) => (u.id === user.id ? user : u)),
+        sections: prev.sections.map((section) => ({
+          ...section,
+          supervisorIds:
+            supervises && sectionIds.has(section.id)
+              ? Array.from(new Set([...section.supervisorIds, user.id]))
+              : section.supervisorIds.filter((entry) => entry !== user.id),
+          storekeeperIds:
+            keepsStores && sectionIds.has(section.id)
+              ? Array.from(new Set([...section.storekeeperIds, user.id]))
+              : section.storekeeperIds.filter((entry) => entry !== user.id),
+        })),
+      };
+    });
   }, []);
 
   const removeUser = useCallback(
@@ -1465,17 +1536,50 @@ export function AppProvider({ children }: { children: ReactNode }) {
   );
 
   const addWorker = useCallback((worker: Omit<WorkerProfile, "id">) => {
-    setState((prev) => ({
-      ...prev,
-      workers: [...prev.workers, { ...worker, id: uid("wrk") }],
-    }));
+    const id = uid("wrk");
+    setState((prev) => {
+      const sectionIds = new Set(worker.sectionIds ?? []);
+      return {
+        ...prev,
+        workers: [...prev.workers, { ...worker, id }],
+        sections: prev.sections.map((section) =>
+          sectionIds.has(section.id)
+            ? {
+                ...section,
+                workerIds: Array.from(new Set([...section.workerIds, id])),
+              }
+            : section.workerIds.includes(id)
+              ? { ...section, workerIds: section.workerIds.filter((entry) => entry !== id) }
+              : section,
+        ),
+      };
+    });
+    return id;
   }, []);
 
   const updateWorker = useCallback((worker: WorkerProfile) => {
-    setState((prev) => ({
-      ...prev,
-      workers: prev.workers.map((w) => (w.id === worker.id ? worker : w)),
-    }));
+    setState((prev) => {
+      const sectionIds = new Set(worker.sectionIds ?? []);
+      return {
+        ...prev,
+        workers: prev.workers.map((w) => (w.id === worker.id ? worker : w)),
+        users: prev.users.map((user) =>
+          user.workerId === worker.id
+            ? { ...user, sectionIds: Array.from(sectionIds) }
+            : user,
+        ),
+        sections: prev.sections.map((section) =>
+          sectionIds.has(section.id)
+            ? {
+                ...section,
+                workerIds: Array.from(new Set([...section.workerIds, worker.id])),
+              }
+            : section.workerIds.includes(worker.id)
+              ? { ...section, workerIds: section.workerIds.filter((entry) => entry !== worker.id) }
+              : section,
+        ),
+      };
+    });
   }, []);
 
   const lookupVehicle = useCallback(
@@ -2095,6 +2199,131 @@ export function AppProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
+  const setPartSource = useCallback(
+    (partId: string, source: "Workshop_Store" | "Customer_Brought"): ActionResult => {
+      const part = state.parts.find((p) => p.id === partId);
+      if (!part) return { ok: false, message: "Part request not found." };
+      const job = state.jobCards.find((j) => j.id === part.jobCardId);
+      if (!job) return { ok: false, message: "Job card not found." };
+      if (part.assignedBillId) {
+        return { ok: false, message: "This part is already on a bill." };
+      }
+      if (source === "Customer_Brought" && !job.insuranceClaimId) {
+        return {
+          ok: false,
+          message: "Customer-brought parts are only available on insurance jobs.",
+        };
+      }
+      if (part.status !== "Requested") {
+        return {
+          ok: false,
+          message: "The part source can only be changed while the request is pending.",
+        };
+      }
+      const now = new Date().toISOString();
+      const unit = state.inventory.find((item) => item.id === part.itemId);
+      setState((prev) => ({
+        ...prev,
+        parts: prev.parts.map((entry) =>
+          entry.id === partId
+            ? source === "Customer_Brought"
+              ? {
+                  ...entry,
+                  partSource: "Customer_Brought" as const,
+                  status: "Issued" as const,
+                  qtyIssued: entry.qtyRequested,
+                  costPrice: 0,
+                  marginPercent: 0,
+                  updatedAt: now,
+                }
+              : { ...entry, partSource: "Workshop_Store" as const, updatedAt: now }
+            : entry,
+        ),
+        notifications:
+          source === "Customer_Brought"
+            ? notify(
+                prev,
+                ["Supervisor", "Stores", "Cashier"],
+                "Customer-brought part — stores skipped",
+                `${job.id} · ${job.vehicleNo} · ${part.itemName} is supplied by the customer. No stock request was sent and no stock was deducted.`,
+                "normal",
+                `/jobs/${job.id}`,
+                { vehicleNo: job.vehicleNo, eventType: "inventory" },
+              )
+            : notify(
+                prev,
+                ["Stores"],
+                "New parts request",
+                `${job.id} · ${job.vehicleNo} needs ${part.qtyRequested}${
+                  unit ? ` ${unit.measureUnit || unit.unit}` : ""
+                } of ${part.itemName}.`,
+                "high",
+                "/stores",
+                { vehicleNo: job.vehicleNo, eventType: "inventory" },
+              ),
+      }));
+      return { ok: true, reference: part.itemName };
+    },
+    [state.parts, state.jobCards, state.inventory],
+  );
+
+  const returnCustomerBroughtPart = useCallback(
+    (partId: string, mode: "Return" | "Swap"): ActionResult => {
+      const part = state.parts.find((p) => p.id === partId);
+      if (!part) return { ok: false, message: "Part not found." };
+      if (part.partSource !== "Customer_Brought") {
+        return {
+          ok: false,
+          message: "Only customer-brought parts are handed back to the customer.",
+        };
+      }
+      if (part.assignedBillId) {
+        return {
+          ok: false,
+          message: "This part is already on a bill. Reverse the bill before returning it.",
+        };
+      }
+      const job = state.jobCards.find((j) => j.id === part.jobCardId);
+      if (!job) return { ok: false, message: "Job card not found." };
+      const user = state.users.find((entry) => entry.id === state.currentUserId);
+      const now = new Date().toISOString();
+      setState((prev) => ({
+        ...prev,
+        parts: prev.parts.map((entry) =>
+          entry.id === partId
+            ? {
+                ...entry,
+                status: "Returned" as const,
+                qtyIssued: 0,
+                customerReturnAt: now,
+                customerReturnMode: mode,
+                customerReturnNote:
+                  mode === "Swap"
+                    ? "Customer is bringing a replacement part. Original part handed back."
+                    : "Part handed back to the customer.",
+                updatedAt: now,
+              }
+            : entry,
+        ),
+        notifications: notify(
+          prev,
+          ["Supervisor", "Cashier"],
+          mode === "Swap"
+            ? "Customer-brought part returned for swap"
+            : "Customer-brought part returned",
+          `${job.id} · ${job.vehicleNo} · ${part.itemName} goes back to the customer — never into stores. WhatsApp the owner to ${
+            mode === "Swap" ? "bring the replacement part" : "collect the part"
+          }. Recorded by ${user?.name ?? "staff"}.`,
+          "normal",
+          `/jobs/${job.id}`,
+          { vehicleNo: job.vehicleNo, eventType: "inventory" },
+        ),
+      }));
+      return { ok: true, reference: part.itemName };
+    },
+    [state.parts, state.jobCards, state.users, state.currentUserId],
+  );
+
   const approveExchange = useCallback(
     (
       partId: string,
@@ -2326,6 +2555,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       kind: JobEstimate["kind"],
       lines: EstimateLine[],
       notes: string,
+      sectionId?: string,
     ): ActionResult => {
       const job = state.jobCards.find((entry) => entry.id === jobId);
       if (!job) {
@@ -2335,11 +2565,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return { ok: false, message: "Add at least one estimate line." };
       }
       const existing = state.estimates.filter((entry) => entry.jobCardId === jobId);
-      if (kind === "Initial" && existing.some((entry) => entry.kind === "Initial")) {
+      if (
+        kind === "Initial" &&
+        existing.some(
+          (entry) => entry.kind === "Initial" && entry.sectionId === sectionId,
+        )
+      ) {
         return {
           ok: false,
-          message:
-            "Only one Initial estimate is allowed per job. Create a Supplementary estimate for extra work.",
+          message: sectionId
+            ? "This section already has an Initial estimate. Create a Supplementary estimate for extra work."
+            : "Only one Initial estimate is allowed per job. Pick a different section or create a Supplementary estimate.",
         };
       }
       if (kind === "Supplementary") {
@@ -2377,6 +2613,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const estimate: JobEstimate = {
         id: uid("est"),
         jobCardId: jobId,
+        sectionId,
         kind,
         number,
         supplementaryNo,
@@ -2534,10 +2771,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const job = state.jobCards.find((entry) => entry.id === estimate.jobCardId);
       if (!job) return { ok: false, message: "Job card not found." };
       const user = state.users.find((entry) => entry.id === state.currentUserId);
-      const fallbackWorker =
-        state.workers.find((worker) => worker.userId === user?.id)?.id ??
-        state.workers.find((worker) => worker.status === "Active")?.id ??
-        "";
       const now = new Date().toISOString();
       const resolvedLines = estimate.lines.map((line) => {
         const decision = decisions?.[line.id];
@@ -2570,7 +2803,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         laborCost:
           Math.round(line.qty * (line.approvedUnitPrice ?? line.unitPrice) * 100) / 100,
         quotedLaborCost: Math.round(line.qty * line.unitPrice * 100) / 100,
-        workerId: fallbackWorker,
+        workerId: "",
+        sectionId: estimate.sectionId ?? job.sectionIds?.[0],
         createdAt: now,
         addedBy: user?.name,
         addedAt: now,
@@ -2596,10 +2830,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           quotedSellingPrice: line.unitPrice,
           insuranceApprovedPrice: approvedPrice,
           status: "Requested" as const,
-          sectionId: job.sectionIds?.[0] || match?.sectionId,
+          sectionId: estimate.sectionId ?? job.sectionIds?.[0] ?? match?.sectionId,
           measuredQty: line.qty % 1 !== 0,
           supplierId: match?.supplierId,
-          partSource: "Workshop_Store" as const,
+          partSource: line.partSource,
           estimateId: estimate.id,
           estimateLineId: line.id,
           createdAt: now,
@@ -2648,7 +2882,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           prev,
           ["Supervisor", "Cashier", "Stores"],
           "Estimate approved — approved lines loaded",
-          `${job.id} · ${estimateDisplayNumber(estimate)} approved. ${labourLines.length} labour task(s) and ${partLines.length} part(s) loaded at assessor-approved prices. Parts stay Requested until Stores issues them; no stock was deducted.`,
+          `${job.id} · ${estimateDisplayNumber(estimate)} approved. ${labourLines.length} labour task(s) and ${partLines.length} part(s) loaded at assessor-approved prices. Tasks are unassigned — the supervisor assigns a technician to each before completing the repair. Part requests reach stores only after the supervisor marks each part as store-supplied or customer-brought.`,
           "high",
           `/jobs/${job.id}`,
           { vehicleNo: job.vehicleNo, eventType: "job" },
@@ -2776,10 +3010,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return { ok: false, message: "This line is already on the job card." };
       }
       const user = state.users.find((entry) => entry.id === state.currentUserId);
-      const fallbackWorker =
-        state.workers.find((worker) => worker.userId === user?.id)?.id ??
-        state.workers.find((worker) => worker.status === "Active")?.id ??
-        "";
       const now = new Date().toISOString();
       const task: JobTask | null =
         line.type === "Labour"
@@ -2788,8 +3018,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
               jobCardId: job.id,
               name: line.description,
               laborCost: Math.round(line.qty * line.unitPrice * 100) / 100,
-              workerId: fallbackWorker,
-              sectionId: job.sectionIds?.[0],
+              workerId: "",
+              sectionId: estimate.sectionId ?? job.sectionIds?.[0],
               createdAt: now,
               addedBy: user?.name,
               addedAt: now,
@@ -2812,9 +3042,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
               sellingPrice: line.unitPrice,
               quotedSellingPrice: line.unitPrice,
               status: "Requested",
-              sectionId: job.sectionIds?.[0],
+              sectionId: estimate.sectionId ?? job.sectionIds?.[0],
               measuredQty: line.qty % 1 !== 0,
-              partSource: "Workshop_Store",
+              partSource: line.partSource,
               isCustomerExtra: true,
               estimateId: estimate.id,
               estimateLineId: line.id,
@@ -3833,28 +4063,43 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return { ok: true, message: result.message };
   }, [state.settings]);
 
-  const markRepairCompleted = useCallback((jobId: string) => {
-    setState((prev) => {
-      const job = prev.jobCards.find((j) => j.id === jobId);
-      return {
+  const markRepairCompleted = useCallback(
+    (jobId: string): ActionResult => {
+      const job = state.jobCards.find((entry) => entry.id === jobId);
+      if (!job) return { ok: false, message: "Job card not found." };
+      const jobTasks = state.tasks.filter((task) => task.jobCardId === jobId);
+      const unassigned = jobTasks.filter((task) => !task.workerId);
+      if (unassigned.length > 0) {
+        return {
+          ok: false,
+          message: `${unassigned.length} task(s) have no technician. Assign a worker to every task before completing the repair — ${unassigned
+            .map((task) => task.name)
+            .slice(0, 3)
+            .join(", ")}${unassigned.length > 3 ? "…" : ""}.`,
+        };
+      }
+      const now = new Date().toISOString();
+      setState((prev) => ({
         ...prev,
-        jobCards: prev.jobCards.map((j) =>
-          j.id === jobId
-            ? { ...j, status: "Repair Completed" as const, completedAt: new Date().toISOString() }
-            : j,
+        jobCards: prev.jobCards.map((entry) =>
+          entry.id === jobId
+            ? { ...entry, status: "Repair Completed" as const, completedAt: now }
+            : entry,
         ),
         notifications: notify(
           prev,
           ["Cashier"],
           "Repair completed — ready to bill",
-          `${jobId} · ${job?.vehicleNo ?? ""} is waiting in the billing queue.`,
+          `${jobId} · ${job.vehicleNo} is waiting in the billing queue.`,
           "high",
           "/cashier",
-          { vehicleNo: job?.vehicleNo, eventType: "job" },
+          { vehicleNo: job.vehicleNo, eventType: "job" },
         ),
-      };
-    });
-  }, []);
+      }));
+      return { ok: true };
+    },
+    [state.jobCards, state.tasks],
+  );
 
   const checkoutJob = useCallback(
     (jobId: string, input: CheckoutInput): ActionResult => {
@@ -4378,6 +4623,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       kind: VehicleBill["kind"];
       billNo: string;
       amount: number;
+      sectionId?: string;
       claimId?: string;
       insurerId?: string;
       notes?: string;
@@ -4447,6 +4693,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         vehicleNo: job.vehicleNo,
         kind: input.kind,
         billNo,
+        sectionId: input.sectionId,
         amount: Math.round(netPayable * 100) / 100,
         createdAt: new Date().toISOString(),
         createdBy: user?.name,
@@ -4464,7 +4711,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         policyExcess: input.policyExcess,
         depreciation: input.depreciation,
         netPayable: Math.round(netPayable * 100) / 100,
-        status: "Unpaid",
+        status: input.kind === "Insurance" ? "Awaiting Release Order" : "Unpaid",
       };
       setState((prev) => ({
         ...prev,
@@ -4544,6 +4791,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         amount?: number;
         releaseOrderNo?: string;
         releaseOrderAmount?: number;
+        /** Cashier may waive tax on this bill. */
+        taxEnabled?: boolean;
+        /** Cashier discount in rupees, applied before VAT. */
+        discount?: number;
       },
     ): ActionResult => {
       const bill = state.vehicleBills.find((entry) => entry.id === billId);
@@ -4555,8 +4806,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (!job) return { ok: false, message: "Job card not found." };
       const user = state.users.find((entry) => entry.id === state.currentUserId);
       const now = new Date().toISOString();
-      const net = Math.round((bill.netPayable ?? bill.amount) * 100) / 100;
-      if (net <= 0) return { ok: false, message: "This bill has no payable amount." };
 
       const billTasks = state.tasks.filter((task) => bill.taskIds?.includes(task.id));
       const billParts = state.parts.filter((part) => bill.partIds?.includes(part.id));
@@ -4564,6 +4813,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
         (part) => part.partSource !== "Customer_Brought",
       );
       const laborRevenue = billTasks.reduce((sum, task) => sum + task.laborCost, 0);
+      const dueParts = bill.kind === "Insurance" ? billParts : workshopParts;
+      const partsSubtotal = dueParts.reduce(
+        (sum, part) => sum + part.sellingPrice * partIssueQty(part),
+        0,
+      );
       const partsRevenue = workshopParts.reduce(
         (sum, part) => sum + part.sellingPrice * partIssueQty(part),
         0,
@@ -4572,15 +4826,70 @@ export function AppProvider({ children }: { children: ReactNode }) {
         (sum, part) => sum + part.costPrice * partIssueQty(part),
         0,
       );
+      const hasLines = billTasks.length > 0 || billParts.length > 0;
+      const isShortfall = Boolean(bill.parentBillId);
+      // Auto-created shortfall bills store the payable total without line items.
+      const gross =
+        isShortfall && !hasLines
+          ? Math.max(0, Math.round((bill.netPayable ?? bill.amount ?? 0) * 100) / 100)
+          : laborRevenue + partsSubtotal;
+      const appliedDiscount = Math.max(
+        0,
+        Math.min(
+          Math.round((input.discount ?? bill.discount ?? 0) * 100) / 100,
+          gross,
+        ),
+      );
+      const appliedVatRate =
+        isShortfall && !hasLines
+          ? 0
+          : input.taxEnabled === false
+            ? 0
+            : Math.max(
+                0,
+                bill.vatRate ??
+                  (job.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0),
+              );
+      const supply = Math.max(0, gross - appliedDiscount);
+      const vatAmount =
+        isShortfall || appliedVatRate === 0
+          ? 0
+          : Math.round(supply * appliedVatRate) / 100;
+      const net = Math.max(
+        0,
+        Math.round(
+          (supply +
+            vatAmount -
+            (bill.policyExcess ?? 0) -
+            (bill.depreciation ?? 0) -
+            (bill.advance ?? 0)) *
+            100,
+        ) / 100,
+      );
+      if (net <= 0) return { ok: false, message: "This bill has no payable amount." };
+
       const commission = billTasks.reduce((sum, task) => {
         const worker = state.workers.find((entry) => entry.id === task.workerId);
         return sum + (task.laborCost * (worker?.commissionRate ?? 0)) / 100;
       }, 0);
-      const discount = bill.discount ?? 0;
+      const discount = appliedDiscount;
       const driverCommission = driverCommissionFor(job, {
         labor: laborRevenue,
         total: Math.max(0, laborRevenue + partsRevenue - discount),
       });
+      const chargeFields = {
+        ...(hasLines
+          ? {
+              laborSubtotal: Math.round(laborRevenue * 100) / 100,
+              partsSubtotal: Math.round(partsSubtotal * 100) / 100,
+            }
+          : {}),
+        discount: appliedDiscount,
+        vatRate: appliedVatRate,
+        vatAmount,
+        netPayable: net,
+        amount: net,
+      };
 
       if (input.method === "Release Order") {
         if (bill.kind !== "Insurance") {
@@ -4600,7 +4909,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
           return { ok: false, message: "Enter the approved release order amount." };
         }
         const paidAmount = Math.min(net, approved);
-        const shortfall = Math.max(0, Math.round((net - paidAmount) * 100) / 100);
+        const grossShortfall = Math.max(
+          0,
+          Math.round((net - paidAmount) * 100) / 100,
+        );
+        const customerBroughtValue = billParts
+          .filter((part) => part.partSource === "Customer_Brought")
+          .reduce((sum, part) => sum + part.sellingPrice * partIssueQty(part), 0);
+        const customerPartsCredit = Math.min(
+          grossShortfall,
+          Math.round(
+            customerBroughtValue * (1 + Math.max(0, appliedVatRate) / 100) * 100,
+          ) / 100,
+        );
+        const shortfall = Math.max(
+          0,
+          Math.round((grossShortfall - customerPartsCredit) * 100) / 100,
+        );
         const shortfallId = shortfall > 0.005 ? uid("bill") : undefined;
         let shortfallBillNo = "";
         if (shortfallId) {
@@ -4634,6 +4959,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             entry.id === bill.id
               ? {
                   ...entry,
+                  ...chargeFields,
                   status: "Release Order" as const,
                   paidAmount,
                   paidAt: now,
@@ -4643,6 +4969,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   releaseOrderAmount: approved,
                   releaseOrderAt: now,
                   shortfallBillId: shortfallId,
+                  customerPartsCredit:
+                    customerPartsCredit > 0 ? customerPartsCredit : undefined,
                 }
               : entry,
           );
@@ -4659,7 +4987,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
               createdBy: user?.name,
               claimId: bill.claimId ?? job.insuranceClaimId,
               insurerId: bill.insurerId,
-              notes: `Release order ${releaseOrderNo} shortfall (penalty / under-value) — payable by the customer.`,
+              sectionId: bill.sectionId,
+              customerPartsCredit:
+                customerPartsCredit > 0 ? customerPartsCredit : undefined,
+              notes:
+                customerPartsCredit > 0
+                  ? `Release order ${releaseOrderNo} shortfall (penalty / under-value). Customer-supplied parts already paid ${money(
+                      customerPartsCredit,
+                    )} are credited, so the customer pays the remaining ${money(
+                      shortfall,
+                    )}.`
+                  : `Release order ${releaseOrderNo} shortfall (penalty / under-value) — payable by the customer.`,
               status: "Unpaid",
               parentBillId: bill.id,
             });
@@ -4680,7 +5018,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
             `${job.vehicleNo} · ${bill.billNo} · release order ${releaseOrderNo} for ${money(paidAmount)}${
               shortfall > 0.005
                 ? `. Shortfall ${money(shortfall)} added to ${shortfallBillNo} for the customer.`
-                : "."
+                : customerPartsCredit > 0
+                  ? `. Customer-supplied parts already paid ${money(
+                      customerPartsCredit,
+                    )} were credited, so no shortfall bill is needed.`
+                  : "."
             }${readyJob ? " All separate bills are settled — vehicle ready for gate release." : ""}`,
             shortfall > 0.005 || readyJob ? "high" : "normal",
             readyJob ? "/gate" : "/cashier",
@@ -4734,7 +5076,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
           message: `Collect the full net payable of ${money(net)}.`,
         };
       }
-      const isShortfall = Boolean(bill.parentBillId);
       const ledgerEntry = {
         id: uid("led"),
         jobCardId: job.id,
@@ -4759,6 +5100,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           entry.id === bill.id
             ? {
                 ...entry,
+                ...chargeFields,
                 status: "Paid" as const,
                 paidAmount: net,
                 paidAt: now,
@@ -6257,6 +6599,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fulfillPart,
       requestExchange,
       requestReturn,
+      setPartSource,
+      returnCustomerBroughtPart,
       approveExchange,
       approveReturn,
       requestWarrantyClaim,
@@ -6371,6 +6715,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       fulfillPart,
       requestExchange,
       requestReturn,
+      setPartSource,
+      returnCustomerBroughtPart,
       approveExchange,
       approveReturn,
       requestWarrantyClaim,

@@ -103,7 +103,6 @@ export function HistoryPage() {
   const totalVisits = groups.reduce((sum, group) => sum + group.jobs.length, 0);
   const totalSpend = groups.reduce((sum, group) => sum + group.spend, 0);
   const repeatVehicles = groups.filter((group) => group.jobs.length > 1).length;
-  const suggestions = groups.slice(0, 6);
 
   return (
     <div className="page">
@@ -165,20 +164,6 @@ export function HistoryPage() {
                 Clear
               </button>
             )}
-          </div>
-          <div className="suggestions">
-            <span className="tiny muted">Quick lookups:</span>
-            {suggestions.map((group) => (
-              <button
-                key={group.key}
-                type="button"
-                className="suggestion"
-                onClick={() => setQuery(group.vehicleNo)}
-              >
-                <CarFront size={11} />
-                {group.vehicleNo}
-              </button>
-            ))}
           </div>
         </div>
       </div>

@@ -236,6 +236,16 @@ function logoImage(logo?: string): string | null {
   return /^data:image\/(png|jpe?g|webp);base64,/i.test(logo) ? logo : null;
 }
 
+function companyInitials(name: string): string {
+  const words = name
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
+    .split(/\s+/)
+    .filter(Boolean);
+  if (words.length === 0) return "WS";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0]}${words[1][0]}`.toUpperCase();
+}
+
 function drawMasthead(
   doc: jsPDF,
   title: string,
@@ -261,6 +271,25 @@ function drawMasthead(
     } catch {
       leftX = MARGIN;
     }
+  }
+
+  if (!logo || leftX === MARGIN) {
+    // SVG logos cannot be embedded by jsPDF. Draw a clean brand lettermark so
+    // every document still carries the workshop mark.
+    logoWidth = logoHeight;
+    doc.setFillColor(r, g, b);
+    doc.roundedRect(MARGIN, top, logoWidth, logoHeight, 2.4, 2.4, "F");
+    doc.setFont("helvetica", "bold");
+    doc.setFontSize(11.5);
+    doc.setTextColor(255, 255, 255);
+    doc.text(
+      companyInitials(settings.companyName),
+      MARGIN + logoWidth / 2,
+      top + logoHeight / 2 + 1.6,
+      { align: "center" },
+    );
+    doc.setTextColor(20, 30, 45);
+    leftX = MARGIN + logoWidth + 5;
   }
 
   const nameWidth = Math.max(40, badgeX - leftX - 6);
@@ -355,12 +384,13 @@ function partyCellLines(doc: jsPDF, width: number, data: PartyCellInput) {
 function partyCellHeight(doc: jsPDF, width: number, data: PartyCellInput): number {
   const lines = partyCellLines(doc, width, data);
   return (
-    11 +
-    lines.name.length * 3.9 +
-    lines.address.length * 3.9 +
-    4 +
-    lines.extra.length * 3.9 +
-    3
+    7.6 +
+    3.4 +
+    lines.name.length * 3.4 +
+    lines.address.length * 3.4 +
+    3.4 +
+    lines.extra.length * 3.4 +
+    2.2
   );
 }
 
@@ -376,44 +406,45 @@ function drawPartyCell(
   doc.setDrawColor(0, 0, 0);
   doc.rect(x, y, width, height);
   doc.setFont("helvetica", "bold");
-  doc.setFontSize(7.4);
-  doc.text(data.heading, x + 3, y + 4.6);
+  doc.setFontSize(7.2);
+  doc.text(data.heading, x + 3, y + 4.2);
   doc.setFont("helvetica", "normal");
-  doc.setFontSize(7.8);
+  doc.setFontSize(7.6);
 
   const labelX = x + 3;
-  const valueX = x + 25;
-  const valueWidth = width - 28;
+  const valueX = x + 24;
+  const valueWidth = width - 27;
   const lines = partyCellLines(doc, width, data);
-  let lineY = y + 9.4;
+  const lineStep = 3.4;
+  let lineY = y + 8.4;
 
   doc.text("TIN No.", labelX, lineY);
   doc.text(data.tin || "—", valueX, lineY, { maxWidth: valueWidth });
-  lineY += 4;
+  lineY += lineStep;
 
   doc.text("Name", labelX, lineY);
   doc.setFont("helvetica", "bold");
   lines.name.forEach((line) => {
     doc.text(line, valueX, lineY);
-    lineY += 3.9;
+    lineY += lineStep;
   });
   doc.setFont("helvetica", "normal");
 
   doc.text("Address", labelX, lineY);
   lines.address.forEach((line) => {
     doc.text(line, valueX, lineY);
-    lineY += 3.9;
+    lineY += lineStep;
   });
 
   doc.text("Telephone", labelX, lineY);
   doc.text(data.phone || "—", valueX, lineY, { maxWidth: valueWidth });
-  lineY += 4;
+  lineY += lineStep;
 
   if (data.extra) {
     doc.text("VAT", labelX, lineY);
     lines.extra.forEach((line) => {
       doc.text(line, valueX, lineY);
-      lineY += 3.9;
+      lineY += lineStep;
     });
   }
 }
@@ -426,7 +457,7 @@ function drawPartyCells(
 ): number {
   const half = CONTENT_WIDTH / 2;
   const height = Math.max(
-    42,
+    24,
     partyCellHeight(doc, half, left),
     partyCellHeight(doc, half, right),
   );
@@ -706,7 +737,9 @@ export function drawIrdDocument(
     y = drawTotalRow(
       doc,
       y,
-      `VAT @ ${data.totals.vatRate.toFixed(2)}%`,
+      data.totals.vatRate > 0
+        ? `VAT @ ${data.totals.vatRate.toFixed(2)}%`
+        : "VAT (all section bills)",
       data.totals.vatAmount,
     );
     y = drawTotalRow(
@@ -946,7 +979,7 @@ export function buildIrdInsuranceBillPdf(
   );
   const supply = roundCurrency(Math.max(0, lines.total - vatAmount));
   const data: IrdDocument = {
-    title: job.isVatInvoice ? "INSURANCE TAX INVOICE" : "INSURANCE INVOICE",
+    title: job.isVatInvoice ? "TAX INVOICE" : "INVOICE",
     referenceLabel: "Invoice No",
     reference: claim.insuranceBillNo || job.id,
     documentNumber: `No: ${claim.insuranceBillNo || job.id}`,
@@ -995,10 +1028,7 @@ export function buildIrdInsuranceBillPdf(
         lines:
           detail?.parts && detail.parts.length > 0
             ? detail.parts.map((part) => ({
-                description:
-                  part.partSource === "Customer_Brought"
-                    ? `${part.itemName} (customer supplied)`
-                    : part.itemName,
+                description: part.itemName,
                 qty: partIssueQty(part),
                 unitPrice: part.sellingPrice,
                 kind: "Part" as const,
@@ -1073,13 +1103,14 @@ export function vehicleBillDocument(
       ),
   );
   const discount = roundCurrency(bill.discount ?? 0);
+  const customerPartsCredit = roundCurrency(bill.customerPartsCredit ?? 0);
   const hasBillLines = billTasks.length > 0 || billParts.length > 0;
   const net = roundCurrency(
     bill.netPayable ?? bill.amount ?? Math.max(0, labor + partsTotal - discount),
   );
   const supply = roundCurrency(
     isShortfall && !hasBillLines
-      ? net
+      ? net + customerPartsCredit
       : Math.max(0, labor + partsTotal - discount),
   );
   const vatRate =
@@ -1090,7 +1121,7 @@ export function vehicleBillDocument(
       (isShortfall ? 0 : (supply * Math.max(0, vatRate)) / 100),
   );
   const total = roundCurrency(
-    isShortfall && !hasBillLines ? net : supply + vatAmount,
+    isShortfall && !hasBillLines ? net + customerPartsCredit : supply + vatAmount,
   );
   const deductions: { label: string; amount: number }[] = [];
   if ((bill.policyExcess ?? 0) > 0) {
@@ -1109,6 +1140,12 @@ export function vehicleBillDocument(
     deductions.push({
       label: "Less: Advance Paid",
       amount: roundCurrency(bill.advance ?? 0),
+    });
+  }
+  if (isShortfall && customerPartsCredit > 0) {
+    deductions.push({
+      label: "Less: Customer-supplied parts already paid",
+      amount: customerPartsCredit,
     });
   }
   const deducted = roundCurrency(
@@ -1138,10 +1175,7 @@ export function vehicleBillDocument(
     sections.push({
       title: "Parts & materials",
       lines: billParts.map((part) => ({
-        description:
-          part.partSource === "Customer_Brought"
-            ? `${part.itemName} (customer supplied — billed to insurer only)`
-            : part.itemName,
+        description: part.itemName,
         qty: partIssueQty(part),
         unitPrice: part.sellingPrice,
         kind: "Part" as const,
@@ -1154,10 +1188,12 @@ export function vehicleBillDocument(
       lines: [
         {
           description: isShortfall
-            ? "Difference between the insurance bill and the insurer release order (penalty / under-value), payable by the customer."
+            ? customerPartsCredit > 0
+              ? "Difference between the insurance bill and the insurer release order (penalty / under-value), before customer-supplied parts already paid."
+              : "Difference between the insurance bill and the insurer release order (penalty / under-value), payable by the customer."
             : bill.notes?.trim() || "Approved bill value",
           qty: 1,
-          unitPrice: net,
+          unitPrice: net + (isShortfall ? customerPartsCredit : 0),
           kind: "Labour" as const,
         },
       ],
@@ -1182,15 +1218,7 @@ export function vehicleBillDocument(
         tin: job.customerTinNumber ?? "",
       };
 
-  const title = isInsurance
-    ? job.isVatInvoice
-      ? "INSURANCE TAX INVOICE"
-      : "INSURANCE INVOICE"
-    : bill.kind === "Additional"
-      ? "ADDITIONAL INVOICE"
-      : job.isVatInvoice
-        ? "TAX INVOICE"
-        : "INVOICE";
+  const title = job.isVatInvoice ? "TAX INVOICE" : "INVOICE";
 
   const releaseOrderNote =
     bill.releaseOrderNo && bill.releaseOrderAmount !== undefined
@@ -1207,10 +1235,20 @@ export function vehicleBillDocument(
     isInsurance
       ? "Billed to the insurance company for the approved claim. Policy excess, depreciation and non-covered items are billed separately to the vehicle owner."
       : isShortfall
-        ? "This additional bill covers the difference between the insurer release order and the insurance bill (penalty / under-value). It is payable in full by the customer."
+        ? "This bill covers the difference between the insurer release order and the insurance bill (penalty / under-value). It is payable in full by the customer."
         : "This bill is payable in full by the customer. The insurance claim, where applicable, is billed separately to the insurer.",
     isInsurance && customerBrought.length > 0
-      ? "Customer-supplied parts are shown at the agreed value for the insurance claim only and are not charged to the customer."
+      ? `Customer-supplied parts valued ${money(
+          customerBrought.reduce(
+            (sum, part) => sum + part.sellingPrice * partIssueQty(part),
+            0,
+          ),
+        )} are included at the agreed value and are treated as already paid by the customer.`
+      : "",
+    isShortfall && customerPartsCredit > 0
+      ? `Customer-supplied parts already paid ${money(
+          customerPartsCredit,
+        )} are credited above so the customer is not charged twice.`
       : "",
     isInsurance && deductions.length > 0
       ? "Deductions shown above are payable by the customer and are not included in the amount claimed from the insurer."
@@ -1510,7 +1548,7 @@ function renderIrdHtml(settings: WorkshopSettings, data: IrdDocument): string {
       : "",
     `<tr><td colspan="4" class="label">Total Value of Supply</td><td class="num">${money(data.totals.supply, 2)}</td></tr>`,
     data.totals.vatAmount > 0
-      ? `<tr><td colspan="4" class="label">VAT @ ${data.totals.vatRate.toFixed(2)}%</td><td class="num">${money(data.totals.vatAmount, 2)}</td></tr>
+      ? `<tr><td colspan="4" class="label">${data.totals.vatRate > 0 ? `VAT @ ${data.totals.vatRate.toFixed(2)}%` : "VAT (all section bills)"}</td><td class="num">${money(data.totals.vatAmount, 2)}</td></tr>
          <tr class="strong"><td colspan="4" class="label">Total Value Including VAT (Rs.)</td><td class="num">${money(data.totals.total, 2)}</td></tr>`
       : `<tr class="strong"><td colspan="4" class="label">Total Value (Rs.)</td><td class="num">${money(data.totals.total, 2)}</td></tr>`,
     ...(data.deductionRows && data.deductionRows.length > 0

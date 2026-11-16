@@ -21,7 +21,7 @@ import {
 import { useApp } from "../state/AppStore";
 import { featureEnabled } from "../lib/features";
 import { pnlFor } from "../lib/analytics";
-import { jobTotals, money, shortDate, timeAgo, waLink } from "../lib/utils";
+import { jobTotals, money, partIssueQty, shortDate, timeAgo, waLink } from "../lib/utils";
 import { checkoutMessage } from "../lib/messages";
 import {
   downloadInvoice,
@@ -49,7 +49,7 @@ import type {
 type CashierTab = "queue" | "bills" | "advances" | "settled" | "credits";
 
 export function CashierPage() {
-  const { state, checkoutJob, recordAdvancePayment, settleVehicleBill } = useApp();
+  const { state, currentUser, checkoutJob, recordAdvancePayment, settleVehicleBill } = useApp();
   const { push } = useToast();
   const [tab, setTab] = useState<CashierTab>("queue");
   const [checkoutTargetId, setCheckoutTargetId] = useState<string | null>(null);
@@ -76,6 +76,8 @@ export function CashierPage() {
   const [paymentBillId, setPaymentBillId] = useState<string | null>(null);
   const [billPaymentMethod, setBillPaymentMethod] =
     useState<VehicleBillPaymentMethod>("Cash");
+  const [billDiscount, setBillDiscount] = useState("0");
+  const [billTaxEnabled, setBillTaxEnabled] = useState(true);
 
   const queue = state.jobCards
     .filter((job) => job.status === "Repair Completed")
@@ -127,9 +129,8 @@ export function CashierPage() {
     state.vehicleBills.find((bill) => bill.id === releaseBillId) ?? null;
   const paymentBill =
     state.vehicleBills.find((bill) => bill.id === paymentBillId) ?? null;
-  const releaseNet = releaseBill
-    ? releaseBill.netPayable ?? releaseBill.amount
-    : 0;
+  const releaseNet = releaseBill ? billCharges(releaseBill).net : 0;
+  const paymentNet = paymentBill ? billCharges(paymentBill).net : 0;
   const releaseApproved = Number(releaseAmount) || 0;
   const releaseShortfall = Math.max(
     0,
@@ -372,6 +373,61 @@ export function CashierPage() {
       : [];
   }
 
+  function billCharges(
+    bill: VehicleBill,
+    discountInput: string = billDiscount,
+    taxEnabled: boolean = billTaxEnabled,
+  ) {
+    const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
+    const tasks = billTasks(bill);
+    const parts = billParts(bill);
+    const dueParts =
+      bill.kind === "Insurance"
+        ? parts
+        : parts.filter((part) => part.partSource !== "Customer_Brought");
+    const labor =
+      bill.laborSubtotal ?? tasks.reduce((sum, task) => sum + task.laborCost, 0);
+    const partsTotal =
+      bill.partsSubtotal ??
+      dueParts.reduce(
+        (sum, part) => sum + part.sellingPrice * partIssueQty(part),
+        0,
+      );
+    const hasLines = tasks.length > 0 || parts.length > 0;
+    const isShortfall = bill.kind === "Additional" && Boolean(bill.parentBillId);
+    // Auto-created shortfall bills carry their payable total, not line items.
+    const gross = hasLines ? Math.max(0, labor + partsTotal) : billNet(bill);
+    const discount = Math.min(
+      gross,
+      Math.max(0, Math.round((Number(discountInput) || 0) * 100) / 100),
+    );
+    const supply = Math.max(0, gross - discount);
+    const vatRate =
+      !hasLines && isShortfall
+        ? 0
+        : taxEnabled
+          ? Math.max(
+              0,
+              bill.vatRate ??
+                (job?.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0),
+            )
+          : 0;
+    const vatAmount =
+      isShortfall || vatRate === 0 ? 0 : Math.round(supply * vatRate) / 100;
+    const net = Math.max(
+      0,
+      Math.round(
+        (supply +
+          vatAmount -
+          (bill.policyExcess ?? 0) -
+          (bill.depreciation ?? 0) -
+          (bill.advance ?? 0)) *
+          100,
+      ) / 100,
+    );
+    return { supply, discount, vatRate, vatAmount, net };
+  }
+
   function printBillDocument(bill: VehicleBill) {
     const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
     if (!job) {
@@ -386,6 +442,88 @@ export function CashierPage() {
       state.settings,
       insuranceForBill(bill),
     );
+  }
+
+  function printFinalBill(job: JobCard, bills: VehicleBill[]) {
+    const settled = bills.filter(
+      (bill) => bill.status === "Paid" || bill.status === "Release Order",
+    );
+    const sections = new Set(
+      bills.map((bill) => bill.sectionId).filter((id): id is string => Boolean(id)),
+    );
+    if (bills.length < 2 || sections.size < 2) {
+      push(
+        "The final bill is used when a vehicle has separate bills for different repair sections.",
+        "info",
+      );
+      return;
+    }
+    if (settled.length !== bills.length) {
+      push(
+        "Every section bill must be settled before the final bill can be printed.",
+        "error",
+      );
+      return;
+    }
+    const taskIds = Array.from(new Set(bills.flatMap((bill) => bill.taskIds ?? [])));
+    const partIds = Array.from(new Set(bills.flatMap((bill) => bill.partIds ?? [])));
+    const laborSubtotal = bills.reduce((sum, bill) => {
+      const tasks = bill.taskIds?.length
+        ? state.tasks.filter((task) => bill.taskIds?.includes(task.id))
+        : [];
+      return sum + (bill.laborSubtotal ?? tasks.reduce((total, task) => total + task.laborCost, 0));
+    }, 0);
+    const partsSubtotal = bills.reduce((sum, bill) => {
+      const parts = bill.partIds?.length
+        ? state.parts.filter((part) => bill.partIds?.includes(part.id))
+        : [];
+      return (
+        sum +
+        (bill.partsSubtotal ??
+          parts.reduce(
+            (total, part) => total + part.sellingPrice * partIssueQty(part),
+            0,
+          ))
+      );
+    }, 0);
+    const discount = bills.reduce((sum, bill) => sum + (bill.discount ?? 0), 0);
+    const vatAmount = bills.reduce((sum, bill) => sum + (bill.vatAmount ?? 0), 0);
+    const policyExcess = bills.reduce((sum, bill) => sum + (bill.policyExcess ?? 0), 0);
+    const depreciation = bills.reduce((sum, bill) => sum + (bill.depreciation ?? 0), 0);
+    const advance = bills.reduce((sum, bill) => sum + (bill.advance ?? 0), 0);
+    const net = bills.reduce((sum, bill) => sum + billNet(bill), 0);
+    const synthetic: VehicleBill = {
+      id: `final_${job.id}`,
+      jobCardId: job.id,
+      vehicleNo: job.vehicleNo,
+      kind: "Customer",
+      billNo: `FINAL-${job.id}`,
+      amount: Math.round(net * 100) / 100,
+      netPayable: Math.round(net * 100) / 100,
+      createdAt: new Date().toISOString(),
+      createdBy: currentUser?.name,
+      taskIds,
+      partIds,
+      laborSubtotal: Math.round(laborSubtotal * 100) / 100,
+      partsSubtotal: Math.round(partsSubtotal * 100) / 100,
+      discount: Math.round(discount * 100) / 100,
+      vatRate: 0,
+      vatAmount: Math.round(vatAmount * 100) / 100,
+      policyExcess: policyExcess > 0 ? Math.round(policyExcess * 100) / 100 : undefined,
+      depreciation: depreciation > 0 ? Math.round(depreciation * 100) / 100 : undefined,
+      advance: advance > 0 ? Math.round(advance * 100) / 100 : undefined,
+      notes:
+        "Final bill — every repair section on this vehicle completed and settled. Totals all section bills.",
+      status: "Paid",
+    };
+    printVehicleBill(
+      job,
+      synthetic,
+      state.tasks.filter((task) => taskIds.includes(task.id)),
+      state.parts.filter((part) => partIds.includes(part.id)),
+      state.settings,
+    );
+    push("Final consolidated bill opened for printing.");
   }
 
   async function downloadBillDocument(bill: VehicleBill) {
@@ -416,12 +554,24 @@ export function CashierPage() {
     setReleaseBillId(bill.id);
     setReleaseOrderNo(bill.releaseOrderNo ?? "");
     setReleaseAmount(String(billNet(bill)));
+    setBillDiscount(String(bill.discount ?? 0));
+    const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
+    setBillTaxEnabled(
+      (bill.vatRate ?? (job?.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0)) >
+        0,
+    );
     setPaymentBillId(null);
   }
 
   function openPaymentBill(bill: VehicleBill) {
     setPaymentBillId(bill.id);
     setBillPaymentMethod("Cash");
+    setBillDiscount(String(bill.discount ?? 0));
+    const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
+    setBillTaxEnabled(
+      (bill.vatRate ?? (job?.isVatInvoice ? state.settings.defaultVatRate ?? 18 : 0)) >
+        0,
+    );
     setReleaseBillId(null);
   }
 
@@ -439,6 +589,8 @@ export function CashierPage() {
       method: "Release Order",
       releaseOrderNo: releaseOrderNo.trim(),
       releaseOrderAmount: releaseApproved,
+      discount: Number(billDiscount) || 0,
+      taxEnabled: billTaxEnabled,
     });
     if (!result.ok) {
       push(result.message ?? "Could not release the insurance bill.", "error");
@@ -457,14 +609,16 @@ export function CashierPage() {
     if (!paymentBill) return;
     const result = settleVehicleBill(paymentBill.id, {
       method: billPaymentMethod,
-      amount: billNet(paymentBill),
+      amount: billCharges(paymentBill).net,
+      discount: Number(billDiscount) || 0,
+      taxEnabled: billTaxEnabled,
     });
     if (!result.ok) {
       push(result.message ?? "Could not collect the bill payment.", "error");
       return;
     }
     push(
-      `${paymentBill.billNo} paid in full — ${money(billNet(paymentBill))} collected by ${billPaymentMethod}.`,
+      `${paymentBill.billNo} paid in full — ${money(billCharges(paymentBill).net)} collected by ${billPaymentMethod}.`,
     );
     setPaymentBillId(null);
     setTab("bills");
@@ -812,6 +966,27 @@ export function CashierPage() {
                       <div className="tiny muted">
                         {open.length} open of {bills.length}
                       </div>
+                      {bills.length > 1 &&
+                        new Set(
+                          bills
+                            .map((bill) => bill.sectionId)
+                            .filter((id): id is string => Boolean(id)),
+                        ).size > 1 && (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            style={{ marginTop: 6 }}
+                            disabled={open.length > 0}
+                            title={
+                              open.length > 0
+                                ? "Settle every section bill first"
+                                : "Print one final bill totalling all sections"
+                            }
+                            onClick={() => printFinalBill(job, bills)}
+                          >
+                            <Printer />
+                            Final bill
+                          </button>
+                        )}
                     </div>
                   </div>
                   <div className="card-body stack">
@@ -890,7 +1065,7 @@ export function CashierPage() {
                                   {(bill.taskIds?.length ?? 0) + (bill.partIds?.length ?? 0)}
                                 </td>
                                 <td className="num strong">{money(billNet(bill))}</td>
-                                <td><StatusBadge status={bill.status ?? "Unpaid"} /></td>
+                                <td><StatusBadge status={bill.status === "Awaiting Release Order" ? "Waiting for releasing order" : bill.status ?? "Unpaid"} /></td>
                                 <td className="tiny muted">
                                   {bill.status === "Release Order" ? (
                                     <>
@@ -1236,6 +1411,45 @@ export function CashierPage() {
                   onChange={(event) => setReleaseAmount(event.target.value)}
                 />
               </Field>
+              <Field
+                label="Cashier discount (LKR)"
+                hint="Applied before tax. Use it to settle a negotiated adjustment."
+              >
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={billDiscount}
+                  onChange={(event) => setBillDiscount(event.target.value)}
+                />
+              </Field>
+              <Field label="Tax on this bill" hint="Cashier chooses whether VAT is added.">
+                <select
+                  className="select"
+                  value={billTaxEnabled ? "on" : "off"}
+                  onChange={(event) => setBillTaxEnabled(event.target.value === "on")}
+                >
+                  <option value="on">Add VAT</option>
+                  <option value="off">No tax on this bill</option>
+                </select>
+              </Field>
+            </div>
+            <div className="card">
+              <div className="card-body">
+                <div className="kv">
+                  <span>Supply after discount</span>
+                  <span>{money(billCharges(releaseBill).supply)}</span>
+                </div>
+                <div className="kv">
+                  <span>VAT {billCharges(releaseBill).vatRate.toFixed(2)}%</span>
+                  <span>{money(billCharges(releaseBill).vatAmount)}</span>
+                </div>
+                <div className="kv">
+                  <span>Net payable by insurer</span>
+                  <span className="strong">{money(releaseNet)}</span>
+                </div>
+              </div>
             </div>
             {releaseShortfall > 0.005 ? (
               <div className="alert alert-warn">
@@ -1270,7 +1484,7 @@ export function CashierPage() {
         title="Collect customer bill payment"
         subtitle={
           paymentBill
-            ? `${paymentBill.billNo} · ${paymentBill.vehicleNo} · ${money(billNet(paymentBill))}`
+            ? `${paymentBill.billNo} · ${paymentBill.vehicleNo} · ${money(paymentNet)}`
             : undefined
         }
         footer={
@@ -1280,7 +1494,7 @@ export function CashierPage() {
             </button>
             <button className="btn btn-primary" onClick={confirmBillPayment}>
               <CheckCircle2 />
-              Collect {paymentBill ? money(billNet(paymentBill)) : "payment"}
+              Collect {paymentBill ? money(paymentNet) : "payment"}
             </button>
           </>
         }
@@ -1309,7 +1523,48 @@ export function CashierPage() {
                 )}
                 <div className="kv">
                   <span>Amount to collect</span>
-                  <span className="strong">{money(billNet(paymentBill))}</span>
+                  <span className="strong">{money(paymentNet)}</span>
+                </div>
+              </div>
+            </div>
+            <div className="form-grid">
+              <Field
+                label="Cashier discount (LKR)"
+                hint="Applied before tax. Printed on the bill."
+              >
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  step="0.01"
+                  value={billDiscount}
+                  onChange={(event) => setBillDiscount(event.target.value)}
+                />
+              </Field>
+              <Field label="Tax on this bill" hint="Cashier chooses whether VAT is added.">
+                <select
+                  className="select"
+                  value={billTaxEnabled ? "on" : "off"}
+                  onChange={(event) => setBillTaxEnabled(event.target.value === "on")}
+                >
+                  <option value="on">Add VAT</option>
+                  <option value="off">No tax on this bill</option>
+                </select>
+              </Field>
+            </div>
+            <div className="card">
+              <div className="card-body">
+                <div className="kv">
+                  <span>Supply after discount</span>
+                  <span>{money(billCharges(paymentBill).supply)}</span>
+                </div>
+                <div className="kv">
+                  <span>VAT {billCharges(paymentBill).vatRate.toFixed(2)}%</span>
+                  <span>{money(billCharges(paymentBill).vatAmount)}</span>
+                </div>
+                <div className="kv">
+                  <span>Net payable by customer</span>
+                  <span className="strong">{money(paymentNet)}</span>
                 </div>
               </div>
             </div>

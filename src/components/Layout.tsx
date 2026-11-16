@@ -18,6 +18,7 @@ import {
   ReceiptText,
   Search,
   Settings,
+  ShieldCheck,
   Users,
   Volume2,
   VolumeX,
@@ -60,6 +61,13 @@ const navItems: NavItem[] = [
   { to: "/workshop", label: "Workshop floor", icon: Wrench, departments: ["Supervisor"] },
   { to: "/stores", label: "Stores & stock", icon: PackageSearch, departments: ["Stores"] },
   { to: "/cashier", label: "Billing", icon: ReceiptText, departments: ["Cashier"] },
+  {
+    to: "/insurance-desk",
+    label: "Insurance desk",
+    icon: ShieldCheck,
+    departments: ["Cashier", "Accounting", "Supervisor", "Stores"],
+    features: ["enable_insurance_module"],
+  },
   {
     to: "/accounting",
     label: "Accounts",
@@ -144,10 +152,24 @@ export function AppShell() {
       state.checkIns.filter((c) => c.status === "Awaiting Approval").length +
       state.jobCards.filter((j) => j.status === "Paid" || j.status === "Released on Credit").length,
     workshop: state.jobCards.filter((j) => j.status === "In Progress").length,
-    stores: state.parts.filter((p) =>
-      ["Requested", "Exchange Pending", "Return Pending", "Backordered"].includes(p.status),
+    stores: state.parts.filter(
+      (p) =>
+        ["Requested", "Exchange Pending", "Return Pending", "Backordered"].includes(p.status) &&
+        p.partSource !== "Customer_Brought" &&
+        !(p.estimateId && !p.partSource),
     ).length,
     cashier: state.jobCards.filter((j) => j.status === "Repair Completed").length,
+    "insurance-desk": state.insuranceJobs.filter((claim) => {
+      const job = state.jobCards.find((entry) => entry.id === claim.jobCardId);
+      if (!job || (job.status !== "Paid" && job.status !== "Released on Credit")) return false;
+      return (
+        claim.status !== "Settled" ||
+        (claim.salvageStatus !== "Submitted" &&
+          state.parts.some(
+            (part) => part.jobCardId === claim.jobCardId && part.salvageStatus === "Pending",
+          ))
+      );
+    }).length,
     accounting:
       state.purchases.filter((p) => p.status === "Unpaid" && p.type === "Credit").length +
       state.customerCredits.filter((c) => c.status !== "Settled").length,
@@ -195,23 +217,25 @@ export function AppShell() {
 
         <div className="sidebar-section">
           <div className="sidebar-label">Operations</div>
-          {visibleNav.slice(0, 8).map((item) => {
-            const Icon = item.icon;
-            const count = counts[item.to.slice(1)] ?? 0;
-            return (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                className={({ isActive }) => classNames("nav-link", isActive && "active")}
-                onClick={() => setMenuOpen(false)}
-                end={item.end}
-              >
-                <Icon />
-                <span>{item.label}</span>
-                {count > 0 && <span className="nav-badge">{count > 99 ? "99+" : count}</span>}
-              </NavLink>
-            );
-          })}
+          {visibleNav
+            .filter((item) => !item.ownerOnly)
+            .map((item) => {
+              const Icon = item.icon;
+              const count = counts[item.to.slice(1)] ?? 0;
+              return (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  className={({ isActive }) => classNames("nav-link", isActive && "active")}
+                  onClick={() => setMenuOpen(false)}
+                  end={item.end}
+                >
+                  <Icon />
+                  <span>{item.label}</span>
+                  {count > 0 && <span className="nav-badge">{count > 99 ? "99+" : count}</span>}
+                </NavLink>
+              );
+            })}
         </div>
 
         {(owner || visibleNav.some((n) => n.ownerOnly)) && (

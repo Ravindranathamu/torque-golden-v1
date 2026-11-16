@@ -53,6 +53,7 @@ const emptyStaffForm = {
   baseSalary: "0",
   commissionRate: "0",
   workerId: "",
+  sectionIds: [] as string[],
   active: true,
 };
 
@@ -76,6 +77,7 @@ const emptyWorkerForm = {
   etfEnabled: true,
   commissionEnabled: true,
   allowedOffDaysPerMonth: "2",
+  sectionIds: [] as string[],
 };
 
 export function TeamPage() {
@@ -84,6 +86,8 @@ export function TeamPage() {
   const [tab, setTab] = useState<TeamTab>("staff");
   const [unlockedLocal, setUnlockedLocal] = useState(false);
   const cloudMode = cloudStatus !== "disabled";
+  const sectionsEnabled =
+    featureEnabled(state.settings, "enable_multi_sections") && state.sections.length > 0;
   const unlocked = cloudMode ? Boolean(currentUser?.isOwner) : unlockedLocal;
   const [password, setPassword] = useState("");
   const [staffOpen, setStaffOpen] = useState(false);
@@ -157,6 +161,7 @@ export function TeamPage() {
       baseSalary: String(user.baseSalary),
       commissionRate: String(user.commissionRate),
       workerId: user.workerId ?? "",
+      sectionIds: [...(user.sectionIds ?? [])],
       active: user.active,
     });
     setStaffOpen(true);
@@ -191,6 +196,17 @@ export function TeamPage() {
       push("Choose at least one department for this staff member.", "error");
       return;
     }
+    if (
+      sectionsEnabled &&
+      !editingUser?.isOwner &&
+      staffForm.departments.some(
+        (department) => department === "Supervisor" || department === "Stores",
+      ) &&
+      staffForm.sectionIds.length === 0
+    ) {
+      push("Choose at least one workshop section for this supervisor or storekeeper.", "error");
+      return;
+    }
     const baseSalary = Number(staffForm.baseSalary);
     const commissionRate = Number(staffForm.commissionRate);
     if (!Number.isFinite(baseSalary) || baseSalary < 0 || !Number.isFinite(commissionRate) || commissionRate < 0) {
@@ -207,6 +223,7 @@ export function TeamPage() {
         email: staffForm.email.trim() || undefined,
         gdriveEmail: staffForm.gdriveEmail.trim() || undefined,
         departments: editingUser.isOwner ? [] : staffForm.departments,
+        sectionIds: editingUser.isOwner ? [] : staffForm.sectionIds,
         baseSalary,
         commissionRate,
         workerId: staffForm.workerId || undefined,
@@ -245,6 +262,7 @@ export function TeamPage() {
         pin: staffForm.pin,
         isOwner: false,
         departments: staffForm.departments,
+        sectionIds: staffForm.sectionIds,
         phone: staffForm.phone.trim(),
         email: staffForm.email.trim() || undefined,
         gdriveEmail: staffForm.gdriveEmail.trim() || undefined,
@@ -315,6 +333,7 @@ export function TeamPage() {
       etfEnabled: worker.etfEnabled,
       commissionEnabled: worker.commissionEnabled,
       allowedOffDaysPerMonth: String(worker.allowedOffDaysPerMonth),
+      sectionIds: [...(worker.sectionIds ?? [])],
     });
     setWorkerOpen(true);
   }
@@ -322,6 +341,10 @@ export function TeamPage() {
   function saveWorker() {
     if (!workerForm.fullName.trim() || !workerForm.phone.trim()) {
       push("Worker name and phone are required.", "error");
+      return;
+    }
+    if (sectionsEnabled && workerForm.sectionIds.length === 0) {
+      push("Choose the section this worker works in.", "error");
       return;
     }
     const baseSalary = Number(workerForm.baseSalary);
@@ -360,6 +383,7 @@ export function TeamPage() {
       etfEnabled: workerForm.etfEnabled,
       commissionEnabled: workerForm.commissionEnabled,
       allowedOffDaysPerMonth,
+      sectionIds: workerForm.sectionIds,
     };
     if (editingWorker) {
       updateWorker({ ...editingWorker, ...payload });
@@ -1001,6 +1025,44 @@ export function TeamPage() {
             </div>
           )}
 
+          {!editingUser?.isOwner && sectionsEnabled && (
+            <div className="field">
+              <label>
+                Workshop sections <span className="req">*</span>
+              </label>
+              <div className="dept-picker">
+                {state.sections
+                  .filter((section) => section.active)
+                  .map((section) => (
+                    <label
+                      key={section.id}
+                      className={`dept-option ${
+                        staffForm.sectionIds.includes(section.id) ? "selected" : ""
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={staffForm.sectionIds.includes(section.id)}
+                        onChange={(event) =>
+                          setStaffForm({
+                            ...staffForm,
+                            sectionIds: event.target.checked
+                              ? [...staffForm.sectionIds, section.id]
+                              : staffForm.sectionIds.filter((entry) => entry !== section.id),
+                          })
+                        }
+                      />
+                      {section.name}
+                    </label>
+                  ))}
+              </div>
+              <span className="hint">
+                Several supervisors can serve the same section and work separately. A
+                supervisor or storekeeper only sees the sections ticked here.
+              </span>
+            </div>
+          )}
+
           <div className="form-grid">
             <Field label="Base salary (LKR)" hint="Owner-only payroll data.">
               <input
@@ -1125,6 +1187,44 @@ export function TeamPage() {
               />
             </Field>
           </div>
+
+          {sectionsEnabled && (
+            <div className="field">
+              <label>
+                Works in sections <span className="req">*</span>
+              </label>
+              <div className="dept-picker">
+                {state.sections
+                  .filter((section) => section.active)
+                  .map((section) => (
+                    <label
+                      key={section.id}
+                      className={`dept-option ${
+                        workerForm.sectionIds.includes(section.id) ? "selected" : ""
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={workerForm.sectionIds.includes(section.id)}
+                        onChange={(event) =>
+                          setWorkerForm({
+                            ...workerForm,
+                            sectionIds: event.target.checked
+                              ? [...workerForm.sectionIds, section.id]
+                              : workerForm.sectionIds.filter((entry) => entry !== section.id),
+                          })
+                        }
+                      />
+                      {section.name}
+                    </label>
+                  ))}
+              </div>
+              <span className="hint">
+                Workers only appear in the sections they belong to when a supervisor
+                assigns a task.
+              </span>
+            </div>
+          )}
 
           <div className="form-grid">
             <Field label="Base salary (LKR)" required>

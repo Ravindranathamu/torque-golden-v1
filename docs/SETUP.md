@@ -416,9 +416,9 @@ policies. The only anonymous portal RPC is `poll_workshop_license(text)`.
 | Workflow | Tables | Key rules |
 | --- | --- | --- |
 | Advance payments | `advance_payments` | Amount > 0; unique receipt per workshop; balance = advances not yet applied at checkout. Cashier and Accounting only. |
-| Estimates | `job_estimates` | Exactly one Initial estimate per job; later estimates are `SUP-01`, `SUP-02`; Draft → Awaiting Approval → Approved/Rejected; editing an approved estimate is locked and creates a new revision (`Rev 2`). |
-| Insurance claim | `insurance_claims`, `job_parts.salvage_*` | One claim per job; estimate and parts approval are separate; release order can arrive before cheque/salvage; insurer bill and customer bill are recorded separately; insurer TIN and branch override feed the IRD bill; salvage tracked per part. |
-| Separate vehicle bills | `vehicle_bills`, `job_tasks.assigned_bill_id`, `job_parts.assigned_bill_id` | Each vehicle can have an Insurance bill, a Customer bill and Additional shortfall bills. Ticked tasks/parts lock to one bill. Insurance bills settle on the insurer release order; customer and additional bills are paid in full by the customer. A release order below the insurance bill creates an Additional customer bill for the difference (penalty / under-value). Settled bills are immutable. Customer-brought parts are priced on the insurance bill only and never charged to the customer. |
+| Estimates | `job_estimates`, `job_estimates.section_id` | Exactly one Initial estimate per repair section (one per job when sections are off); later estimates are `SUP-01`, `SUP-02`; Draft → Awaiting Approval → Approved/Rejected; editing an approved estimate is locked and creates a new revision (`Rev 2`). Approval loads labour as unassigned tasks; the supervisor assigns workers before completion. |
+| Insurance claim | `insurance_claims`, `job_parts.salvage_*` | One claim per job; estimate and parts approval are separate; release order can arrive before cheque/salvage; insurer bill and customer bill are recorded separately; insurer TIN and branch override feed the IRD bill; salvage tracked per part. After release, salvage and cheque settlement stay open in **Insurance desk**: supervisors/storekeepers submit salvage, cashier/accounting record the cheque and settle the claim. |
+| Separate vehicle bills | `vehicle_bills`, `job_tasks.assigned_bill_id`, `job_parts.assigned_bill_id` | Each vehicle can have an Insurance bill, a Customer bill and Additional shortfall bills, optionally tagged to a repair section. Ticked tasks/parts lock to one bill. Insurance bills start as `Awaiting Release Order` (shown as *Waiting for releasing order*); they settle on the insurer release order, while customer and additional bills are paid in full. A release order below the insurance bill creates an Additional customer bill for the difference after tax, reduced by customer-brought value already paid on the insurance bill; the credit prints as a deduction. Section bills settle independently; the consolidated **Final bill** prints only when every section bill is settled. Settled bills are immutable. Customer-brought parts are priced on the insurance bill only and never charged to the customer or sent to stores. |
 | Daily Google Drive backup | `workshops.drive_backup_*`, `app_records` | A complete JSON snapshot uploads once a day to Drive through a secured Apps Script or Edge Function webhook. The browser catches up at the next launch if it was closed at the configured hour. Last success time, status and filename are stored in settings. See `docs/GOOGLE_DRIVE_BACKUP.md`. |
 | Attendance | `attendance_records` | One row per worker per date; Present/Absent/Off Day; only Present workers can be assigned to tasks. |
 | Monthly payroll | `staff_loans`, `payslips` | Basic pay prorated by payable days; commission added; loan deduction, EPF employee deduction and other deductions reduce net. EPF/ETF employer amounts are reported but not deducted. |
@@ -449,15 +449,34 @@ Operational notes:
   record the insurance portion when the job is billed to an insurer. Never
   double-count an advance as both a receipt and a payment.
 - Release the vehicle on the insurer's release note; do not block handover on
-  cheque clearance. Keep salvage and cheque status visible in Accounting.
+  cheque clearance. Salvage submission and cheque settlement then remain open in
+  **Insurance desk** until the supervisor/storekeeper and cashier/accountant
+  close them.
 - Settle split bills in **Cashier → Separate bills**. An insurance bill is
   released against the insurer release order; the customer and additional bills
   are collected in full. If the release order is lower than the insurance bill,
   the shortfall is created automatically as an Additional bill payable by the
-  customer. Never mutate the insurance bill to absorb the shortfall.
+  customer. Never mutate the insurance bill to absorb the shortfall. The basis is
+  the insurance bill grand total after tax, less any customer-brought value
+  already included in that bill and paid by the customer.
+- Cashier may add a discount before tax and may choose **With VAT** or **Without
+  VAT** on each bill. The release/payment preview shows the resulting supply, VAT
+  and net payable before the bill is settled.
+- Repair sections estimate, work and bill independently. The consolidated final
+  bill is available only when at least two section bills exist and every one is
+  settled; it totals all section bills and applies the same insurance
+  release-order/additional-bill rules to the combined total.
+- Estimate approval never auto-assigns a technician. A job cannot be marked
+  repair-completed while any labour task has no worker.
+- Estimate parts load with no source. The supervisor must choose **Store
+  supplied** or **Customer brought** before the request reaches stores. Store
+  supply deducts stock normally; customer-brought marks the part issued without a
+  stock movement and never appears in the stores issue/swap queues.
 - Customer-brought parts are priced on the insurance bill at the agreed value and
   are excluded from customer invoices, workshop parts revenue and the ledger
-  parts revenue. The store blocks them from Customer and Additional bills.
+  parts revenue. The store blocks them from Customer and Additional bills. A
+  swap or return goes back to the customer with a WhatsApp message; it never goes
+  into stores and never creates a store return/exchange request.
 - Configure the daily Google Drive backup under **Settings → Data & backup** and
   run **Backup now** once. See `docs/GOOGLE_DRIVE_BACKUP.md` for the Apps Script
   or Edge Function receiver.
@@ -879,6 +898,12 @@ npx vercel --prod
 - [ ] Cashier advance-payment data restricted to Owner/Cashier/Accounting.
 - [ ] Insurance claim and estimate writes restricted to Owner/Supervisor/Cashier
       as defined by the policies.
+- [ ] Release order, insurance/customer bill creation, cheque and claim
+      settlement restricted to Owner/Cashier/Accounting; salvage submission
+      restricted to Owner/Supervisor/Stores.
+- [ ] Supervisors and storekeepers are scoped to their assigned sections, and
+      worker profiles pick the sections they work in when multi-section mode is
+      enabled.
 - [ ] Licence keys validated on a trusted service; signing secret never shipped
       to the browser.
 - [ ] Service-role key only in trusted server environments.
@@ -919,6 +944,11 @@ npx vercel --prod
 | Daily wage not accumulating | Attendance not marked | Mark Present on each worked day before payout |
 | Advance not reducing the bill | Advance recorded against another job | Check the job number on the advance receipt |
 | Insurance job cannot be released | Release order not recorded | Record the insurer release note in the Insurance tab |
+| Repair completion blocked | Estimate-approved task has no technician | Assign a worker to every labour task in Job → Labour & tasks |
+| Stores does not see an estimate part | Supervisor has not chosen the part source | In Job → Parts & materials choose Store supplied or Customer brought |
+| Final bill button is missing | Bills are not tagged to two or more sections | Tag each section bill with its repair section; settle every section bill first |
+| Insurance desk shows nothing | Vehicle not released, or salvage/claim already closed | Release the vehicle, then check salvage per part and the claim cheque status |
+| Customer-brought part cannot go to stores | Customer parts never enter stock | Hand it back with the swap/return button; WhatsApp the owner |
 
 ---
 

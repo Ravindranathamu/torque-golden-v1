@@ -198,10 +198,13 @@ export function StoresPage() {
 
   const issueRequests = state.parts
     .filter((part) => ["Requested", "Backordered"].includes(part.status))
+    .filter((part) => !(part.estimateId && !part.partSource))
+    .filter((part) => part.partSource !== "Customer_Brought")
     .filter((part) => matchesPartSection(part))
     .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   const swapRequests = state.parts
     .filter((part) => ["Exchange Pending", "Return Pending"].includes(part.status))
+    .filter((part) => part.partSource !== "Customer_Brought")
     .filter((part) => matchesPartSection(part))
     .sort((a, b) => a.updatedAt.localeCompare(b.updatedAt));
   const warrantyClaims = state.parts

@@ -255,6 +255,10 @@ export interface JobPart {
   assignedBillId?: string;
   /** Insurance job only — supplied by the customer, never deducted from stores. */
   partSource?: "Workshop_Store" | "Customer_Brought";
+  /** Customer-brought part handed back / swapped back to the owner. */
+  customerReturnAt?: string;
+  customerReturnMode?: "Return" | "Swap";
+  customerReturnNote?: string;
   /** Insurance job only — workshop parts added outside the claim. */
   isCustomerExtra?: boolean;
   /** Workshop quoted price retained when the assessor approves a different figure. */
@@ -293,11 +297,15 @@ export interface EstimateLine {
   approvedUnitPrice?: number;
   /** Rejection reason or assessor price note. */
   approvalNote?: string;
+  /** Supervisor choice when the approved part is loaded onto the job. */
+  partSource?: "Workshop_Store" | "Customer_Brought";
 }
 
 export interface JobEstimate {
   id: string;
   jobCardId: string;
+  /** Repair section when the workshop runs multiple sections. */
+  sectionId?: string;
   kind: "Initial" | "Supplementary";
   /** Globally sequential document number: EST-YYYY-0001. */
   number: string;
@@ -968,7 +976,11 @@ export interface WorkshopLoanPayment {
   recordedBy?: string;
 }
 
-export type VehicleBillStatus = "Unpaid" | "Paid" | "Release Order";
+export type VehicleBillStatus =
+  | "Unpaid"
+  | "Awaiting Release Order"
+  | "Paid"
+  | "Release Order";
 export type VehicleBillPaymentMethod =
   | "Cash"
   | "Card"
@@ -1016,6 +1028,10 @@ export interface VehicleBill {
   shortfallBillId?: string;
   /** Insurance bill that produced this shortfall adjustment. */
   parentBillId?: string;
+  /** Customer-brought part value already paid, credited against a shortfall. */
+  customerPartsCredit?: number;
+  /** Repair section this bill belongs to when the workshop runs multiple sections. */
+  sectionId?: string;
 }
 
 export interface AppState {

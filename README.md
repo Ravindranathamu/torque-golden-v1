@@ -142,6 +142,13 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   actions, with WhatsApp notes to the customer.
 - **Multiple bills per vehicle**: separate customer and insurance bills can be
   recorded against the same job with independent numbers, amounts and notes.
+  Insurance bills are created as **Awaiting Release Order** and appear in the
+  cashier as *Waiting for releasing order*. A release order below the insurance
+  bill creates an **Additional** customer bill for the shortfall after tax; the
+  shortfall is reduced by any customer-brought parts already valued on the
+  insurance bill, and the additional bill prints that credit as a deduction. When
+  a vehicle has bills for more than one repair section, Cashier prints one
+  consolidated **Final bill** only after every section bill is settled.
 - **PRO billing-gate override**: the PRO can release an unpaid completed vehicle
   with a mandatory reason. The job becomes *Released on Credit*, a 7-day customer
   credit opens, and Owner/Cashier/Accounting are notified.
@@ -165,6 +172,13 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   optional per-section stores.
 - Tasks, parts and ledger revenue are section-tagged, so Accounting reports
   revenue, parts cost, commission, gross profit and margin per section.
+- Sections can hold their own estimate, tasks, parts and bill. One section can be
+  completed and billed while another is still in progress. When every section
+  bill is settled, Cashier prints a single final bill totalling the whole vehicle;
+  insurance release-order and shortfall rules apply to that combined total.
+- Several supervisors can serve the same section and work independently. Worker
+  and staff profiles pick their sections, and supervisors/storekeepers only see
+  the sections ticked on their profile.
 
 ### Modules & provisioning
 - Owner-selectable modules saved as feature flags:
@@ -181,15 +195,26 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   through the developer portal licence sync.
 
 ### Estimates & insurance
-- Estimates (one Initial per job, then `SUP-01`, `SUP-02` supplements) prepared
-  by the Supervisor, including for vehicles already checked in. Estimates are
-  editable with revision tracking (`Rev 2`) and lock after approval.
+- Estimates (one Initial estimate per repair section, then `SUP-01`, `SUP-02`
+  supplements) prepared by the Supervisor, including for vehicles already
+  checked in. Estimates are editable with revision tracking (`Rev 2`) and lock
+  after approval. Each estimate can be tagged to a workshop section.
 - Estimate-only jobs hide **Add task**, **Request parts** and **Complete repair**
   until approval; approval copies the estimate lines into tasks/parts and moves
-  the job to **In Progress**.
-- Insurance workflow: estimate approval → parts approval → supplementary
-  estimates → insurance bill → customer bill → release order → salvage
-  submission → cheque receipt and clearing.
+  the job to **In Progress**. Approved tasks load **unassigned** — the supervisor
+  must assign a technician to every task before the repair can be completed.
+- Estimate parts load without a source. Before stores sees a request, the
+  supervisor marks each part **Store supplied** or **Customer brought**.
+  Customer-brought parts are valued on the insurance bill, skip stock deduction,
+  and never go to Stores; a swap or return is handed back to the customer with a
+  WhatsApp message.
+- Insurance workflow: section estimates → estimate approval → parts approval →
+  supplementary estimates → insurance bill → customer bill → release order →
+  salvage submission → cheque receipt and clearing.
+- Insurance billing roles: release order, insurance bill, customer bill, cheque
+  and settlement are cashier/accounting work (owner can override). Supervisors
+  and storekeepers handle salvage submission. The **Insurance desk** collects
+  post-release salvage and cheque work in one queue after the vehicle has left.
 - Vehicles can be released on the insurer's **release note** without waiting for
   the cheque or salvage; salvage submission remains a workshop duty tracked per
   part (`Pending`, `Submitted`, `Not Required`).
@@ -213,7 +238,12 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   support PDF, print and WhatsApp for both normal and insurance jobs.
 - Owner setup stores company TIN, VAT registration number, default VAT rate
   (18%) and place of supply; cashier chooses **With VAT** or **Without VAT** per
-  invoice. VAT rate and amount are saved on the job and insurance claim.
+  bill and can add a cashier discount before tax. VAT rate and amount are saved
+  on the job and insurance claim.
+- Insurance, customer and additional bills all print as **INVOICE** or **TAX
+  INVOICE** — never "Insurance Invoice" or "Additional Invoice". Customer-brought
+  parts print at their agreed value on the insurance bill, with no
+  "(customer supplied)" tag and a note that the insurer is billed for them.
 - Printer routing chosen at setup: Standard PC, Thermal only, or Both, with
   58 mm/80 mm thermal width. Normal invoices and advance receipts default to
   thermal; insurance documents default to A4; the cashier can override a
