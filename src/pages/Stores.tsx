@@ -128,6 +128,9 @@ export function StoresPage() {
   const [fulfillMargin, setFulfillMargin] = useState("20");
   const [fulfillSupplier, setFulfillSupplier] = useState("");
   const [fulfillInvoice, setFulfillInvoice] = useState("");
+  const [fulfillMode, setFulfillMode] = useState<"requested" | "substitute">("requested");
+  const [fulfillSubstituteId, setFulfillSubstituteId] = useState("");
+  const [fulfillSubstituteSearch, setFulfillSubstituteSearch] = useState("");
   const [swapTargetId, setSwapTargetId] = useState<string | null>(null);
   const [swapCost, setSwapCost] = useState("");
   const [swapMargin, setSwapMargin] = useState("20");
@@ -246,6 +249,27 @@ export function StoresPage() {
   const fulfillPartRecord = state.parts.find((part) => part.id === fulfillTargetId) ?? null;
   const fulfillItem = state.inventory.find((item) => item.id === fulfillPartRecord?.itemId) ?? null;
   const fulfillJob = state.jobCards.find((job) => job.id === fulfillPartRecord?.jobCardId) ?? null;
+  const fulfillSubstitute =
+    fulfillMode === "substitute"
+      ? state.inventory.find((item) => item.id === fulfillSubstituteId) ?? null
+      : null;
+  const fulfillIssueItem = fulfillSubstitute ?? fulfillItem;
+  const fulfillSubstituteOptions = state.inventory
+    .filter((item) => item.id !== fulfillItem?.id && item.stock > 0.0001)
+    .filter((item) => inSectionScope(item.sectionId))
+    .filter((item) => {
+      const needle = fulfillSubstituteSearch.trim().toLowerCase();
+      if (!needle) return true;
+      return `${item.name} ${item.code} ${item.make ?? ""} ${item.model ?? ""}`
+        .toLowerCase()
+        .includes(needle);
+    })
+    .sort((a, b) => {
+      const aSameType = a.type === fulfillItem?.type ? 0 : 1;
+      const bSameType = b.type === fulfillItem?.type ? 0 : 1;
+      if (aSameType !== bSameType) return aSameType - bSameType;
+      return a.name.localeCompare(b.name);
+    });
   const swapPartRecord = state.parts.find((part) => part.id === swapTargetId) ?? null;
   const swapJob = state.jobCards.find((job) => job.id === swapPartRecord?.jobCardId) ?? null;
   const returnPartRecord = state.parts.find((part) => part.id === returnTargetId) ?? null;
@@ -262,18 +286,19 @@ export function StoresPage() {
   const fulfillQtyNumber = Math.max(0.001, Number(fulfillQty) || 0.001);
   const fulfillSelling =
     Math.round((Number(fulfillCost) || 0) * (1 + (Number(fulfillMargin) || 0) / 100) * 100) / 100;
-  const fulfillUnit = fulfillItem?.measureUnit ?? fulfillItem?.unit ?? "pc";
+  const fulfillUnit = fulfillIssueItem?.measureUnit ?? fulfillIssueItem?.unit ?? "pc";
   const fulfillRequested = fulfillPartRecord
     ? Math.max(0, fulfillPartRecord.qtyRequested - fulfillPartRecord.qtyIssued) ||
       fulfillPartRecord.qtyRequested
     : 0;
   const fulfillMaxQty = Math.max(0.001, fulfillRequested);
-  const fulfillStock = Math.max(0, fulfillItem?.stock ?? 0);
+  const fulfillStock = Math.max(0, fulfillIssueItem?.stock ?? 0);
   const fulfillShortfall = Math.max(
     0,
     Math.round((fulfillQtyNumber - fulfillStock) * 1000) / 1000,
   );
-  const fulfillNeedsPurchase = fulfillShortfall > 0.0001;
+  const fulfillNeedsPurchase =
+    fulfillMode === "requested" && fulfillShortfall > 0.0001;
   const fulfillSupplierRecord = state.suppliers.find(
     (supplier) => supplier.id === fulfillSupplier,
   );
@@ -299,6 +324,18 @@ export function StoresPage() {
     setFulfillMargin("20");
     setFulfillSupplier(part.supplierId ?? item.supplierId ?? "");
     setFulfillInvoice(part.supplierInvoiceNo ?? "");
+    setFulfillMode("requested");
+    setFulfillSubstituteId("");
+    setFulfillSubstituteSearch("");
+  }
+
+  function chooseSubstitute(itemId: string) {
+    const item = state.inventory.find((entry) => entry.id === itemId);
+    if (!item) return;
+    setFulfillSubstituteId(itemId);
+    setFulfillCost(String(unitCostOf(item)));
+    setFulfillSupplier(item.supplierId ?? fulfillSupplier);
+    setFulfillInvoice("");
   }
 
   function saveFulfill() {
@@ -318,6 +355,19 @@ export function StoresPage() {
       push("Enter a valid margin percentage.", "error");
       return;
     }
+    if (fulfillMode === "substitute") {
+      if (!fulfillSubstitute) {
+        push("Choose a suitable part from current stock.", "error");
+        return;
+      }
+      if (fulfillSubstitute.stock + 0.0001 < qty) {
+        push(
+          `${fulfillSubstitute.name} has only ${formatQty(fulfillSubstitute.stock, fulfillSubstitute.measureUnit ?? fulfillSubstitute.unit)} in stock. Choose another part or purchase the requested item.`,
+          "error",
+        );
+        return;
+      }
+    }
     if (fulfillNeedsPurchase && !fulfillInvoice.trim()) {
       push("Stock is short. Record the supplier purchase invoice number for the purchased quantity.", "error");
       return;
@@ -332,12 +382,20 @@ export function StoresPage() {
       marginPercent: margin,
       supplierId: fulfillSupplier || undefined,
       supplierInvoiceNo: fulfillInvoice.trim(),
+      substituteItemId:
+        fulfillMode === "substitute" && fulfillSubstitute
+          ? fulfillSubstitute.id
+          : undefined,
     });
     if (!result.ok) {
       push(result.message ?? "Could not issue this part.", "error");
       return;
     }
-    push(`${qty} × ${fulfillItem.name} issued to ${fulfillJob?.vehicleNo ?? "the job"}.`);
+    push(
+      fulfillMode === "substitute" && fulfillSubstitute
+        ? `${qty} × ${fulfillSubstitute.name} issued to ${fulfillJob?.vehicleNo ?? "the job"} as a suitable alternative.`
+        : `${qty} × ${fulfillItem.name} issued to ${fulfillJob?.vehicleNo ?? "the job"}.`,
+    );
     setFulfillTargetId(null);
   }
 
@@ -1528,7 +1586,13 @@ export function StoresPage() {
       <Modal
         open={Boolean(fulfillPartRecord)}
         onClose={() => setFulfillTargetId(null)}
-        title={fulfillNeedsPurchase ? "Purchase & issue part" : "Issue part from stock"}
+        title={
+          fulfillMode === "substitute"
+            ? "Issue a suitable part from stock"
+            : fulfillNeedsPurchase
+              ? "Purchase & issue part"
+              : "Issue part from stock"
+        }
         subtitle={
           fulfillPartRecord && fulfillJob
             ? `${fulfillJob.vehicleNo} · ${fulfillPartRecord.itemName}`
@@ -1539,7 +1603,11 @@ export function StoresPage() {
             <button className="btn btn-secondary" onClick={() => setFulfillTargetId(null)}>Cancel</button>
             <button className="btn btn-primary" onClick={saveFulfill}>
               <Package />
-              {fulfillNeedsPurchase ? "Purchase & issue" : "Issue"}{" "}
+              {fulfillMode === "substitute"
+                ? "Issue alternative"
+                : fulfillNeedsPurchase
+                  ? "Purchase & issue"
+                  : "Issue"}{" "}
               {formatQty(fulfillQtyNumber, fulfillUnit)}
             </button>
           </>
@@ -1547,7 +1615,7 @@ export function StoresPage() {
       >
         {fulfillPartRecord && fulfillItem && (
           <div className="stack">
-            <div className="grid cols-3">
+            <div className="grid cols-4">
               <div className="mini-stat card">
                 <div className="label">Requested</div>
                 <div className="value" style={{ fontSize: 15 }}>
@@ -1556,14 +1624,23 @@ export function StoresPage() {
                 <div className="meta">{fulfillPartRecord.status}</div>
               </div>
               <div className="mini-stat card">
-                <div className="label">In stock</div>
+                <div className="label">Requested in stock</div>
                 <div className="value" style={{ fontSize: 15 }}>
-                  {formatQty(fulfillItem.stock, fulfillUnit)}
+                  {formatQty(fulfillItem.stock, fulfillItem.measureUnit ?? fulfillItem.unit ?? "pc")}
                 </div>
                 <div className="meta">
-                  {fulfillNeedsPurchase
-                    ? `Short ${formatQty(fulfillShortfall, fulfillUnit)}`
-                    : "Available to issue"}
+                  {fulfillItem.stock > 0.0001 ? "Available" : "Out of stock"}
+                </div>
+              </div>
+              <div className="mini-stat card">
+                <div className="label">
+                  {fulfillSubstitute ? "Alternative in stock" : "Selected part"}
+                </div>
+                <div className="value" style={{ fontSize: 15 }}>
+                  {formatQty(fulfillStock, fulfillUnit)}
+                </div>
+                <div className="meta">
+                  {fulfillSubstitute ? fulfillSubstitute.name : "Requested item"}
                 </div>
               </div>
               <div className="mini-stat card">
@@ -1573,20 +1650,168 @@ export function StoresPage() {
               </div>
             </div>
 
-            {fulfillNeedsPurchase && (
-              <Alert tone="warn" title="Stock short — purchase the balance">
-                {formatQty(fulfillShortfall, fulfillUnit)} is not in stock. This issue records a direct
-                cash purchase{fulfillSupplierRecord ? ` from ${fulfillSupplierRecord.name}` : ""} and
-                requires the supplier invoice number. The purchased quantity is added to stock and
-                immediately issued to the job.
-              </Alert>
+            <Field label="How should Stores supply this request?" full>
+              <div className="row wrap" style={{ gap: 8 }}>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${fulfillMode === "requested" ? "btn-primary" : "btn-secondary"}`}
+                  onClick={() => setFulfillMode("requested")}
+                >
+                  <ShoppingCart />
+                  Requested part
+                </button>
+                <button
+                  type="button"
+                  className={`btn btn-sm ${fulfillMode === "substitute" ? "btn-primary" : "btn-secondary"}`}
+                  onClick={() => setFulfillMode("substitute")}
+                >
+                  <RefreshCcw />
+                  Suitable part from stock
+                </button>
+              </div>
+            </Field>
+
+            {fulfillMode === "substitute" ? (
+              <>
+                <Alert tone="info" title="Replace the requested line with an in-stock part">
+                  The job line will point to the alternative stock item and its selling price.
+                  Nothing is purchased, and only the issued quantity is deducted from stock.
+                </Alert>
+                {fulfillSubstitute ? (
+                  <div className="card">
+                    <div className="card-body">
+                      <div className="row-between wrap">
+                        <div>
+                          <div className="row wrap" style={{ gap: 6 }}>
+                            <strong style={{ fontSize: 13 }}>{fulfillSubstitute.name}</strong>
+                            <span className="badge badge-green">
+                              {formatQty(
+                                fulfillSubstitute.stock,
+                                fulfillSubstitute.measureUnit ?? fulfillSubstitute.unit,
+                              )}{" "}
+                              in stock
+                            </span>
+                          </div>
+                          <div className="tiny muted" style={{ marginTop: 3 }}>
+                            {fulfillSubstitute.code} ·{" "}
+                            {fulfillSubstitute.make
+                              ? `${fulfillSubstitute.make} ${fulfillSubstitute.model}`
+                              : "Universal"}{" "}
+                            · Last selling price {money(fulfillSubstitute.lastSellingPrice ?? 0)}
+                          </div>
+                        </div>
+                        <button
+                          className="btn btn-ghost btn-sm"
+                          type="button"
+                          onClick={() => {
+                            setFulfillSubstituteId("");
+                            setFulfillSubstituteSearch("");
+                          }}
+                        >
+                          Change
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <Field label="Search current stock" hint="Only parts with stock on hand are shown.">
+                      <input
+                        className="input"
+                        placeholder="Search by part name or code…"
+                        value={fulfillSubstituteSearch}
+                        onChange={(event) => setFulfillSubstituteSearch(event.target.value)}
+                      />
+                    </Field>
+                    <div
+                      style={{
+                        border: "1px solid var(--line)",
+                        borderRadius: 11,
+                        maxHeight: 240,
+                        overflowY: "auto",
+                      }}
+                    >
+                      {fulfillSubstituteOptions.length === 0 ? (
+                        <div className="empty" style={{ padding: "22px 14px" }}>
+                          <p>No suitable part is currently in stock. Purchase the requested item instead.</p>
+                        </div>
+                      ) : (
+                        fulfillSubstituteOptions.slice(0, 12).map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            className="suggestion"
+                            style={{ width: "100%", border: 0, background: "transparent", textAlign: "left" }}
+                            onClick={() => chooseSubstitute(item.id)}
+                          >
+                            <span className="part-icon">
+                              <Package size={14} />
+                            </span>
+                            <div className="s-main">
+                              <strong>{item.name}</strong>
+                              <span>
+                                {item.code} · {item.make ? `${item.make} ${item.model}` : "Universal"} ·{" "}
+                                {formatQty(item.stock, item.measureUnit ?? item.unit)} available
+                              </span>
+                            </div>
+                            <span className="badge badge-green">In stock</span>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </>
+                )}
+              </>
+            ) : (
+              <>
+                {fulfillNeedsPurchase && (
+                  <Alert tone="warn" title="Stock short — purchase the balance">
+                    {formatQty(fulfillShortfall, fulfillUnit)} is not in stock. This issue records a direct
+                    cash purchase{fulfillSupplierRecord ? ` from ${fulfillSupplierRecord.name}` : ""} and
+                    requires the supplier invoice number. The purchased quantity is added to stock and
+                    immediately issued to the job.
+                  </Alert>
+                )}
+                <div className="form-grid">
+                  <Field
+                    label="Supplier"
+                    required={fulfillNeedsPurchase}
+                    hint={
+                      fulfillNeedsPurchase
+                        ? "Required for the direct purchase."
+                        : "Used for warranty traceability."
+                    }
+                  >
+                    <select className="select" value={fulfillSupplier} onChange={(event) => setFulfillSupplier(event.target.value)}>
+                      <option value="">Not set</option>
+                      {state.suppliers.map((supplier) => (
+                        <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  {fulfillNeedsPurchase && (
+                    <Field
+                      label="Supplier invoice no."
+                      required
+                      hint="Required for the purchased quantity. Recorded as a direct cash purchase."
+                    >
+                      <input
+                        className="input"
+                        placeholder="HZL/26/1841"
+                        value={fulfillInvoice}
+                        onChange={(event) => setFulfillInvoice(event.target.value)}
+                      />
+                    </Field>
+                  )}
+                </div>
+              </>
             )}
 
             <div className="form-grid">
               <Field
                 label="Issue quantity"
                 required
-                hint={`Measured issue — up to ${formatQty(fulfillRequested, fulfillUnit)}. Any shortage is purchased before issuing.`}
+                hint={`Measured issue — up to ${formatQty(fulfillRequested, fulfillUnit)}.`}
               >
                 <input
                   className="input"
@@ -1616,36 +1841,6 @@ export function StoresPage() {
                   onChange={(event) => setFulfillMargin(event.target.value)}
                 />
               </Field>
-              <Field
-                label="Supplier"
-                required={fulfillNeedsPurchase}
-                hint={
-                  fulfillNeedsPurchase
-                    ? "Required for the direct purchase."
-                    : "Used for warranty traceability."
-                }
-              >
-                <select className="select" value={fulfillSupplier} onChange={(event) => setFulfillSupplier(event.target.value)}>
-                  <option value="">Not set</option>
-                  {state.suppliers.map((supplier) => (
-                    <option key={supplier.id} value={supplier.id}>{supplier.name}</option>
-                  ))}
-                </select>
-              </Field>
-              {fulfillNeedsPurchase && (
-                <Field
-                  label="Supplier invoice no."
-                  required
-                  hint="Required for the purchased quantity. Recorded as a direct cash purchase."
-                >
-                  <input
-                    className="input"
-                    placeholder="HZL/26/1841"
-                    value={fulfillInvoice}
-                    onChange={(event) => setFulfillInvoice(event.target.value)}
-                  />
-                </Field>
-              )}
             </div>
 
             {fulfillQtyNumber < fulfillRequested - 0.0001 && (
@@ -1659,9 +1854,9 @@ export function StoresPage() {
             <div className="alert alert-info">
               <Package />
               <div>
-                Issuing deducts <strong>{formatQty(fulfillQtyNumber, fulfillUnit)}</strong> from stock
-                and updates the last selling price to <strong>{money(fulfillSelling)}</strong>. The job
-                line updates in place.
+                Issuing deducts <strong>{formatQty(fulfillQtyNumber, fulfillUnit)}</strong> from{" "}
+                <strong>{fulfillIssueItem?.name ?? "stock"}</strong> and updates the last selling price
+                to <strong>{money(fulfillSelling)}</strong>. The job line updates in place.
                 {fulfillNeedsPurchase && (
                   <>
                     {" "}The shortfall of <strong>{formatQty(fulfillShortfall, fulfillUnit)}</strong>{" "}

@@ -5,6 +5,8 @@ import {
   ArrowRight,
   Banknote,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   CreditCard,
   Download,
   MessageCircle,
@@ -13,6 +15,7 @@ import {
   Plus,
   Printer,
   ReceiptText,
+  Search,
   Send,
   ShieldCheck,
   Star,
@@ -34,8 +37,10 @@ import {
   printVehicleBill,
   shareAdvanceReceiptWhatsApp,
   shareInvoiceWhatsApp,
+  sharePdfFile,
   totalsForInvoice,
 } from "../lib/invoice";
+import { buildVehicleBillsPdf, printVehicleBills } from "../lib/ird";
 import { CreditLedger } from "../components/CreditLedger";
 import { EmptyState, Field, Modal, PageHeader, StatCard, StatusBadge, Tabs } from "../components/ui";
 import { useToast } from "../components/Toast";
@@ -48,7 +53,7 @@ import type {
   VehicleBillPaymentMethod,
 } from "../types";
 
-type CashierTab = "queue" | "bills" | "advances" | "settled" | "credits";
+type CashierTab = "queue" | "advances" | "settled" | "credits";
 
 export function CashierPage() {
   const { state, currentUser, checkoutJob, recordAdvancePayment, prepareVehicleBill, settleVehicleBill } = useApp();
@@ -82,10 +87,10 @@ export function CashierPage() {
   const [prepareBillId, setPrepareBillId] = useState<string | null>(null);
   const [prepareVatEnabled, setPrepareVatEnabled] = useState(false);
   const [prepareDiscount, setPrepareDiscount] = useState("0");
+  const [queueSearch, setQueueSearch] = useState("");
+  const [expandedJobs, setExpandedJobs] = useState<string[]>([]);
+  const [selectedBillIds, setSelectedBillIds] = useState<string[]>([]);
 
-  const queue = state.jobCards
-    .filter((job) => job.status === "Repair Completed")
-    .sort((a, b) => (a.completedAt ?? "").localeCompare(b.completedAt ?? ""));
   const vatFeatureEnabled = featureEnabled(state.settings, "enable_vat_invoicing");
   const effectiveVat = vatFeatureEnabled && vatEnabled;
   const settled = state.jobCards
@@ -95,40 +100,45 @@ export function CashierPage() {
     .filter((job) => !["Paid", "Released on Credit", "Dispatched"].includes(job.status))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
   const todayPnl = pnlFor(state, "today");
-  const openBills = state.vehicleBills.filter(
-    (bill) => bill.status !== "Paid" && bill.status !== "Release Order",
-  );
-  const billGroups = useMemo(() => {
+  const queueEntries = useMemo(() => {
     const grouped = new Map<string, VehicleBill[]>();
     state.vehicleBills.forEach((bill) => {
       const list = grouped.get(bill.jobCardId) ?? [];
       list.push(bill);
       grouped.set(bill.jobCardId, list);
     });
-    return Array.from(grouped.entries())
-      .map(([jobId, bills]) => {
-        const sorted = [...bills].sort((a, b) =>
+    const needle = queueSearch.trim().toLowerCase();
+    return state.jobCards
+      .map((job) => {
+        const bills = [...(grouped.get(job.id) ?? [])].sort((a, b) =>
           a.createdAt.localeCompare(b.createdAt),
         );
-        return {
-          jobId,
-          job: state.jobCards.find((job) => job.id === jobId),
-          bills: sorted,
-          open: sorted.filter(
-            (bill) =>
-              bill.status !== "Paid" && bill.status !== "Release Order",
-          ),
-        };
+        const open = bills.filter(
+          (bill) => bill.status !== "Paid" && bill.status !== "Release Order",
+        );
+        return { job, bills, open };
+      })
+      .filter(({ job, bills, open }) => {
+        if (bills.length > 0) {
+          return (
+            open.length > 0 &&
+            !["Paid", "Released on Credit", "Dispatched"].includes(job.status)
+          );
+        }
+        return job.status === "Repair Completed";
+      })
+      .filter(({ job }) => {
+        if (!needle) return true;
+        return `${job.vehicleNo} ${job.make} ${job.model} ${job.customerName} ${job.id} ${job.phone}`
+          .toLowerCase()
+          .includes(needle);
       })
       .sort((a, b) => {
-        if (a.open.length !== b.open.length) {
-          return b.open.length - a.open.length;
-        }
-        return (b.bills[0]?.createdAt ?? "").localeCompare(
-          a.bills[0]?.createdAt ?? "",
-        );
+        const aTime = a.job.completedAt ?? a.open[0]?.createdAt ?? a.job.createdAt;
+        const bTime = b.job.completedAt ?? b.open[0]?.createdAt ?? b.job.createdAt;
+        return aTime.localeCompare(bTime);
       });
-  }, [state.vehicleBills, state.jobCards]);
+  }, [state.vehicleBills, state.jobCards, queueSearch]);
   const releaseBill =
     state.vehicleBills.find((bill) => bill.id === releaseBillId) ?? null;
   const paymentBill =
@@ -545,6 +555,101 @@ export function CashierPage() {
     push("Final consolidated bill opened for printing.");
   }
 
+  function toggleQueueJob(jobId: string) {
+    setExpandedJobs((prev) =>
+      prev.includes(jobId) ? prev.filter((id) => id !== jobId) : [...prev, jobId],
+    );
+  }
+
+  function toggleBillSelection(billId: string) {
+    setSelectedBillIds((prev) =>
+      prev.includes(billId)
+        ? prev.filter((id) => id !== billId)
+        : [...prev, billId],
+    );
+  }
+
+  function toggleAllJobBills(bills: VehicleBill[]) {
+    const ids = bills.map((bill) => bill.id);
+    setSelectedBillIds((prev) => {
+      const allSelected = ids.every((id) => prev.includes(id));
+      if (allSelected) return prev.filter((id) => !ids.includes(id));
+      return Array.from(new Set([...prev, ...ids]));
+    });
+  }
+
+  function selectedBillsFor(job: JobCard) {
+    return state.vehicleBills
+      .filter(
+        (bill) =>
+          bill.jobCardId === job.id && selectedBillIds.includes(bill.id),
+      )
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  }
+
+  function printSelectedBills(job: JobCard) {
+    const bills = selectedBillsFor(job);
+    if (bills.length === 0) {
+      push("Select at least one bill to print.", "info");
+      return;
+    }
+    printVehicleBills(
+      job,
+      bills.map((bill) => ({
+        bill,
+        tasks: billTasks(bill),
+        parts: billParts(bill),
+        insurance: insuranceForBill(bill),
+      })),
+      state.settings,
+    );
+    push(
+      `${bills.length} bill${bills.length === 1 ? "" : "s"} opened for printing as one set.`,
+    );
+  }
+
+  async function shareSelectedBills(job: JobCard) {
+    const bills = selectedBillsFor(job);
+    if (bills.length === 0) {
+      push("Select at least one bill to send.", "info");
+      return;
+    }
+    setBusy(`bills_share_${job.id}`);
+    try {
+      const { blob, filename } = buildVehicleBillsPdf(
+        job,
+        bills.map((bill) => ({
+          bill,
+          tasks: billTasks(bill),
+          parts: billParts(bill),
+          insurance: insuranceForBill(bill),
+        })),
+        state.settings,
+      );
+      const total = bills.reduce((sum, bill) => sum + billNet(bill), 0);
+      const outcome = await sharePdfFile(
+        blob,
+        filename,
+        job.phone,
+        `Hello ${job.customerName}, please find ${bills.length === 1 ? "the bill" : `${bills.length} bills`} for ${job.vehicleNo}. Total payable ${money(total)}. Thank you — ${state.settings.companyName}.`,
+        `Bills ${job.vehicleNo}`,
+        state.settings,
+      );
+      push(
+        outcome === "queued"
+          ? "Bills sent automatically through WAHA with the PDF attached."
+          : outcome === "shared"
+            ? "Bills shared through your device."
+            : "Bill PDF downloaded. Attach it in the WhatsApp chat that opened.",
+        "info",
+      );
+    } catch {
+      push("Could not prepare the combined bill PDF.", "error");
+    } finally {
+      setBusy("");
+    }
+  }
+
   async function downloadBillDocument(bill: VehicleBill) {
     const job = state.jobCards.find((entry) => entry.id === bill.jobCardId);
     if (!job) {
@@ -597,7 +702,7 @@ export function CashierPage() {
         : `${prepareBill.billNo} ready for customer billing${prepareVatEnabled ? ` with VAT ${prepareVatRate}%` : " without VAT"}.`,
     );
     setPrepareBillId(null);
-    setTab("bills");
+    setTab("queue");
   }
 
   function openReleaseBill(bill: VehicleBill) {
@@ -641,7 +746,7 @@ export function CashierPage() {
         : `${releaseBill.billNo} released against order ${releaseOrderNo.trim()}.`,
     );
     setReleaseBillId(null);
-    setTab("bills");
+    setTab("queue");
   }
 
   function confirmBillPayment() {
@@ -659,7 +764,7 @@ export function CashierPage() {
       `${paymentBill.billNo} paid in full — ${money(billCharges(paymentBill).net)} collected by ${billPaymentMethod}.`,
     );
     setPaymentBillId(null);
-    setTab("bills");
+    setTab("queue");
   }
 
   function printJobWithFormat(job: JobCard, format: "thermal" | "a4") {
@@ -744,8 +849,7 @@ export function CashierPage() {
               value={tab}
               onChange={setTab}
               tabs={[
-                { id: "queue", label: "Billing queue", count: queue.length },
-                { id: "bills", label: "Separate bills", count: openBills.length },
+                { id: "queue", label: "Billing queue", count: queueEntries.length },
                 { id: "advances", label: "Advances", count: state.advancePayments.length },
                 { id: "settled", label: "Paid & released", count: settled.length },
                 { id: "credits", label: "Credit ledger" },
@@ -779,12 +883,14 @@ export function CashierPage() {
           <StatCard
             label="Queue value"
             value={money(
-              queue.reduce(
-                (sum, job) => sum + jobTotals(job, state.tasks, state.parts, state.workers).total,
-                0,
-              ),
+              queueEntries.reduce((sum, { job, bills, open }) => {
+                if (bills.length > 0) {
+                  return sum + open.reduce((total, bill) => total + billNet(bill), 0);
+                }
+                return sum + jobTotals(job, state.tasks, state.parts, state.workers).total;
+              }, 0),
             )}
-            meta={`${queue.length} repair${queue.length === 1 ? "" : "s"} ready to bill`}
+            meta={`${queueEntries.length} vehicle${queueEntries.length === 1 ? "" : "s"} ready to bill`}
             icon={<ReceiptText />}
             tone="purple"
           />
@@ -813,12 +919,56 @@ export function CashierPage() {
 
       {tab === "queue" && (
         <div className="stack" style={{ marginTop: 18 }}>
-          {queue.length === 0 ? (
+          <div className="card">
+            <div className="card-body">
+              <div className="row-between wrap" style={{ gap: 10 }}>
+                <div
+                  className="input-group"
+                  style={{ minWidth: 280, maxWidth: 560, flex: 1 }}
+                >
+                  <span className="prefix">
+                    <Search size={15} />
+                  </span>
+                  <input
+                    className="input"
+                    placeholder="Search vehicle number, customer or job…"
+                    value={queueSearch}
+                    onChange={(event) => setQueueSearch(event.target.value)}
+                    aria-label="Search the billing queue by vehicle number"
+                  />
+                </div>
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <span className="badge badge-purple">
+                    {queueEntries.length} vehicle
+                    {queueEntries.length === 1 ? "" : "s"} in queue
+                  </span>
+                  {queueSearch.trim() && (
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => setQueueSearch("")}
+                    >
+                      Clear search
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {queueEntries.length === 0 ? (
             <div className="card">
               <EmptyState
                 icon={<CheckCircle2 size={22} />}
-                title="Billing queue is clear"
-                message="When a supervisor marks a repair completed, the full job — labour, parts and discounts — lands here for checkout."
+                title={
+                  queueSearch.trim()
+                    ? "No vehicle matches that search"
+                    : "Billing queue is clear"
+                }
+                message={
+                  queueSearch.trim()
+                    ? "Try the vehicle number, customer name or job number."
+                    : "When a supervisor marks a repair completed, the full job — labour, parts and discounts — lands here for checkout."
+                }
                 action={
                   <Link className="btn btn-secondary" to="/workshop">
                     Open workshop floor
@@ -828,152 +978,35 @@ export function CashierPage() {
               />
             </div>
           ) : (
-            queue.map((job) => {
+            queueEntries.map(({ job, bills, open }) => {
               const totals = jobTotals(job, state.tasks, state.parts, state.workers);
-              const jobBills = state.vehicleBills.filter(
-                (bill) => bill.jobCardId === job.id,
+              const expanded = expandedJobs.includes(job.id);
+              const openTotal = open.reduce((sum, bill) => sum + billNet(bill), 0);
+              const amount = bills.length > 0 ? openTotal : totals.total;
+              const selected = bills.filter((bill) =>
+                selectedBillIds.includes(bill.id),
               );
-              const openJobBills = jobBills.filter(
-                (bill) =>
-                  bill.status !== "Paid" && bill.status !== "Release Order",
-              );
+              const allSelected =
+                bills.length > 0 && selected.length === bills.length;
+              const multiSection =
+                bills.length > 1 &&
+                new Set(
+                  bills
+                    .map((bill) => bill.sectionId)
+                    .filter((id): id is string => Boolean(id)),
+                ).size > 1;
               return (
                 <div className="card" key={job.id}>
                   <div className="card-head">
-                    <div className="row" style={{ gap: 11 }}>
-                      <span
-                        className="part-icon"
-                        style={{ width: 42, height: 42, flex: "0 0 42px", background: "var(--purple-soft)", color: "var(--purple)" }}
+                    <div className="row" style={{ gap: 11, minWidth: 0 }}>
+                      <button
+                        className="btn btn-ghost btn-sm"
+                        onClick={() => toggleQueueJob(job.id)}
+                        title={expanded ? "Collapse vehicle" : "Expand bills"}
+                        aria-expanded={expanded}
                       >
-                        <ReceiptText size={18} />
-                      </span>
-                      <div>
-                        <div className="row wrap" style={{ gap: 7 }}>
-                          <h3 style={{ fontSize: 16.5, fontWeight: 800, letterSpacing: "-0.02em" }}>
-                            {job.vehicleNo} · {job.make} {job.model}
-                          </h3>
-                          <StatusBadge status={job.status} />
-                        </div>
-                        <p>
-                          {job.customerName} · {job.id} · completed {timeAgo(job.completedAt)}
-                        </p>
-                      </div>
-                    </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 20, fontWeight: 780 }}>{money(totals.total)}</div>
-                      <div className="tiny muted">incl. {money(totals.parts)} parts</div>
-                    </div>
-                  </div>
-                  <div className="card-body">
-                    <div className="grid cols-4" style={{ gap: 10 }}>
-                      <div className="mini-stat card">
-                        <div className="label">Labour</div>
-                        <div className="value" style={{ fontSize: 15 }}>{money(totals.labor)}</div>
-                        <div className="meta">{totals.activeTasks.length} tasks</div>
-                      </div>
-                      <div className="mini-stat card">
-                        <div className="label">Parts</div>
-                        <div className="value" style={{ fontSize: 15 }}>{money(totals.parts)}</div>
-                        <div className="meta">{totals.issuedParts.length} issued lines</div>
-                      </div>
-                      <div className="mini-stat card">
-                        <div className="label">Discount</div>
-                        <div className="value" style={{ fontSize: 15 }}>{money(totals.discount)}</div>
-                        <div className="meta">Apply at checkout</div>
-                      </div>
-                      <div className="mini-stat card">
-                        <div className="label">Commission</div>
-                        <div className="value" style={{ fontSize: 15 }}>{money(totals.commission)}</div>
-                        <div className="meta">Payable to technicians</div>
-                      </div>
-                    </div>
-                    {jobBills.length > 0 && (
-                      <div className="alert alert-info" style={{ marginTop: 10 }}>
-                        <ReceiptText />
-                        <div>
-                          This vehicle has {jobBills.length} separate bill
-                          {jobBills.length === 1 ? "" : "s"} —{" "}
-                          {money(
-                            jobBills
-                              .filter((bill) => bill.kind === "Insurance")
-                              .reduce((sum, bill) => sum + billNet(bill), 0),
-                          )}{" "}
-                          insurer and{" "}
-                          {money(
-                            jobBills
-                              .filter((bill) => bill.kind !== "Insurance")
-                              .reduce((sum, bill) => sum + billNet(bill), 0),
-                          )}{" "}
-                          customer. {openJobBills.length} still open; settle each bill separately in
-                          the Separate bills tab.
-                        </div>
-                      </div>
-                    )}
-                    <div className="divider" />
-                    <div className="row-between wrap">
-                      <div className="row wrap small muted">
-                        <span><UserRound size={12} style={{ verticalAlign: -2, marginRight: 4 }} />{job.customerName}</span>
-                        <span>·</span>
-                        <span><Phone size={12} style={{ verticalAlign: -2, marginRight: 4 }} />{job.phone}</span>
-                        <span>·</span>
-                        <span><Wrench size={12} style={{ verticalAlign: -2, marginRight: 4 }} />{job.repairType}</span>
-                      </div>
-                      <div className="row wrap">
-                        <Link className="btn btn-ghost btn-sm" to={`/jobs/${job.id}`}>
-                          Review job
-                        </Link>
-                        {jobBills.length > 0 ? (
-                          <button className="btn btn-primary" onClick={() => setTab("bills")}>
-                            <ReceiptText />
-                            Separate bills
-                            {openJobBills.length > 0 ? ` (${openJobBills.length})` : ""}
-                          </button>
-                        ) : (
-                          <button className="btn btn-primary" onClick={() => openCheckout(job.id)}>
-                            <Wallet />
-                            Bill & collect
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
-
-      {tab === "bills" && (
-        <div className="stack" style={{ marginTop: 18 }}>
-          {billGroups.length === 0 ? (
-            <div className="card">
-              <EmptyState
-                icon={<ReceiptText size={22} />}
-                title="No separate bills yet"
-                message="Split a vehicle into insurer and customer bills from the job card. Each bill locks its own tasks and parts, then prints and settles independently here."
-                action={
-                  <Link className="btn btn-secondary" to="/workshop">
-                    Open workshop floor
-                    <ArrowRight />
-                  </Link>
-                }
-              />
-            </div>
-          ) : (
-            billGroups.map(({ jobId, job, bills, open }) => {
-              if (!job) return null;
-              const insuranceTotal = bills
-                .filter((bill) => bill.kind === "Insurance")
-                .reduce((sum, bill) => sum + billNet(bill), 0);
-              const customerTotal = bills
-                .filter((bill) => bill.kind !== "Insurance")
-                .reduce((sum, bill) => sum + billNet(bill), 0);
-              const openTotal = open.reduce((sum, bill) => sum + billNet(bill), 0);
-              return (
-                <div className="card" key={jobId}>
-                  <div className="card-head">
-                    <div className="row" style={{ gap: 11 }}>
+                        {expanded ? <ChevronDown /> : <ChevronRight />}
+                      </button>
                       <span
                         className="part-icon"
                         style={{
@@ -988,223 +1021,437 @@ export function CashierPage() {
                       </span>
                       <div>
                         <div className="row wrap" style={{ gap: 7 }}>
-                          <h3 style={{ fontSize: 16.5, fontWeight: 800, letterSpacing: "-0.02em" }}>
+                          <h3
+                            style={{
+                              fontSize: 16.5,
+                              fontWeight: 800,
+                              letterSpacing: "-0.02em",
+                            }}
+                          >
                             {job.vehicleNo} · {job.make} {job.model}
                           </h3>
                           <StatusBadge status={job.status} />
                         </div>
                         <p>
-                          {job.customerName} · {job.id} · {bills.length} bill
-                          {bills.length === 1 ? "" : "s"}
+                          {job.customerName} · {job.id} ·{" "}
+                          {bills.length > 0
+                            ? `${open.length} open of ${bills.length} bill${
+                                bills.length === 1 ? "" : "s"
+                              }`
+                            : `completed ${timeAgo(job.completedAt)}`}
                         </p>
                       </div>
                     </div>
-                    <div style={{ textAlign: "right" }}>
-                      <div style={{ fontSize: 20, fontWeight: 780 }}>{money(openTotal)}</div>
-                      <div className="tiny muted">
-                        {open.length} open of {bills.length}
+                    <div className="row wrap" style={{ gap: 12 }}>
+                      <div style={{ textAlign: "right" }}>
+                        <div style={{ fontSize: 20, fontWeight: 780 }}>
+                          {money(amount)}
+                        </div>
+                        <div className="tiny muted">
+                          {bills.length > 0 ? "still to settle" : "full job invoice"}
+                        </div>
                       </div>
-                      {bills.length > 1 &&
-                        new Set(
-                          bills
-                            .map((bill) => bill.sectionId)
-                            .filter((id): id is string => Boolean(id)),
-                        ).size > 1 && (
-                          <button
-                            className="btn btn-secondary btn-sm"
-                            style={{ marginTop: 6 }}
-                            disabled={open.length > 0}
-                            title={
-                              open.length > 0
-                                ? "Settle every section bill first"
-                                : "Print one final bill totalling all sections"
-                            }
-                            onClick={() => printFinalBill(job, bills)}
-                          >
-                            <Printer />
-                            Final bill
-                          </button>
-                        )}
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => toggleQueueJob(job.id)}
+                      >
+                        {expanded
+                          ? "Hide"
+                          : bills.length > 0
+                            ? `Open bills (${open.length})`
+                            : "Open job"}
+                      </button>
                     </div>
                   </div>
-                  <div className="card-body stack">
-                    <div className="grid cols-3" style={{ gap: 10 }}>
-                      <div className="mini-stat card">
-                        <div className="label">Insurance bill</div>
-                        <div className="value" style={{ fontSize: 15 }}>{money(insuranceTotal)}</div>
-                        <div className="meta">Settle on the insurer release order</div>
-                      </div>
-                      <div className="mini-stat card">
-                        <div className="label">Customer bills</div>
-                        <div className="value" style={{ fontSize: 15 }}>{money(customerTotal)}</div>
-                        <div className="meta">Paid in full by the customer</div>
-                      </div>
-                      <div className="mini-stat card">
-                        <div className="label">Still to settle</div>
-                        <div className="value" style={{ fontSize: 15 }}>{money(openTotal)}</div>
-                        <div className="meta">{open.length} open bill{open.length === 1 ? "" : "s"}</div>
-                      </div>
-                    </div>
+                  {expanded && (
+                    <div className="card-body stack">
+                      {bills.length === 0 ? (
+                        <>
+                          <div className="grid cols-4" style={{ gap: 10 }}>
+                            <div className="mini-stat card">
+                              <div className="label">Labour</div>
+                              <div className="value" style={{ fontSize: 15 }}>
+                                {money(totals.labor)}
+                              </div>
+                              <div className="meta">{totals.activeTasks.length} tasks</div>
+                            </div>
+                            <div className="mini-stat card">
+                              <div className="label">Parts</div>
+                              <div className="value" style={{ fontSize: 15 }}>
+                                {money(totals.parts)}
+                              </div>
+                              <div className="meta">
+                                {totals.issuedParts.length} issued lines
+                              </div>
+                            </div>
+                            <div className="mini-stat card">
+                              <div className="label">Discount</div>
+                              <div className="value" style={{ fontSize: 15 }}>
+                                {money(totals.discount)}
+                              </div>
+                              <div className="meta">Apply at checkout</div>
+                            </div>
+                            <div className="mini-stat card">
+                              <div className="label">Commission</div>
+                              <div className="value" style={{ fontSize: 15 }}>
+                                {money(totals.commission)}
+                              </div>
+                              <div className="meta">Payable to technicians</div>
+                            </div>
+                          </div>
+                          <div className="divider" />
+                          <div className="row-between wrap">
+                            <div className="row wrap small muted">
+                              <span>
+                                <UserRound
+                                  size={12}
+                                  style={{ verticalAlign: -2, marginRight: 4 }}
+                                />
+                                {job.customerName}
+                              </span>
+                              <span>·</span>
+                              <span>
+                                <Phone
+                                  size={12}
+                                  style={{ verticalAlign: -2, marginRight: 4 }}
+                                />
+                                {job.phone}
+                              </span>
+                              <span>·</span>
+                              <span>
+                                <Wrench
+                                  size={12}
+                                  style={{ verticalAlign: -2, marginRight: 4 }}
+                                />
+                                {job.repairType}
+                              </span>
+                            </div>
+                            <div className="row wrap">
+                              <Link className="btn btn-ghost btn-sm" to={`/jobs/${job.id}`}>
+                                Review job
+                              </Link>
+                              <button
+                                className="btn btn-primary"
+                                onClick={() => openCheckout(job.id)}
+                              >
+                                <Wallet />
+                                Bill & collect
+                              </button>
+                            </div>
+                          </div>
+                        </>
+                      ) : (
+                        <>
+                          <div className="grid cols-3" style={{ gap: 10 }}>
+                            <div className="mini-stat card">
+                              <div className="label">Insurance bill</div>
+                              <div className="value" style={{ fontSize: 15 }}>
+                                {money(
+                                  bills
+                                    .filter((bill) => bill.kind === "Insurance")
+                                    .reduce((sum, bill) => sum + billNet(bill), 0),
+                                )}
+                              </div>
+                              <div className="meta">
+                                Settle on the insurer release order
+                              </div>
+                            </div>
+                            <div className="mini-stat card">
+                              <div className="label">Customer bills</div>
+                              <div className="value" style={{ fontSize: 15 }}>
+                                {money(
+                                  bills
+                                    .filter((bill) => bill.kind !== "Insurance")
+                                    .reduce((sum, bill) => sum + billNet(bill), 0),
+                                )}
+                              </div>
+                              <div className="meta">Paid in full by the customer</div>
+                            </div>
+                            <div className="mini-stat card">
+                              <div className="label">Still to settle</div>
+                              <div className="value" style={{ fontSize: 15 }}>
+                                {money(openTotal)}
+                              </div>
+                              <div className="meta">
+                                {open.length} open bill{open.length === 1 ? "" : "s"}
+                              </div>
+                            </div>
+                          </div>
 
-                    <div className="table-wrap">
-                      <table className="data">
-                        <thead>
-                          <tr>
-                            <th>Bill</th>
-                            <th>Type</th>
-                            <th className="num">Items</th>
-                            <th className="num">Net payable</th>
-                            <th>Status</th>
-                            <th>Settled</th>
-                            <th />
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {bills.map((bill) => {
-                            const parent = bill.parentBillId
-                              ? state.vehicleBills.find((entry) => entry.id === bill.parentBillId)
-                              : null;
-                            const shortfallBill = bill.shortfallBillId
-                              ? state.vehicleBills.find((entry) => entry.id === bill.shortfallBillId)
-                              : null;
-                            const settled =
-                              bill.status === "Paid" || bill.status === "Release Order";
-                            return (
-                              <tr key={bill.id}>
-                                <td>
-                                  <div className="cell-main">{bill.billNo}</div>
-                                  {bill.parentBillId && (
-                                    <div className="cell-sub">
-                                      Shortfall of {parent?.billNo ?? bill.parentBillId}
-                                    </div>
-                                  )}
-                                  {bill.shortfallBillId && (
-                                    <div className="cell-sub">
-                                      Shortfall billed to{" "}
-                                      {shortfallBill?.billNo ?? bill.shortfallBillId}
-                                    </div>
-                                  )}
-                                  {bill.notes && <div className="cell-sub">{bill.notes}</div>}
-                                </td>
-                                <td>
-                                  <span
-                                    className={`badge ${
-                                      bill.kind === "Insurance"
-                                        ? "badge-blue"
-                                        : bill.kind === "Additional"
-                                          ? "badge-amber"
-                                          : "badge-slate"
-                                    }`}
-                                  >
-                                    {bill.kind}
-                                  </span>
-                                </td>
-                                <td className="num">
-                                  {(bill.taskIds?.length ?? 0) + (bill.partIds?.length ?? 0)}
-                                </td>
-                                <td className="num strong">{money(billNet(bill))}</td>
-                                <td>
-                                  <StatusBadge
-                                    status={
-                                      bill.status === "Awaiting Release Order"
-                                        ? "Waiting for releasing order"
-                                        : bill.status ?? "Unpaid"
-                                    }
-                                  />
-                                  {bill.status === "Draft" && (
-                                    <div className="cell-sub">Set VAT before sending</div>
-                                  )}
-                                </td>
-                                <td className="tiny muted">
-                                  {bill.status === "Release Order" ? (
-                                    <>
-                                      RO {bill.releaseOrderNo ?? "—"}
-                                      <div className="cell-sub">
-                                        {shortDate(bill.releaseOrderAt ?? bill.paidAt)}
-                                        {bill.releaseOrderAmount !== undefined
-                                          ? ` · approved ${money(bill.releaseOrderAmount)}`
-                                          : ""}
-                                      </div>
-                                    </>
-                                  ) : bill.status === "Paid" ? (
-                                    <>
-                                      {shortDate(bill.paidAt)}
-                                      <div className="cell-sub">
-                                        {bill.paymentMethod ?? "—"}
-                                        {bill.paidBy ? ` · ${bill.paidBy}` : ""}
-                                      </div>
-                                    </>
-                                  ) : bill.sentAt ? (
-                                    <>
-                                      Sent {shortDate(bill.sentAt)}
-                                      <div className="cell-sub">{bill.sentBy ?? "—"}</div>
-                                    </>
-                                  ) : (
-                                    "—"
-                                  )}
-                                </td>
-                                <td>
-                                  <div className="row" style={{ justifyContent: "flex-end", gap: 3 }}>
-                                    {bill.status === "Draft" ? (
-                                      <button
-                                        className="btn btn-primary btn-sm"
-                                        onClick={() => openPrepareBill(bill)}
-                                      >
-                                        <Percent />
-                                        Set VAT & send
-                                      </button>
-                                    ) : (
-                                      <>
-                                        <button
-                                          className="btn btn-ghost btn-sm"
-                                          title="Print this bill (A4)"
-                                          onClick={() => printBillDocument(bill)}
-                                        >
-                                          <Printer />
-                                        </button>
-                                        <button
-                                          className="btn btn-ghost btn-sm"
-                                          title="Download this bill as PDF"
-                                          disabled={busy === `bill_download_${bill.id}`}
-                                          onClick={() => downloadBillDocument(bill)}
-                                        >
-                                          <Download />
-                                        </button>
-                                        {bill.kind === "Insurance" && !settled && (
-                                          <button
-                                            className="btn btn-primary btn-sm"
-                                            onClick={() => openReleaseBill(bill)}
-                                          >
-                                            <ShieldCheck />
-                                            Release on order
-                                          </button>
+                          <div className="row-between wrap" style={{ gap: 8 }}>
+                            <span className="tiny muted">
+                              {selected.length} of {bills.length} bill
+                              {bills.length === 1 ? "" : "s"} selected
+                            </span>
+                            <div className="row wrap" style={{ gap: 6 }}>
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                disabled={selected.length === 0}
+                                onClick={() => printSelectedBills(job)}
+                              >
+                                <Printer />
+                                Print selected
+                                {selected.length > 0 ? ` (${selected.length})` : ""}
+                              </button>
+                              <button
+                                className="btn btn-soft btn-sm"
+                                disabled={
+                                  selected.length === 0 ||
+                                  busy === `bills_share_${job.id}`
+                                }
+                                onClick={() => shareSelectedBills(job)}
+                              >
+                                <MessageCircle />
+                                Send selected on WhatsApp
+                              </button>
+                              <Link
+                                className="btn btn-ghost btn-sm"
+                                to={`/jobs/${job.id}`}
+                              >
+                                Review job
+                              </Link>
+                            </div>
+                          </div>
+
+                          <div className="table-wrap">
+                            <table className="data">
+                              <thead>
+                                <tr>
+                                  <th style={{ width: 34 }}>
+                                    <input
+                                      type="checkbox"
+                                      checked={allSelected}
+                                      onChange={() => toggleAllJobBills(bills)}
+                                      aria-label="Select every bill on this vehicle"
+                                    />
+                                  </th>
+                                  <th>Bill</th>
+                                  <th>Type</th>
+                                  <th className="num">Items</th>
+                                  <th className="num">Net payable</th>
+                                  <th>Status</th>
+                                  <th>Settled</th>
+                                  <th />
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {bills.map((bill) => {
+                                  const parent = bill.parentBillId
+                                    ? state.vehicleBills.find(
+                                        (entry) => entry.id === bill.parentBillId,
+                                      )
+                                    : null;
+                                  const shortfallBill = bill.shortfallBillId
+                                    ? state.vehicleBills.find(
+                                        (entry) =>
+                                          entry.id === bill.shortfallBillId,
+                                      )
+                                    : null;
+                                  const settled =
+                                    bill.status === "Paid" ||
+                                    bill.status === "Release Order";
+                                  return (
+                                    <tr key={bill.id}>
+                                      <td>
+                                        <input
+                                          type="checkbox"
+                                          checked={selectedBillIds.includes(bill.id)}
+                                          onChange={() => toggleBillSelection(bill.id)}
+                                          aria-label={`Select ${bill.billNo}`}
+                                        />
+                                      </td>
+                                      <td>
+                                        <div className="cell-main">{bill.billNo}</div>
+                                        {bill.parentBillId && (
+                                          <div className="cell-sub">
+                                            Shortfall of{" "}
+                                            {parent?.billNo ?? bill.parentBillId}
+                                          </div>
                                         )}
-                                        {bill.kind !== "Insurance" && !settled && (
-                                          <button
-                                            className="btn btn-primary btn-sm"
-                                            onClick={() => openPaymentBill(bill)}
-                                          >
-                                            <Wallet />
-                                            Collect payment
-                                          </button>
+                                        {bill.shortfallBillId && (
+                                          <div className="cell-sub">
+                                            Shortfall billed to{" "}
+                                            {shortfallBill?.billNo ??
+                                              bill.shortfallBillId}
+                                          </div>
                                         )}
-                                      </>
-                                    )}
-                                  </div>
-                                </td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
+                                        {bill.notes && (
+                                          <div className="cell-sub">{bill.notes}</div>
+                                        )}
+                                      </td>
+                                      <td>
+                                        <span
+                                          className={`badge ${
+                                            bill.kind === "Insurance"
+                                              ? "badge-blue"
+                                              : bill.kind === "Additional"
+                                                ? "badge-amber"
+                                                : "badge-slate"
+                                          }`}
+                                        >
+                                          {bill.kind}
+                                        </span>
+                                      </td>
+                                      <td className="num">
+                                        {(bill.taskIds?.length ?? 0) +
+                                          (bill.partIds?.length ?? 0)}
+                                      </td>
+                                      <td className="num strong">
+                                        {money(billNet(bill))}
+                                      </td>
+                                      <td>
+                                        <StatusBadge
+                                          status={
+                                            bill.status === "Awaiting Release Order"
+                                              ? "Waiting for releasing order"
+                                              : bill.status ?? "Unpaid"
+                                          }
+                                        />
+                                        {bill.status === "Draft" && (
+                                          <div className="cell-sub">
+                                            Set VAT before sending
+                                          </div>
+                                        )}
+                                      </td>
+                                      <td className="tiny muted">
+                                        {bill.status === "Release Order" ? (
+                                          <>
+                                            RO {bill.releaseOrderNo ?? "—"}
+                                            <div className="cell-sub">
+                                              {shortDate(
+                                                bill.releaseOrderAt ?? bill.paidAt,
+                                              )}
+                                              {bill.releaseOrderAmount !== undefined
+                                                ? ` · approved ${money(
+                                                    bill.releaseOrderAmount,
+                                                  )}`
+                                                : ""}
+                                            </div>
+                                          </>
+                                        ) : bill.status === "Paid" ? (
+                                          <>
+                                            {shortDate(bill.paidAt)}
+                                            <div className="cell-sub">
+                                              {bill.paymentMethod ?? "—"}
+                                              {bill.paidBy
+                                                ? ` · ${bill.paidBy}`
+                                                : ""}
+                                            </div>
+                                          </>
+                                        ) : bill.sentAt ? (
+                                          <>
+                                            Sent {shortDate(bill.sentAt)}
+                                            <div className="cell-sub">
+                                              {bill.sentBy ?? "—"}
+                                            </div>
+                                          </>
+                                        ) : (
+                                          "—"
+                                        )}
+                                      </td>
+                                      <td>
+                                        <div
+                                          className="row"
+                                          style={{
+                                            justifyContent: "flex-end",
+                                            gap: 3,
+                                          }}
+                                        >
+                                          {bill.status === "Draft" ? (
+                                            <button
+                                              className="btn btn-primary btn-sm"
+                                              onClick={() => openPrepareBill(bill)}
+                                            >
+                                              <Percent />
+                                              Set VAT & send
+                                            </button>
+                                          ) : (
+                                            <>
+                                              <button
+                                                className="btn btn-ghost btn-sm"
+                                                title="Print this bill (A4)"
+                                                onClick={() =>
+                                                  printBillDocument(bill)
+                                                }
+                                              >
+                                                <Printer />
+                                              </button>
+                                              <button
+                                                className="btn btn-ghost btn-sm"
+                                                title="Download this bill as PDF"
+                                                disabled={
+                                                  busy ===
+                                                  `bill_download_${bill.id}`
+                                                }
+                                                onClick={() =>
+                                                  downloadBillDocument(bill)
+                                                }
+                                              >
+                                                <Download />
+                                              </button>
+                                              {bill.kind === "Insurance" &&
+                                                !settled && (
+                                                  <button
+                                                    className="btn btn-primary btn-sm"
+                                                    onClick={() =>
+                                                      openReleaseBill(bill)
+                                                    }
+                                                  >
+                                                    <ShieldCheck />
+                                                    Release on order
+                                                  </button>
+                                                )}
+                                              {bill.kind !== "Insurance" &&
+                                                !settled && (
+                                                  <button
+                                                    className="btn btn-primary btn-sm"
+                                                    onClick={() =>
+                                                      openPaymentBill(bill)
+                                                    }
+                                                  >
+                                                    <Wallet />
+                                                    Collect payment
+                                                  </button>
+                                                )}
+                                            </>
+                                          )}
+                                        </div>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+
+                          <div className="row-between wrap" style={{ gap: 8 }}>
+                            <div className="tiny muted">
+                              Set VAT on each draft bill here before it is sent to the
+                              insurer or customer. Insurance bills then settle on the
+                              insurer release order; customer and additional bills are
+                              collected in full. A short release order creates an
+                              additional customer bill for the difference automatically.
+                            </div>
+                            {multiSection && (
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                disabled={open.length > 0}
+                                title={
+                                  open.length > 0
+                                    ? "Settle every section bill first"
+                                    : "Print one final bill totalling all sections"
+                                }
+                                onClick={() => printFinalBill(job, bills)}
+                              >
+                                <Printer />
+                                Final consolidated bill
+                              </button>
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
-                    <div className="tiny muted">
-                      Set VAT on each draft bill here before it is sent to the insurer or customer.
-                      Insurance bills then settle on the insurer release order; customer and
-                      additional bills are collected in full. A short release order creates an
-                      additional customer bill for the difference automatically.
-                    </div>
-                  </div>
+                  )}
                 </div>
               );
             })

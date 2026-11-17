@@ -267,6 +267,8 @@ interface AppStoreValue {
       marginPercent: number;
       supplierId?: string;
       supplierInvoiceNo: string;
+      /** Issue a suitable in-stock item instead of the requested (out-of-stock) part. */
+      substituteItemId?: string;
     },
   ) => ActionResult;
   requestExchange: (partId: string) => void;
@@ -351,7 +353,6 @@ interface AppStoreValue {
       bankAccountId?: string;
     },
   ) => ActionResult;
-  settleInsuranceClaim: (claimId: string) => ActionResult;
   markAttendance: (
     workerId: string,
     date: string,
@@ -2018,12 +2019,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         marginPercent: number;
         supplierId?: string;
         supplierInvoiceNo: string;
+        /** Issue a suitable in-stock item instead of the requested (out-of-stock) part. */
+        substituteItemId?: string;
       },
     ): ActionResult => {
       const part = state.parts.find((p) => p.id === partId);
       if (!part) return { ok: false, message: "Part request not found." };
-      const item = state.inventory.find((i) => i.id === part.itemId);
+      const requestedItem = state.inventory.find((i) => i.id === part.itemId);
+      const substituteItem = data.substituteItemId
+        ? state.inventory.find((i) => i.id === data.substituteItemId)
+        : null;
+      if (data.substituteItemId && !substituteItem) {
+        return { ok: false, message: "The selected substitute part no longer exists." };
+      }
+      const item = substituteItem ?? requestedItem;
       if (!item) return { ok: false, message: "Inventory item not found." };
+      const substituted = Boolean(substituteItem && substituteItem.id !== part.itemId);
       const unit = item.measureUnit || item.unit;
       const remaining = Math.max(0, part.qtyRequested - part.qtyIssued);
       const requested = part.qtyIssued > 0 ? remaining : part.qtyRequested;
@@ -2031,9 +2042,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const qty = Math.max(0.001, Math.min(rawQty, requested));
       const stockAvailable = Math.max(0, item.stock);
       const shortfall = Math.max(0, Math.round((qty - stockAvailable) * 1000) / 1000);
-      const needsPurchase = shortfall > 0.0001;
+      const needsPurchase = !substituted && shortfall > 0.0001;
+      if (substituted && stockAvailable + 0.0001 < qty) {
+        return {
+          ok: false,
+          message: `${item.name} has only ${formatQty(stockAvailable, unit)} in stock. Choose another part or purchase the requested item instead.`,
+        };
+      }
       const invoiceNo = data.supplierInvoiceNo.trim();
-      const purchaseSupplierId = data.supplierId || part.supplierId || item.supplierId;
+      const purchaseSupplierId =
+        data.supplierId || (substituted ? item.supplierId : part.supplierId || item.supplierId);
       if (needsPurchase && !invoiceNo) {
         return {
           ok: false,
@@ -2062,12 +2080,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
           p.id === partId
             ? {
                 ...p,
+                itemId: substituted ? item.id : p.itemId,
+                itemName: substituted
+                  ? `${item.name}${item.make ? ` — ${item.make} ${item.model}` : ""}`
+                  : p.itemName,
                 qtyIssued: qty,
                 qtyRequested: qty,
                 costPrice: data.costPrice,
                 marginPercent: data.marginPercent,
-                sellingPrice:
-                  p.insuranceApprovedPrice !== undefined && p.insuranceApprovedPrice > 0
+                sellingPrice: substituted
+                  ? selling
+                  : p.insuranceApprovedPrice !== undefined && p.insuranceApprovedPrice > 0
                     ? p.insuranceApprovedPrice
                     : p.estimateId && p.sellingPrice > 0
                       ? p.sellingPrice
@@ -2075,7 +2098,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 status: "Issued" as const,
                 supplierId: purchaseSupplierId ?? p.supplierId,
                 supplierInvoiceNo: invoiceNo || p.supplierInvoiceNo,
-                measuredQty: p.measuredQty || qty % 1 !== 0,
+                measuredQty:
+                  substituted
+                    ? item.type === "Consumable" || qty % 1 !== 0
+                    : p.measuredQty || qty % 1 !== 0,
                 updatedAt: now,
               }
             : p,
@@ -2163,8 +2189,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
           notifications = notify(
             { ...prev, notifications },
             ["Supervisor"],
-            needsPurchase ? "Part purchased and issued" : "Part issued",
-            `${formatQty(qty, unit)} of ${item.name} issued to ${job.id} (${job.vehicleNo}).${needsPurchase ? ` ${formatQty(shortfall, unit)} purchased on ${invoiceNo}.` : ""} Selling price updated.`,
+            needsPurchase ? "Part purchased and issued" : substituted ? "Substitute part issued" : "Part issued",
+            `${formatQty(qty, unit)} of ${item.name} issued to ${job.id} (${job.vehicleNo}).${substituted ? ` This replaces the requested ${part.itemName} with a suitable in-stock part.` : ""}${needsPurchase ? ` ${formatQty(shortfall, unit)} purchased on ${invoiceNo}.` : ""} Selling price updated.`,
             "normal",
             `/jobs/${job.id}`,
             { vehicleNo: job.vehicleNo, eventType: "inventory" },
@@ -3433,61 +3459,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
           prev,
           ["Accounting", "Owner"],
           "Insurance cheque received",
-          `${claim.claimNo} · ${cheque.bank} ${cheque.branch} · cheque ${cheque.chequeNo} for LKR ${data.amount.toLocaleString()} held in safe.`,
+          `${claim.claimNo} · ${cheque.bank} ${cheque.branch} · cheque ${cheque.chequeNo} for LKR ${data.amount.toLocaleString()} held in safe. Mark it realized only after bank clearance.`,
           "high",
-          "/accounting",
+          "/insurance-desk",
           { vehicleNo: job?.vehicleNo, eventType: "cheque" },
         ),
       }));
       return { ok: true };
     },
     [state.insuranceJobs, state.jobCards, state.users, state.currentUserId],
-  );
-
-  const settleInsuranceClaim = useCallback(
-    (claimId: string): ActionResult => {
-      const claim = state.insuranceJobs.find((entry) => entry.id === claimId);
-      if (!claim) return { ok: false, message: "Insurance claim not found." };
-      const amount = claim.chequeAmount ?? claim.insuranceBillAmount ?? 0;
-      if (amount <= 0) {
-        return { ok: false, message: "Record the insurance bill or cheque amount first." };
-      }
-      const now = new Date().toISOString();
-      setState((prev) => ({
-        ...prev,
-        insuranceJobs: prev.insuranceJobs.map((entry) =>
-          entry.id === claimId
-            ? { ...entry, chequeClearedAt: now, status: "Settled" as const }
-            : entry,
-        ),
-        ledger: [
-          {
-            id: uid("led"),
-            date: now,
-            laborRevenue: 0,
-            partsRevenue: 0,
-            partsCost: 0,
-            commission: 0,
-            discount: 0,
-            paymentMethod: "Insurance Settlement",
-            settlementAmount: amount,
-            insuranceClaimId: claim.id,
-            description: `Insurance settlement — ${claim.claimNo}`,
-          },
-          ...prev.ledger,
-        ],
-        notifications: notify(
-          prev,
-          ["Owner", "Accounting"],
-          "Insurance cheque cleared",
-          `${claim.claimNo} · LKR ${amount.toLocaleString()} received. Claim marked settled.`,
-          "normal",
-          `/jobs/${claim.jobCardId}`,
-        ),
-      }));
-      return { ok: true, reference: claim.claimNo };
-    },
-    [state.insuranceJobs],
   );
 
   const markAttendance = useCallback(
@@ -4151,7 +4131,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return {
           ok: false,
           message:
-            "This vehicle has separate insurance/customer bills. Settle them in Cashier → Separate bills.",
+            "This vehicle has separate insurance/customer bills. Settle them in the Cashier billing queue.",
         };
       }
       const draftJob: JobCard = {
@@ -5183,7 +5163,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
             jobBills.every(
               (entry) => entry.status === "Paid" || entry.status === "Release Order",
             );
-          const readyJob = allSettled && job.status === "Repair Completed";
+          const readyJob =
+            allSettled &&
+            job.status !== "Paid" &&
+            job.status !== "Released on Credit" &&
+            job.status !== "Dispatched";
           const notifications = notify(
             prev,
             ["Cashier", "Accounting", "PRO"],
@@ -5293,7 +5277,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
           jobBills.every(
             (entry) => entry.status === "Paid" || entry.status === "Release Order",
           );
-        const readyJob = allSettled && job.status === "Repair Completed";
+        const readyJob =
+          allSettled &&
+          job.status !== "Paid" &&
+          job.status !== "Released on Credit" &&
+          job.status !== "Dispatched";
         const notifications = notify(
           prev,
           readyJob ? ["PRO", "Accounting"] : ["Cashier", "Accounting"],
@@ -6796,7 +6784,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       createInsuranceClaim,
       updateInsuranceClaim,
       recordInsuranceCheque,
-      settleInsuranceClaim,
       markAttendance,
       markManyPresent,
       submitAppointmentBooking,
@@ -6913,7 +6900,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
       createInsuranceClaim,
       updateInsuranceClaim,
       recordInsuranceCheque,
-      settleInsuranceClaim,
       markAttendance,
       markManyPresent,
       submitAppointmentBooking,

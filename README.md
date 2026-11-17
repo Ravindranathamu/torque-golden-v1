@@ -125,11 +125,17 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   alerts, 20% default margin with override, and a **supplier purchase invoice
   number on parts bought through a recorded purchase**. Opening-stock items do
   not require one. Stock only moves through opening stock, a purchase invoice, a
-  job issue or a supplier return.
-- Cashier: billing queue, fixed/percentage VAT-aware discounts,
-  cash/card/credit/insurance/dated cheque, thermal 58/80 mm receipts, standard
-  A4 IRD tax invoices, PDF WhatsApp delivery, review requests and PRO
-  gate-clearance.
+  job issue or a supplier return. When a requested part is out of stock, Issue
+  offers two paths: **purchase the balance** from a supplier (recording the
+  supplier invoice) or **issue a suitable in-stock part**, which replaces the job
+  line with the chosen stock item and deducts only the issued quantity.
+- Cashier: one searchable billing queue with collapsed vehicle rows, fixed or
+  percentage VAT-aware discounts, cash/card/credit/insurance/dated cheque,
+  thermal 58/80 mm receipts, standard A4 IRD tax invoices, PDF WhatsApp
+  delivery, review requests and PRO gate-clearance. A vehicle with separate
+  bills expands to its bills, where several can be ticked and printed or sent as
+  one set; once every bill is settled the vehicle leaves the queue and moves to
+  **Paid & released**.
 - **Advance payments** against a job number: printable thermal or A4 receipt,
   WhatsApp e-receipt, and automatic deduction from the final bill.
 - Customer credit ledger with grace periods, partial settlements, payment method
@@ -146,15 +152,18 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   actions, with WhatsApp notes to the customer.
 - **Multiple bills per vehicle**: separate customer and insurance bills can be
   drafted against the same job with independent numbers, amounts and notes.
-  Bills are saved as **Drafts** and appear in **Cashier → Separate bills**, where
+  Bills are saved as **Drafts** and appear in **Cashier's billing queue**, where
   the cashier chooses **No VAT** or **Add VAT** and marks the bill sent. Sent
   insurance bills become **Awaiting Release Order** (*Waiting for releasing
   order*). A release order below the insurance bill creates an **Additional**
   customer bill for the shortfall after tax; the shortfall is reduced by any
   customer-brought parts already valued on the insurance bill, and the additional
-  bill prints that credit as a deduction. When a vehicle has bills for more than
-  one repair section, Cashier prints one consolidated **Final bill** only after
-  every section bill is settled.
+  bill prints that credit as a deduction. The queue has a dedicated vehicle-number
+  search, shows one collapsed row per vehicle with its open amount, and expands
+  to the bill table. When a vehicle has several bills, tick them and print or
+  send the whole set in one PDF. When a vehicle has bills for more than one
+  repair section, Cashier prints one consolidated **Final bill** only after every
+  section bill is settled.
 - **PRO billing-gate override**: the PRO can release an unpaid completed vehicle
   with a mandatory reason. The job becomes *Released on Credit*, a 7-day customer
   credit opens, and Owner/Cashier/Accounting are notified.
@@ -211,21 +220,25 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   must assign at least one technician to every task before the repair can be
   completed. Several technicians can share one task; its labour and commission
   are split equally between them.
-- Estimate parts load without a source. Before stores sees a request, the
-  supervisor marks each part **Store supplied** or **Customer brought**.
-  Customer-brought parts are valued on the insurance bill, skip stock deduction,
-  and never go to Stores; a swap or return is handed back to the customer with a
-  WhatsApp message.
+- Estimate parts load without a source. The part description autocompletes from
+  current stock; choosing a stock item fills its last selling price without
+  deducting stock. Before stores sees a request, the supervisor marks each part **Store
+  supplied** or **Customer brought**. Customer-brought parts are valued on the
+  insurance bill, skip stock deduction, and never go to Stores; a swap or return
+  is handed back to the customer with a WhatsApp message. A returned
+  customer-brought line offers **Add again…** — re-add it as customer-brought
+  immediately, or send a fresh store request so Stores prices it at issue.
 - Insurance workflow: section estimates → estimate approval → parts approval →
   supplementary estimates → draft insurance and customer bills → cashier sets
-  VAT and sends → release order → salvage submission → cheque receipt and
-  clearing.
+  VAT and sends → release order → salvage submission → cheque receipt in the
+  Insurance desk and claim settlement only when the cheque is realized.
 - Insurance billing roles: the job **Invoice** tab drafts insurance/customer
-  bills; **Cashier → Separate bills** sets VAT and sends them, then records the
-  release order or customer payment. Cheque and settlement are
-  cashier/accounting work (owner can override). Supervisors and storekeepers
-  handle salvage submission. The **Insurance desk** collects post-release salvage
-  and cheque work in one queue after the vehicle has left.
+  bills; **Cashier** sets VAT and sends them, then records the release order or
+  customer payment. Cheque recording, deposit and realization are
+  cashier/accounting work (owner can override); realizing the cheque is what
+  marks the claim settled. Supervisors and storekeepers handle salvage
+  submission. The **Insurance desk** collects post-release salvage and cheque
+  work in one queue after the vehicle has left.
 - Vehicles can be released on the insurer's **release note** without waiting for
   the cheque or salvage; salvage submission remains a workshop duty tracked per
   part (`Pending`, `Submitted`, `Not Required`).

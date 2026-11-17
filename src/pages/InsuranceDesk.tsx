@@ -7,19 +7,21 @@ import {
   FileText,
   Package,
   ShieldCheck,
+  XCircle,
 } from "lucide-react";
 import { hasDepartment, useApp } from "../state/AppStore";
 import { featureEnabled } from "../lib/features";
-import { money, shortDate } from "../lib/utils";
+import { dateOnly, money, shortDate } from "../lib/utils";
 import {
   EmptyState,
   Field,
+  Modal,
   PageHeader,
   StatCard,
   StatusBadge,
 } from "../components/ui";
 import { useToast } from "../components/Toast";
-import type { InsuranceClaim, JobCard } from "../types";
+import type { CustomerCheque, InsuranceClaim, JobCard } from "../types";
 
 export function InsuranceDeskPage() {
   const {
@@ -27,10 +29,24 @@ export function InsuranceDeskPage() {
     currentUser,
     updateInsuranceClaim,
     updatePartSalvage,
-    settleInsuranceClaim,
+    recordInsuranceCheque,
+    updateCustomerChequeStatus,
   } = useApp();
   const { push } = useToast();
   const [salvageRefs, setSalvageRefs] = useState<Record<string, string>>({});
+  const [chequeClaimId, setChequeClaimId] = useState<string | null>(null);
+  const [chequeNo, setChequeNo] = useState("");
+  const [chequeAmount, setChequeAmount] = useState("");
+  const [chequeBank, setChequeBank] = useState("");
+  const [chequeBranch, setChequeBranch] = useState("");
+  const [chequeDate, setChequeDate] = useState(dateOnly(new Date().toISOString()));
+  const [chequeAccountId, setChequeAccountId] = useState("");
+  const [chequeAction, setChequeAction] = useState<{
+    cheque: CustomerCheque;
+    next: CustomerCheque["status"];
+  } | null>(null);
+  const [actionAccountId, setActionAccountId] = useState("");
+  const [bounceReason, setBounceReason] = useState("");
 
   const insuranceEnabled = featureEnabled(state.settings, "enable_insurance_module");
   const owner = Boolean(currentUser?.isOwner);
@@ -43,7 +59,12 @@ export function InsuranceDeskPage() {
     state.jobCards.find((job) => job.id === claim.jobCardId);
 
   const released = (job?: JobCard) =>
-    Boolean(job && (job.status === "Paid" || job.status === "Released on Credit"));
+    Boolean(
+      job &&
+        (job.status === "Paid" ||
+          job.status === "Released on Credit" ||
+          job.status === "Dispatched"),
+    );
 
   const salvageQueue = useMemo(
     () =>
@@ -75,9 +96,11 @@ export function InsuranceDeskPage() {
     [state.insuranceJobs, state.jobCards],
   );
 
-  const chequesInSafe = chequeQueue
-    .filter((claim) => claim.chequeAmount && !claim.chequeClearedAt)
-    .reduce((sum, claim) => sum + (claim.chequeAmount ?? 0), 0);
+  const chequesInSafe = state.customerCheques
+    .filter(
+      (cheque) => cheque.source === "Insurance" && cheque.status === "In_Safe",
+    )
+    .reduce((sum, cheque) => sum + cheque.amount, 0);
 
   function submitSalvage(claim: InsuranceClaim) {
     const pending = state.parts.filter(
@@ -100,13 +123,103 @@ export function InsuranceDeskPage() {
     push(`${name} salvage marked submitted.`, "info");
   }
 
-  function settle(claim: InsuranceClaim) {
-    const result = settleInsuranceClaim(claim.id);
-    if (!result.ok) {
-      push(result.message ?? "Could not settle the claim.", "error");
+  const chequeClaim =
+    state.insuranceJobs.find((claim) => claim.id === chequeClaimId) ?? null;
+
+  function chequeFor(claim: InsuranceClaim): CustomerCheque | undefined {
+    return (
+      state.customerCheques.find((cheque) => cheque.id === claim.chequeId) ??
+      state.customerCheques
+        .filter((cheque) => cheque.insuranceClaimId === claim.id)
+        .sort((a, b) => b.receivedAt.localeCompare(a.receivedAt))[0]
+    );
+  }
+
+  function openRecordCheque(claim: InsuranceClaim) {
+    setChequeClaimId(claim.id);
+    setChequeNo(claim.chequeNo ?? "");
+    setChequeAmount(
+      String(claim.chequeAmount ?? claim.insuranceBillAmount ?? ""),
+    );
+    setChequeBank("");
+    setChequeBranch("");
+    setChequeDate(dateOnly(new Date().toISOString()));
+    setChequeAccountId(
+      state.bankAccounts.find((account) => account.active)?.id ?? "",
+    );
+  }
+
+  function saveCheque() {
+    if (!chequeClaim) return;
+    const amount = Number(chequeAmount);
+    if (!chequeNo.trim()) {
+      push("Enter the insurer cheque number.", "error");
       return;
     }
-    push(`${claim.claimNo} settled. The cheque is cleared in the accounts.`);
+    if (!chequeBank.trim() || !chequeBranch.trim()) {
+      push("Enter the issuing bank and branch.", "error");
+      return;
+    }
+    if (!chequeDate) {
+      push("Enter the cheque date.", "error");
+      return;
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      push("Enter a valid cheque amount.", "error");
+      return;
+    }
+    const result = recordInsuranceCheque(chequeClaim.id, {
+      chequeNo: chequeNo.trim(),
+      amount,
+      bank: chequeBank.trim(),
+      branch: chequeBranch.trim(),
+      chequeDate,
+      bankAccountId: chequeAccountId || undefined,
+    });
+    if (!result.ok) {
+      push(result.message ?? "Could not record the cheque.", "error");
+      return;
+    }
+    push(
+      "Insurer cheque recorded and held in safe. Mark it realized only after the bank clears the funds.",
+    );
+    setChequeClaimId(null);
+  }
+
+  function openChequeAction(cheque: CustomerCheque, next: CustomerCheque["status"]) {
+    setChequeAction({ cheque, next });
+    setActionAccountId(cheque.bankAccountId ?? state.bankAccounts[0]?.id ?? "");
+    setBounceReason(cheque.bounceReason ?? "");
+  }
+
+  function saveChequeAction() {
+    if (!chequeAction) return;
+    if (chequeAction.next === "Bounced" && !bounceReason.trim()) {
+      push("Enter the bank bounce reason.", "error");
+      return;
+    }
+    if (chequeAction.next === "Cleared" && !actionAccountId) {
+      push("Choose the bank account where the funds were realized.", "error");
+      return;
+    }
+    const result = updateCustomerChequeStatus(
+      chequeAction.cheque.id,
+      chequeAction.next,
+      chequeAction.next === "Bounced" ? bounceReason.trim() : undefined,
+      actionAccountId || undefined,
+    );
+    if (!result.ok) {
+      push(result.message ?? "Could not update the cheque.", "error");
+      return;
+    }
+    push(
+      chequeAction.next === "Bounced"
+        ? "Cheque marked bounced. The claim is awaiting a replacement cheque."
+        : chequeAction.next === "Cleared"
+          ? "Cheque realized. The insurance claim is now marked settled and posted to the ledger."
+          : "Cheque marked deposited. Mark it realized after bank clearance.",
+    );
+    setChequeAction(null);
   }
 
   if (!insuranceEnabled) {
@@ -288,8 +401,8 @@ export function InsuranceDeskPage() {
             <div>
               <h3>Cheque & settlement</h3>
               <p>
-                Cashier and accounting record the insurer cheque, wait for clearance and
-                settle the claim. The vehicle is already released.
+                Cashier and accounting record the insurer cheque after the vehicle is sent, then
+                mark the claim settled only when the cheque is realized by the bank.
               </p>
             </div>
           </div>
@@ -306,6 +419,7 @@ export function InsuranceDeskPage() {
                 const insurer = state.insuranceCompanies.find(
                   (entry) => entry.id === claim.insurerId,
                 );
+                const cheque = chequeFor(claim);
                 return (
                   <div
                     key={claim.id}
@@ -323,46 +437,111 @@ export function InsuranceDeskPage() {
                             {claim.releaseOrderNo ?? "not recorded"}
                           </div>
                         </div>
-                        <StatusBadge status={claim.status} />
+                        <div className="row wrap" style={{ gap: 6 }}>
+                          {cheque && (
+                            <StatusBadge
+                              status={cheque.status.replaceAll("_", " ")}
+                            />
+                          )}
+                          <StatusBadge status={claim.status} />
+                        </div>
                       </div>
-                      <div className="kv">
-                        <span>Insurance bill</span>
-                        <span>{money(claim.insuranceBillAmount ?? 0)}</span>
+                      <div className="grid cols-3" style={{ gap: 10 }}>
+                        <div className="mini-stat card">
+                          <div className="label">Insurance bill</div>
+                          <div className="value" style={{ fontSize: 15 }}>
+                            {money(claim.insuranceBillAmount ?? 0)}
+                          </div>
+                          <div className="meta">{claim.insuranceBillNo ?? "Not billed"}</div>
+                        </div>
+                        <div className="mini-stat card">
+                          <div className="label">Cheque received</div>
+                          <div className="value" style={{ fontSize: 15 }}>
+                            {cheque ? money(cheque.amount) : "—"}
+                          </div>
+                          <div className="meta">
+                            {cheque
+                              ? `${cheque.chequeNo} · ${cheque.bank}`
+                              : "Not received"}
+                          </div>
+                        </div>
+                        <div className="mini-stat card">
+                          <div className="label">Cheque status</div>
+                          <div className="value" style={{ fontSize: 15 }}>
+                            {cheque
+                              ? cheque.status.replaceAll("_", " ")
+                              : "Awaiting cheque"}
+                          </div>
+                          <div className="meta">
+                            {cheque?.clearedAt
+                              ? `Realized ${shortDate(cheque.clearedAt)}`
+                              : cheque
+                                ? `Dated ${shortDate(cheque.chequeDate)}`
+                                : "Settlement waits for realization"}
+                          </div>
+                        </div>
                       </div>
-                      <div className="kv">
-                        <span>Cheque</span>
-                        <span>
-                          {claim.chequeNo
-                            ? `${claim.chequeNo} · ${money(claim.chequeAmount ?? 0)} · ${
-                                claim.chequeBank ?? ""
-                              } ${claim.chequeBranch ?? ""}`
-                            : "Not received"}
-                        </span>
-                      </div>
-                      <div className="kv">
-                        <span>Cheque status</span>
-                        <span>
-                          {claim.chequeClearedAt
-                            ? `Cleared ${shortDate(claim.chequeClearedAt)}`
-                            : claim.chequeStatus ?? "Not received"}
-                        </span>
-                      </div>
+                      {cheque?.bounceReason && (
+                        <div className="alert alert-warn">
+                          <XCircle />
+                          <div>
+                            Cheque bounced: {cheque.bounceReason}. Record a replacement cheque from
+                            the insurer.
+                          </div>
+                        </div>
+                      )}
                       <div className="row wrap">
+                        {(!cheque || cheque.status === "Bounced") && (
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() => openRecordCheque(claim)}
+                          >
+                            <Banknote />
+                            {cheque ? "Record replacement cheque" : "Record cheque"}
+                          </button>
+                        )}
+                        {cheque?.status === "In_Safe" && (
+                          <button
+                            className="btn btn-soft btn-sm"
+                            onClick={() => openChequeAction(cheque, "Deposited")}
+                          >
+                            <ClipboardCheck />
+                            Mark deposited
+                          </button>
+                        )}
+                        {(cheque?.status === "In_Safe" ||
+                          cheque?.status === "Deposited") && (
+                          <>
+                            <button
+                              className="btn btn-primary btn-sm"
+                              onClick={() => openChequeAction(cheque, "Cleared")}
+                            >
+                              <CheckCircle2 />
+                              Mark realized & settle
+                            </button>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => openChequeAction(cheque, "Bounced")}
+                            >
+                              <XCircle />
+                              Bounce
+                            </button>
+                          </>
+                        )}
                         <Link
-                          className="btn btn-secondary btn-sm"
+                          className="btn btn-ghost btn-sm"
                           to={`/jobs/${claim.jobCardId}`}
                         >
                           <FileText />
-                          {claim.chequeNo ? "Cheque details" : "Record cheque"}
+                          Open job
                         </Link>
-                        <button
-                          className="btn btn-primary btn-sm"
-                          onClick={() => settle(claim)}
-                          disabled={!claim.chequeAmount || claim.status === "Settled"}
-                        >
-                          <CheckCircle2 />
-                          Settle claim
-                        </button>
+                      </div>
+                      <div className="tiny muted">
+                        {cheque?.clearedAt
+                          ? `Cheque realized ${shortDate(cheque.clearedAt)}. The claim is settled.`
+                          : cheque
+                            ? "The vehicle is already released. The claim stays open until this cheque is realized by the bank."
+                            : "The vehicle is already released. Record the cheque when the insurer sends it."}
                       </div>
                     </div>
                   </div>
@@ -372,6 +551,190 @@ export function InsuranceDeskPage() {
           </div>
         </div>
       )}
+
+      <Modal
+        open={Boolean(chequeClaim)}
+        onClose={() => setChequeClaimId(null)}
+        title="Record insurer cheque"
+        subtitle={
+          chequeClaim
+            ? `${jobFor(chequeClaim)?.vehicleNo ?? chequeClaim.jobCardId} · ${chequeClaim.claimNo}`
+            : undefined
+        }
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setChequeClaimId(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={saveCheque}>
+              <Banknote />
+              Record cheque
+            </button>
+          </>
+        }
+      >
+        {chequeClaim && (
+          <div className="stack">
+            <div className="kv">
+              <span>Insurance bill</span>
+              <span>
+                {chequeClaim.insuranceBillAmount
+                  ? money(chequeClaim.insuranceBillAmount)
+                  : "Not billed"}
+              </span>
+            </div>
+            <div className="kv">
+              <span>Release order</span>
+              <span>{chequeClaim.releaseOrderNo ?? "Not recorded"}</span>
+            </div>
+            <div className="form-grid">
+              <Field label="Cheque number" required>
+                <input
+                  className="input"
+                  value={chequeNo}
+                  onChange={(event) => setChequeNo(event.target.value)}
+                />
+              </Field>
+              <Field label="Cheque amount (LKR)" required>
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  value={chequeAmount}
+                  onChange={(event) => setChequeAmount(event.target.value)}
+                />
+              </Field>
+              <Field label="Bank" required>
+                <input
+                  className="input"
+                  placeholder="Issuing bank"
+                  value={chequeBank}
+                  onChange={(event) => setChequeBank(event.target.value)}
+                />
+              </Field>
+              <Field label="Branch" required>
+                <input
+                  className="input"
+                  placeholder="Branch"
+                  value={chequeBranch}
+                  onChange={(event) => setChequeBranch(event.target.value)}
+                />
+              </Field>
+              <Field label="Cheque date" required hint="Post-dated cheques stay in safe until deposit.">
+                <input
+                  className="input"
+                  type="date"
+                  value={chequeDate}
+                  onChange={(event) => setChequeDate(event.target.value)}
+                />
+              </Field>
+              <Field label="Deposit account">
+                <select
+                  className="select"
+                  value={chequeAccountId}
+                  onChange={(event) => setChequeAccountId(event.target.value)}
+                >
+                  <option value="">No account</option>
+                  {state.bankAccounts
+                    .filter((account) => account.active)
+                    .map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+            </div>
+            <div className="alert alert-info">
+              <Banknote />
+              <div>
+                Recording the cheque does not settle the claim. The claim is marked settled only
+                when the cheque is realized and posted to the selected bank account.
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(chequeAction)}
+        onClose={() => setChequeAction(null)}
+        title={
+          chequeAction
+            ? `Mark cheque ${chequeAction.cheque.chequeNo} ${
+                chequeAction.next === "Cleared"
+                  ? "realized"
+                  : chequeAction.next.toLowerCase()
+              }`
+            : "Update cheque"
+        }
+        subtitle={
+          chequeAction
+            ? `${chequeAction.cheque.customerName} · ${money(chequeAction.cheque.amount)}`
+            : undefined
+        }
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setChequeAction(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={saveChequeAction}>
+              Save status
+            </button>
+          </>
+        }
+      >
+        {chequeAction && (
+          <div className="stack">
+            {chequeAction.next !== "Bounced" && (
+              <Field
+                label="Bank account"
+                required={chequeAction.next === "Cleared"}
+                hint={
+                  chequeAction.next === "Deposited"
+                    ? "Where the cheque will be deposited."
+                    : "Where the cleared funds landed."
+                }
+              >
+                <select
+                  className="select"
+                  value={actionAccountId}
+                  onChange={(event) => setActionAccountId(event.target.value)}
+                >
+                  <option value="">No account</option>
+                  {state.bankAccounts
+                    .filter((account) => account.active)
+                    .map((account) => (
+                      <option key={account.id} value={account.id}>
+                        {account.name}
+                      </option>
+                    ))}
+                </select>
+              </Field>
+            )}
+            {chequeAction.next === "Bounced" && (
+              <Field label="Bounce reason" required>
+                <input
+                  className="input"
+                  placeholder="Insufficient funds / signature mismatch"
+                  value={bounceReason}
+                  onChange={(event) => setBounceReason(event.target.value)}
+                />
+              </Field>
+            )}
+            <div className="alert alert-info">
+              <CheckCircle2 />
+              <div>
+                {chequeAction.next === "Cleared"
+                  ? "Realizing the cheque posts the insurance settlement to the ledger and marks the claim settled."
+                  : chequeAction.next === "Bounced"
+                    ? "The claim goes back to Awaiting Payment so a replacement cheque can be recorded."
+                    : "The cheque remains open until it is realized by the bank."}
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
     </div>
   );
 }

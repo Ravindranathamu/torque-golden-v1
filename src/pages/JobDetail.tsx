@@ -56,7 +56,6 @@ import {
   waLink,
   shortDate,
   daysUntil,
-  dateOnly,
 } from "../lib/utils";
 import { acceptanceMessage, checkoutMessage } from "../lib/messages";
 import {
@@ -121,8 +120,6 @@ export function JobDetailPage() {
     updateDriverCommission,
     createInsuranceClaim,
     updateInsuranceClaim,
-    recordInsuranceCheque,
-    settleInsuranceClaim,
     markRepairCompleted,
     updateJobSections,
     togglePartIncludedInLabor,
@@ -175,6 +172,9 @@ export function JobDetailPage() {
   const [customerPartName, setCustomerPartName] = useState("");
   const [customerPartQty, setCustomerPartQty] = useState("1");
   const [customerPartValue, setCustomerPartValue] = useState("");
+  const [readdPartId, setReaddPartId] = useState<string | null>(null);
+  const [readdQty, setReaddQty] = useState("1");
+  const [readdSearch, setReaddSearch] = useState("");
   const [taskExtra, setTaskExtra] = useState(false);
   const [driverOpen, setDriverOpen] = useState(false);
   const [driverForm, setDriverForm] = useState({
@@ -191,12 +191,6 @@ export function JobDetailPage() {
     assessorName: "",
     assessorPhone: "",
   });
-  const [chequeNo, setChequeNo] = useState("");
-  const [chequeAmount, setChequeAmount] = useState("");
-  const [chequeBank, setChequeBank] = useState("");
-  const [chequeBranch, setChequeBranch] = useState("");
-  const [chequeDate, setChequeDate] = useState(dateOnly(new Date().toISOString()));
-  const [chequeAccountId, setChequeAccountId] = useState("");
   const [warrantyPartId, setWarrantyPartId] = useState<string | null>(null);
   const [warrantyNote, setWarrantyNote] = useState("");
 
@@ -216,6 +210,26 @@ export function JobDetailPage() {
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt)),
     [state.vehicleBills, jobId],
   );
+  const readdPart = readdPartId
+    ? jobParts.find((part) => part.id === readdPartId) ?? null
+    : null;
+  const readdStockOptions = state.inventory
+    .filter((item) => {
+      const needle = readdSearch.trim().toLowerCase();
+      if (!needle) return true;
+      return `${item.name} ${item.code} ${item.make ?? ""} ${item.model ?? ""}`
+        .toLowerCase()
+        .includes(needle);
+    })
+    .sort((a, b) => {
+      const aStock = a.stock > 0 ? 0 : 1;
+      const bStock = b.stock > 0 ? 0 : 1;
+      if (aStock !== bStock) return aStock - bStock;
+      return a.name.localeCompare(b.name);
+    });
+  const estimatePartSuggestions = state.inventory
+    .filter((item) => item.type === "Spare Part")
+    .sort((a, b) => a.name.localeCompare(b.name));
   const totals = useMemo(
     () => (job ? jobTotals(job, state.tasks, state.parts, state.workers) : null),
     [job, state.tasks, state.parts, state.workers],
@@ -888,46 +902,6 @@ export function JobDetailPage() {
     push("Insurer parts approval recorded.");
   }
 
-  function saveCheque() {
-    if (!claim) return;
-    const amount = Number(chequeAmount);
-    if (!Number.isFinite(amount) || amount <= 0) {
-      push("Enter a valid cheque amount.", "error");
-      return;
-    }
-    if (!chequeNo.trim() || !chequeBank.trim() || !chequeBranch.trim()) {
-      push("Enter the cheque number, bank and branch.", "error");
-      return;
-    }
-    if (!chequeDate) {
-      push("Enter the cheque date.", "error");
-      return;
-    }
-    const result = recordInsuranceCheque(claim.id, {
-      chequeNo: chequeNo.trim(),
-      amount,
-      bank: chequeBank.trim(),
-      branch: chequeBranch.trim(),
-      chequeDate,
-      bankAccountId: chequeAccountId || undefined,
-    });
-    if (!result.ok) {
-      push(result.message ?? "Could not record the cheque.", "error");
-      return;
-    }
-    push("Insurer cheque recorded in the incoming cheque board.");
-  }
-
-  function settleClaim() {
-    if (!claim) return;
-    const result = settleInsuranceClaim(claim.id);
-    if (!result.ok) {
-      push(result.message ?? "Could not settle the claim.", "error");
-      return;
-    }
-    push("Insurance claim settled and posted to the ledger.");
-  }
-
   function estimatePdf(estimate: JobEstimate) {
     if (claim) {
       return buildInsuranceEstimatePdf(
@@ -1133,6 +1107,53 @@ export function JobDetailPage() {
         : "Part returned to the customer. Allow pop-ups to open WhatsApp.",
       win ? "info" : "error",
     );
+  }
+
+  function readdAsCustomerPart(part: (typeof jobParts)[number]) {
+    const result = addCustomerBroughtPart(activeJob.id, {
+      name: part.itemName,
+      qty: part.qtyRequested,
+      unitPrice: part.sellingPrice,
+      sectionId: part.sectionId,
+    });
+    if (!result.ok) {
+      push(result.message ?? "Could not add the part again.", "error");
+      return;
+    }
+    push(
+      `${part.itemName} added again as customer-brought. It stays on the insurance bill only.`,
+    );
+  }
+
+  function openReaddFromStore(part: (typeof jobParts)[number]) {
+    setReaddPartId(part.id);
+    setReaddQty(String(part.qtyRequested || 1));
+    setReaddSearch("");
+  }
+
+  function readdFromStore(itemId: string) {
+    if (!readdPart) return;
+    const item = state.inventory.find((entry) => entry.id === itemId);
+    const qty = Number(readdQty);
+    if (!item) return;
+    if (!Number.isFinite(qty) || qty <= 0) {
+      push("Enter a valid quantity.", "error");
+      return;
+    }
+    const result = requestPart(
+      activeJob.id,
+      item.id,
+      qty,
+      readdPart.sectionId,
+    );
+    if (!result.ok) {
+      push(result.message ?? "Could not add the part to the stores queue.", "error");
+      return;
+    }
+    push(
+      `${item.name} requested from stores again for ${activeJob.vehicleNo}. Stores sets the price at issue.`,
+    );
+    setReaddPartId(null);
   }
 
   function completeRepair() {
@@ -1927,6 +1948,25 @@ export function JobDetailPage() {
                               </button>
                             </div>
                           )}
+                        {canEdit &&
+                          part.status === "Returned" &&
+                          part.partSource === "Customer_Brought" && (
+                            <select
+                              className="select"
+                              style={{ width: 168, fontSize: 11 }}
+                              title="Add the same part again for this job"
+                              value=""
+                              onChange={(event) => {
+                                const value = event.target.value;
+                                if (value === "customer") readdAsCustomerPart(part);
+                                if (value === "store") openReaddFromStore(part);
+                              }}
+                            >
+                              <option value="">Add again…</option>
+                              <option value="customer">Customer brings it again</option>
+                              <option value="store">Supply from store</option>
+                            </select>
+                          )}
                         {canSupervise &&
                           part.status === "Issued" &&
                           part.warrantyStatus !== "Claimed" &&
@@ -2588,91 +2628,6 @@ export function JobDetailPage() {
                         })
                       )}
                     </div>
-                  </div>
-
-                  <div className="stack">
-                    {canManageBilling && (
-                    <div className="card">
-                      <div className="card-head"><div><h3>Cheque & settlement</h3><p>Track the insurer cheque through to clearance.</p></div></div>
-                      <div className="card-body stack">
-                        <div className="form-grid">
-                          <Field label="Cheque number">
-                            <input className="input" value={chequeNo} onChange={(event) => setChequeNo(event.target.value)} />
-                          </Field>
-                          <Field label="Cheque amount (LKR)">
-                            <input
-                              className="input"
-                              type="number"
-                              min={0}
-                              value={chequeAmount}
-                              onChange={(event) => setChequeAmount(event.target.value)}
-                            />
-                          </Field>
-                          <Field label="Bank">
-                            <input
-                              className="input"
-                              placeholder="Issuing bank"
-                              value={chequeBank}
-                              onChange={(event) => setChequeBank(event.target.value)}
-                            />
-                          </Field>
-                          <Field label="Branch">
-                            <input
-                              className="input"
-                              placeholder="Branch"
-                              value={chequeBranch}
-                              onChange={(event) => setChequeBranch(event.target.value)}
-                            />
-                          </Field>
-                          <Field label="Cheque date" hint="Post-dated cheques stay In Safe until deposit.">
-                            <input
-                              className="input"
-                              type="date"
-                              value={chequeDate}
-                              onChange={(event) => setChequeDate(event.target.value)}
-                            />
-                          </Field>
-                          <Field label="Deposit account">
-                            <select
-                              className="select"
-                              value={chequeAccountId}
-                              onChange={(event) => setChequeAccountId(event.target.value)}
-                            >
-                              <option value="">No account</option>
-                              {state.bankAccounts
-                                .filter((account) => account.active)
-                                .map((account) => (
-                                  <option key={account.id} value={account.id}>
-                                    {account.name}
-                                  </option>
-                                ))}
-                            </select>
-                          </Field>
-                        </div>
-                        <div className="row wrap">
-                          <button className="btn btn-secondary btn-sm" onClick={saveCheque} disabled={!canManageBilling}>
-                            <Banknote />
-                            Record cheque
-                          </button>
-                          <button
-                            className="btn btn-primary btn-sm"
-                            onClick={settleClaim}
-                            disabled={!canManageBilling || !claim.chequeAmount || claim.status === "Settled"}
-                          >
-                            <CheckCircle2 />
-                            Settle claim
-                          </button>
-                        </div>
-                        <div className="tiny muted">
-                          {claim.chequeClearedAt
-                            ? `Cleared ${shortDate(claim.chequeClearedAt)}.`
-                            : claim.chequeReceivedAt
-                              ? `Received ${shortDate(claim.chequeReceivedAt)} — awaiting clearance.`
-                              : "No cheque recorded yet."}
-                        </div>
-                      </div>
-                    </div>
-                    )}
                   </div>
                 </>
               )}
@@ -3674,6 +3629,90 @@ export function JobDetailPage() {
       </Modal>
 
       <Modal
+        open={Boolean(readdPart)}
+        onClose={() => setReaddPartId(null)}
+        title="Add the same part from store"
+        subtitle={
+          readdPart
+            ? `${readdPart.itemName} · ${activeJob.vehicleNo} · returned to the customer`
+            : undefined
+        }
+        size="wide"
+        footer={
+          <button className="btn btn-secondary" onClick={() => setReaddPartId(null)}>
+            Cancel
+          </button>
+        }
+      >
+        {readdPart && (
+          <div className="stack">
+            <Alert tone="info" title="New store request, no stock movement yet">
+              Pick the matching stock item. Stores receives a fresh request and sets the price when
+              the part is issued — nothing is deducted until then.
+            </Alert>
+            <div className="form-grid">
+              <Field label="Quantity" required>
+                <input
+                  className="input"
+                  type="number"
+                  min={0.001}
+                  step="any"
+                  value={readdQty}
+                  onChange={(event) => setReaddQty(event.target.value)}
+                />
+              </Field>
+              <Field label="Search stock" hint="All store parts are searchable; out-of-stock items are purchased by Stores.">
+                <input
+                  className="input"
+                  placeholder="Search by part name or code…"
+                  value={readdSearch}
+                  onChange={(event) => setReaddSearch(event.target.value)}
+                />
+              </Field>
+            </div>
+            <div
+              style={{
+                border: "1px solid var(--line)",
+                borderRadius: 11,
+                maxHeight: 300,
+                overflowY: "auto",
+              }}
+            >
+              {readdStockOptions.length === 0 ? (
+                <div className="empty" style={{ padding: "22px 14px" }}>
+                  <p>No stock item matches that search. Add the part under Stores first.</p>
+                </div>
+              ) : (
+                readdStockOptions.slice(0, 20).map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className="suggestion"
+                    style={{ width: "100%", border: 0, background: "transparent", textAlign: "left" }}
+                    onClick={() => readdFromStore(item.id)}
+                  >
+                    <span className="part-icon">
+                      <Package size={14} />
+                    </span>
+                    <div className="s-main">
+                      <strong>{item.name}</strong>
+                      <span>
+                        {item.code} · {item.make ? `${item.make} ${item.model}` : "Universal"} ·{" "}
+                        {formatQty(item.stock, item.measureUnit ?? item.unit)} in stock
+                      </span>
+                    </div>
+                    <span className={`badge ${item.stock > 0 ? "badge-green" : "badge-red"}`}>
+                      {item.stock > 0 ? "In stock" : "Purchase"}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
         open={estimateOpen}
         onClose={() => setEstimateOpen(false)}
         title={estimateEditingId ? "Edit estimate" : "Create estimate"}
@@ -3752,6 +3791,17 @@ export function JobDetailPage() {
             </Alert>
           )}
 
+          <datalist id="estimate-part-options">
+            {estimatePartSuggestions.map((item) => (
+              <option
+                key={item.id}
+                value={`${item.name}${item.make ? ` — ${item.make} ${item.model}` : ""}`}
+              >
+                {`${item.code} · ${formatQty(item.stock, item.measureUnit ?? item.unit)} in stock · ${money(item.lastSellingPrice ?? 0)}`}
+              </option>
+            ))}
+          </datalist>
+
           <div className="stack" style={{ gap: 8 }}>
             {estimateLines.length === 0 ? (
               <div className="empty" style={{ padding: "26px 16px" }}>
@@ -3816,13 +3866,36 @@ export function JobDetailPage() {
                             <option value="Part">Part</option>
                           </select>
                         </Field>
-                        <Field label="Description" required>
+                        <Field
+                          label="Description"
+                          required
+                          hint={
+                            line.type === "Part"
+                              ? "Type to search current stock. Selecting a part fills its selling price; stock is not deducted until Stores issues it."
+                              : undefined
+                          }
+                        >
                           <input
                             className="input"
+                            list={line.type === "Part" ? "estimate-part-options" : undefined}
                             value={line.description}
-                            onChange={(event) =>
-                              updateEstimateLine(line.id, { description: event.target.value })
-                            }
+                            onChange={(event) => {
+                              const value = event.target.value;
+                              const match =
+                                line.type === "Part"
+                                  ? state.inventory.find(
+                                      (item) =>
+                                        `${item.name}${item.make ? ` — ${item.make} ${item.model}` : ""}` ===
+                                        value,
+                                    )
+                                  : undefined;
+                              updateEstimateLine(line.id, {
+                                description: value,
+                                ...(match
+                                  ? { unitPrice: Math.max(0, match.lastSellingPrice ?? 0) }
+                                  : {}),
+                              });
+                            }}
                           />
                         </Field>
                         <Field label="Quantity">

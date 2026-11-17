@@ -417,8 +417,8 @@ policies. The only anonymous portal RPC is `poll_workshop_license(text)`.
 | --- | --- | --- |
 | Advance payments | `advance_payments` | Amount > 0; unique receipt per workshop; balance = advances not yet applied at checkout. Cashier and Accounting only. |
 | Estimates | `job_estimates`, `job_estimates.section_id` | Exactly one Initial estimate per repair section (one per job when sections are off); later estimates are `SUP-01`, `SUP-02`; Draft → Awaiting Approval → Approved/Rejected; editing an approved estimate is locked and creates a new revision (`Rev 2`). Approval loads labour as unassigned tasks; the supervisor assigns workers before completion. |
-| Insurance claim | `insurance_claims`, `job_parts.salvage_*` | One claim per job; the **Insurance** tab shows approvals and cheque settlement only; draft insurer/customer bills live in the **Invoice** tab and are sent from Cashier. Estimate and parts approval are separate; release order can arrive before cheque/salvage; insurer TIN and branch override feed the IRD bill; salvage tracked per part. After release, salvage and cheque settlement stay open in **Insurance desk**: supervisors/storekeepers submit salvage, cashier/accounting record the cheque and settle the claim. |
-| Separate vehicle bills | `vehicle_bills`, `job_tasks.assigned_bill_id`, `job_parts.assigned_bill_id` | Each vehicle can have an Insurance bill, a Customer bill and Additional shortfall bills, optionally tagged to a repair section. Ticked tasks/parts lock to one bill. New bills are saved as `Draft`; **Cashier → Separate bills** chooses No VAT / Add VAT and marks the bill sent. Sent insurance bills become `Awaiting Release Order` (shown as *Waiting for releasing order*); they settle on the insurer release order, while customer and additional bills are paid in full. A release order below the insurance bill creates an Additional customer bill for the difference after tax, reduced by customer-brought value already paid on the insurance bill; the credit prints as a deduction. Section bills settle independently; the consolidated **Final bill** prints only when every section bill is settled. Settled bills are immutable. Customer-brought parts are priced on the insurance bill only and never charged to the customer or sent to stores. |
+| Insurance claim | `insurance_claims`, `job_parts.salvage_*` | One claim per job; the **Insurance** tab shows approvals and cheque settlement only; draft insurer/customer bills live in the **Invoice** tab and are sent from Cashier. Estimate and parts approval are separate; release order can arrive before cheque/salvage; insurer TIN and branch override feed the IRD bill; salvage tracked per part. After release, salvage and cheque settlement stay open in **Insurance desk**: supervisors/storekeepers submit salvage; cashier/accounting record the insurer cheque, record deposit and mark it realized. Realizing the cheque posts the settlement and marks the claim settled — releasing the vehicle never settles the claim by itself. |
+| Separate vehicle bills | `vehicle_bills`, `job_tasks.assigned_bill_id`, `job_parts.assigned_bill_id` | Each vehicle can have an Insurance bill, a Customer bill and Additional shortfall bills, optionally tagged to a repair section. Ticked tasks/parts lock to one bill. New bills are saved as `Draft` and appear inside the vehicle's row in the **Cashier billing queue**, where the cashier chooses No VAT / Add VAT and marks the bill sent. The queue has a vehicle-number search and one collapsed row per vehicle; expanding shows the bills, and several can be ticked for a combined print or WhatsApp PDF. Sent insurance bills become `Awaiting Release Order` (shown as *Waiting for releasing order*); they settle on the insurer release order, while customer and additional bills are paid in full. When every bill on the vehicle is settled the job becomes `Paid` and leaves the queue for **Paid & released**. A release order below the insurance bill creates an Additional customer bill for the difference after tax, reduced by customer-brought value already paid on the insurance bill; the credit prints as a deduction. Section bills settle independently; the consolidated **Final bill** prints only when every section bill is settled. Settled bills are immutable. Customer-brought parts are priced on the insurance bill only, never charged to the customer or sent to stores; after a swap/return the line offers **Add again…** for a customer re-add or a fresh store request. |
 | Daily Google Drive backup | `workshops.drive_backup_*`, `app_records` | A complete JSON snapshot uploads once a day to Drive through a secured Apps Script or Edge Function webhook. The browser catches up at the next launch if it was closed at the configured hour. Last success time, status and filename are stored in settings. See `docs/GOOGLE_DRIVE_BACKUP.md`. |
 | Attendance | `attendance_records` | One row per worker per date; Present/Absent/Off Day; only Present workers can be assigned to tasks. |
 | Monthly payroll | `staff_loans`, `payslips` | Basic pay prorated by payable days; commission added; loan deduction, EPF employee deduction and other deductions reduce net. EPF/ETF employer amounts are reported but not deducted. |
@@ -426,7 +426,7 @@ policies. The only anonymous portal RPC is `poll_workshop_license(text)`.
 | Warranty returns | `supplier_credit_notes`, `job_parts.warranty_*` | Claim references the original supplier invoice; completion records the credit note; the part moves to Replaced/Credited. |
 | Service history | `service_records` | One snapshot per job at dispatch, including tasks, parts, worker assignments, total and mileage. |
 | Driver commission | `job_cards.driver_*`, `ledger_entries.driver_commission` | Fixed or percentage of labour/total; hidden from customer invoices; deducted from owner P&L; thermal voucher for cashier/driver signatures. |
-| Opening stock & stock ledger | `inventory_items.opening_stock`, `stock_movements` | Stock only moves through opening stock, bulk purchase invoice, job part issue or supplier return. When a requested part is short, Stores can purchase the balance and issue it in one step: a direct cash purchase is recorded with the supplier invoice number, plus matching `Purchase` and `Job_Issue` movements. Normal stock issues do not require a supplier invoice. No manual +/- adjustments; every movement stores reason, reference and user. |
+| Opening stock & stock ledger | `inventory_items.opening_stock`, `stock_movements` | Stock only moves through opening stock, bulk purchase invoice, job part issue or supplier return. When a requested part is short, Stores chooses one of two paths at Issue: purchase the balance and issue it in one step (a direct cash purchase recorded with the supplier invoice number, plus matching `Purchase` and `Job_Issue` movements), or issue a suitable in-stock part, which replaces the job line with the chosen item and deducts only the issued quantity. Normal stock issues do not require a supplier invoice. No manual +/- adjustments; every movement stores reason, reference and user. |
 | Bulk purchases & returns | `supplier_purchases`, `purchase_lines`, `supplier_returns`, `supplier_return_lines` | Multi-row purchase invoices; returns reverse stock and supplier outstanding; only Accounting/Cashier may mark a supplier invoice paid. |
 | Banking | `bank_accounts`, `bank_transactions` | Opening balances, inflows/outflows, internal transfers, per-account statements and dashboard liquidity. Cheque deposits and supplier payments post here. |
 | Petty cash | `petty_cash_entries` | Float top-ups and expense vouchers with category/photo; printable voucher; low-balance alert under LKR 3,000; expenses included in P&L. |
@@ -452,15 +452,20 @@ Operational notes:
   cheque clearance. Salvage submission and cheque settlement then remain open in
   **Insurance desk** until the supervisor/storekeeper and cashier/accountant
   close them.
-- Settle split bills in **Cashier → Separate bills**. Draft bills show **Set VAT &
-  send**; the cashier chooses No VAT or Add VAT (and an optional discount) before
-  the bill goes to the insurer or customer. An insurance bill is then released
-  against the insurer release order; the customer and additional bills are
-  collected in full. If the release order is lower than the insurance bill, the
-  shortfall is created automatically as an Additional bill payable by the
-  customer. Never mutate the insurance bill to absorb the shortfall. The basis is
-  the insurance bill grand total after tax, less any customer-brought value
-  already included in that bill and paid by the customer.
+- Settle split bills in the **Cashier billing queue**. Each vehicle shows as one
+  collapsed row with its open amount; a dedicated search finds it by vehicle
+  number. Expand the row to see every bill; tick several to print or send them as
+  one PDF. Draft bills show **Set VAT & send**; the cashier chooses No VAT or Add
+  VAT (and an optional discount) before the bill goes to the insurer or customer.
+  An insurance bill is then released against the insurer release order; the
+  customer and additional bills are collected in full. When all bills on the
+  vehicle are settled the job becomes `Paid` and moves to **Paid & released**,
+  whether or not it passed through `Repair Completed`. If the release order is
+  lower than the insurance bill, the shortfall is created automatically as an
+  Additional bill payable by the customer. Never mutate the insurance bill to
+  absorb the shortfall. The basis is the insurance bill grand total after tax,
+  less any customer-brought value already included in that bill and paid by the
+  customer.
 - VAT and the bill total are fixed when the cashier sends the bill. The
   **Job → Invoice** tab creates draft bills and may pre-set a VAT rate, but the
   cashier's **Prepare bill** step is the final choice. The release/payment
@@ -951,12 +956,13 @@ npx vercel --prod
 | Payslip basic pay looks low | Absences exceed allowed off days | Check attendance and allowed off days in Team & HR |
 | Daily wage not accumulating | Attendance not marked | Mark Present on each worked day before payout |
 | Advance not reducing the bill | Advance recorded against another job | Check the job number on the advance receipt |
-| Insurance job cannot be released | Bill is still a draft or release order not recorded | Set VAT and send the bill in Cashier → Separate bills, then release it against the insurer release note in Cashier |
+| Insurance job cannot be released | Bill is still a draft or release order not recorded | Set VAT and send the bill in the Cashier billing queue, then release it against the insurer release note in Cashier |
 | Repair completion blocked | Estimate-approved task has no technician | Assign at least one worker to every labour task in Job → Labour & tasks (two or three workers can share a task; commission splits equally) |
 | Stores does not see an estimate part | Supervisor has not chosen the part source | In Job → Parts & materials choose Store supplied or Customer brought |
 | Final bill button is missing | Bills are not tagged to two or more sections | Tag each section bill with its repair section; settle every section bill first |
 | Insurance desk shows nothing | Vehicle not released, or salvage/claim already closed | Release the vehicle, then check salvage per part and the claim cheque status |
-| Customer-brought part cannot go to stores | Customer parts never enter stock | Hand it back with the swap/return button; WhatsApp the owner |
+| Zero-stock part request | Requested item has no usable stock | At Issue choose **Purchase & issue** with the supplier invoice, or **Suitable part from stock** to replace the line |
+| Customer-brought part cannot go to stores | Customer parts never enter stock | Hand it back with the swap/return button; then **Add again…** re-adds it as customer-brought or sends a fresh store request |
 
 ---
 

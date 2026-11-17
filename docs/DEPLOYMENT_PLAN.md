@@ -1496,10 +1496,21 @@ If you use the browser webhook for the pilot, the receiver must:
       Settings → Modules; disabled modules are absent from navigation.
 - [ ] Insurance smoke test: estimate approval loads unassigned tasks, supervisor
       assigns workers, part source is chosen, the **Insurance** tab shows approvals
-      and cheque settlement only, the **Invoice** tab saves draft bills, Cashier
-      sets No VAT/Add VAT and sends the insurance bill (*Waiting for releasing
-      order*), a short release order creates the Additional bill, and the
-      Additional bill can be collected in Cashier.
+      only, the **Invoice** tab saves draft bills, Cashier sets No VAT/Add VAT and
+      sends the insurance bill (*Waiting for releasing order*), a short release
+      order creates the Additional bill, and the Additional bill can be collected
+      in Cashier. The claim stays unsettled after release.
+- [ ] Cashier queue smoke test: one billing queue with vehicle search, collapsed
+      vehicle rows showing the open amount, expanded bills, multi-select print/send
+      as one PDF, and settlement moving the vehicle to Paid & released only when
+      every bill is settled.
+- [ ] Stores zero-stock smoke test: request an out-of-stock part, issue it either
+      by purchase with supplier invoice or by replacing the line with a suitable
+      in-stock part; confirm stock, no purchase on substitution, and the updated job
+      line. Then return a customer-brought part and use **Add again…** for both the
+      customer and store paths.
+- [ ] Estimate part smoke test: type a part description, pick a stock suggestion,
+      confirm the selling price fills and stock does not move until Stores issues.
 - [ ] Multi-section smoke test: two section bills settle independently, the final
       bill is blocked until both settle, then totals both section bills.
 - [ ] Multi-technician smoke test: assign two or three present workers to one
@@ -1507,7 +1518,9 @@ If you use the browser webhook for the pilot, the receiver must:
       settle a bill and verify each worker's share in payroll and analytics and
       that the invoice lists every technician.
 - [ ] Insurance desk smoke test: released vehicle shows salvage and cheque
-      queues; supervisor/storekeeper and cashier/accounting see only their queues.
+      queues; supervisor/storekeeper and cashier/accounting see only their queues;
+      a recorded cheque moves In Safe → deposited → realized, and only realization
+      marks the claim settled.
 - [ ] Demo mode still on until client sign-off.
 
 ---

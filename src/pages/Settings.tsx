@@ -1425,7 +1425,7 @@ export function SettingsPage() {
                 </Field>
               </div>
               <Alert tone="info" title="When VAT applies">
-                The cashier chooses No VAT or Add VAT on a draft bill in Cashier → Separate bills,
+                The cashier chooses No VAT or Add VAT on a draft bill in the Cashier billing queue,
                 before it is sent to the insurer or corporate customer. With VAT prints a TAX
                 INVOICE with the 18% (or chosen) VAT row; without VAT prints a standard INVOICE.
                 Once sent, the bill's VAT is fixed. Insurance estimates and bills always use the

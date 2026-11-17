@@ -114,7 +114,6 @@ export function AccountingPage() {
     savePayslip,
     payDailyWage,
     recordInsuranceCheque,
-    settleInsuranceClaim,
   } = useApp();
   const { push } = useToast();
   const [tab, setTab] = useState<AccountingTab>("overview");
@@ -546,15 +545,6 @@ export function AccountingPage() {
         : `${payPurchase.invoiceNo} marked paid. Supplier credit reduced.`,
     );
     setPayTarget(null);
-  }
-
-  function settleClaim(claimId: string) {
-    const result = settleInsuranceClaim(claimId);
-    if (!result.ok) {
-      push(result.message ?? "Could not settle the claim.", "error");
-      return;
-    }
-    push("Insurance claim settled and posted to the ledger.");
   }
 
   return (
@@ -1888,18 +1878,20 @@ export function AccountingPage() {
                               <button
                                 className="btn btn-soft btn-sm"
                                 onClick={() => openChequeModal(claim.id)}
-                                disabled={claim.status === "Settled"}
+                                disabled={
+                                  claim.status === "Settled" ||
+                                  Boolean(claim.chequeAmount && !claim.chequeClearedAt)
+                                }
+                                title={
+                                  claim.status === "Settled"
+                                    ? "Claim settled"
+                                    : claim.chequeAmount && !claim.chequeClearedAt
+                                      ? "Cheque already recorded — realize it from the Insurance desk"
+                                      : "Record insurer cheque"
+                                }
                               >
                                 <Banknote />
                                 Cheque
-                              </button>
-                              <button
-                                className="btn btn-ghost btn-sm"
-                                onClick={() => settleClaim(claim.id)}
-                                title="Settle claim"
-                                disabled={!claim.chequeAmount || claim.status === "Settled"}
-                              >
-                                <ShieldCheck />
                               </button>
                             </div>
                           </td>

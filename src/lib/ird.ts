@@ -1352,6 +1352,80 @@ export function buildVehicleBillPdf(
   return { blob: doc.output("blob"), filename };
 }
 
+export interface VehicleBillPrintInput {
+  bill: VehicleBill;
+  tasks: JobTask[];
+  parts: JobPart[];
+  insurance?: { claim: InsuranceClaim; insurer?: InsuranceCompany };
+}
+
+function vehicleBillDocuments(
+  job: JobCard,
+  bills: VehicleBillPrintInput[],
+  settings: WorkshopSettings,
+): IrdDocument[] {
+  return bills.map((entry) =>
+    vehicleBillDocument(
+      job,
+      entry.bill,
+      entry.tasks,
+      entry.parts,
+      settings,
+      entry.insurance,
+    ),
+  );
+}
+
+export function printVehicleBills(
+  job: JobCard,
+  bills: VehicleBillPrintInput[],
+  settings: WorkshopSettings,
+): void {
+  if (bills.length === 0) return;
+  const documents = vehicleBillDocuments(job, bills, settings);
+  const htmls = documents.map((document) => renderIrdHtml(settings, document));
+  const first = htmls[0];
+  const bodyStart = first.indexOf("<body>") + "<body>".length;
+  const head = first.slice(0, bodyStart);
+  const bodies = htmls.map((html) => {
+    const start = html.indexOf("<body>") + "<body>".length;
+    const end = html.lastIndexOf("</body>");
+    return html.slice(start, end);
+  });
+  const combined =
+    head +
+    bodies
+      .map(
+        (body, index) =>
+          `${index > 0 ? '<div style="break-before:page;page-break-before:always"></div>' : ""}${body}`,
+      )
+      .join("") +
+    "</body></html>";
+  const win = window.open("", "_blank", "width=980,height=1100");
+  if (!win) return;
+  win.document.open();
+  win.document.write(combined);
+  win.document.close();
+}
+
+export function buildVehicleBillsPdf(
+  job: JobCard,
+  bills: VehicleBillPrintInput[],
+  settings: WorkshopSettings,
+): { blob: Blob; filename: string } {
+  const doc = new jsPDF({ unit: "mm", format: "a4" });
+  const documents = vehicleBillDocuments(job, bills, settings);
+  documents.forEach((document, index) => {
+    if (index > 0) doc.addPage();
+    drawIrdDocument(doc, settings, document);
+  });
+  const label = bills
+    .map((entry) => entry.bill.billNo.replace(/[^\w-]+/g, "-"))
+    .join("_");
+  const filename = `Bills_${job.vehicleNo.replace(/\s+/g, "-")}_${label}.pdf`;
+  return { blob: doc.output("blob"), filename };
+}
+
 export function buildIrdInsuranceEstimatePdf(
   job: JobCard,
   estimate: JobEstimate,

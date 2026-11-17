@@ -404,6 +404,17 @@ async function sharePdfToWhatsApp(
   return "downloaded";
 }
 
+export async function sharePdfFile(
+  blob: Blob,
+  filename: string,
+  phone: string,
+  message: string,
+  title: string,
+  settings: WorkshopSettings,
+): Promise<"shared" | "downloaded" | "opened" | "queued"> {
+  return sharePdfToWhatsApp(blob, filename, phone, message, title, settings);
+}
+
 function pdfBrandHeader(
   doc: jsPDF,
   settings: WorkshopSettings,
