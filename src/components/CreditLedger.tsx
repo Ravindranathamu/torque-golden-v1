@@ -186,7 +186,10 @@ export function CreditLedger({ defaultFilter = "open" }: { defaultFilter?: Credi
       push(response.message ?? "Unable to approve the release.", "error");
       return;
     }
-    push(response.message ?? "Part-payment release approved. PRO notified.");
+    push(
+      response.message ??
+        "Part-payment release approved. The cashier must now confirm the vehicle exit.",
+    );
     setApprovalTarget(null);
     setApprovalNote("");
   }
@@ -199,8 +202,9 @@ export function CreditLedger({ defaultFilter = "open" }: { defaultFilter?: Credi
             <div>
               <h3>Part-payment release approvals</h3>
               <p>
-                These vehicles have a part-paid bill. The owner or accounting must approve the
-                gate release while the balance stays in the credit ledger.
+                These vehicles have a part-paid bill. The owner or accounting approves the
+                release; the cashier then confirms the vehicle exit while the balance stays in
+                the credit ledger.
               </p>
             </div>
             <span className="badge badge-amber">
@@ -698,7 +702,7 @@ export function CreditLedger({ defaultFilter = "open" }: { defaultFilter?: Credi
             </button>
             <button className="btn btn-primary" onClick={submitApproval}>
               <ShieldCheck />
-              Approve gate release
+              Approve release
             </button>
           </>
         }
@@ -744,8 +748,9 @@ export function CreditLedger({ defaultFilter = "open" }: { defaultFilter?: Credi
             <div className="alert alert-warn">
               <ShieldCheck />
               <div>
-                Approving releases {approvalTarget.vehicleNo} to the gate. The credit balance
-                remains in the customer ledger with its due date and WhatsApp reminders.
+                Approving releases {approvalTarget.vehicleNo} to the cashier, who confirms the
+                gate exit. The credit balance remains in the customer ledger with its due date
+                and WhatsApp reminders.
               </div>
             </div>
           </div>

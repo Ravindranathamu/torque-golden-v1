@@ -62,12 +62,16 @@ Sign in as each demo role and check the workflow that belongs to it:
   shows the amount collected and the balance on customer credit, and that the job
   is **Awaiting Release Approval**, not in gate clearance.
 - **Owner/Accounting** — open **Accounts → Customer credit**, approve the
-  part-payment release, and confirm the job moves to **Released on Credit** in the
-  gate list. Record the outstanding credit from the ledger and confirm the credit
-  settles while the job stays released until handover. Repeat the checkout and
+  part-payment release, and confirm the job moves to **Released on Credit** and
+  waits for the cashier's exit approval, not PRO clearance. Record the
+  outstanding credit from the ledger and confirm the credit settles while the job
+  stays released until the cashier approves the exit. Repeat the checkout and
   settle the credit before approval; the job should clear straight to **Paid**.
+- **Cashier** — open **Paid & released**, approve the vehicle exit, and confirm the
+  job becomes **Dispatched** with the gate log and marketing follow-up updated.
 - **Gate/PRO** — hand over a paid vehicle and a released-on-credit vehicle; confirm
-  the gate log and handover message.
+  the gate log and handover message. A part-payment release approved by
+  Owner/Accounting must not appear in PRO clearance until the cashier confirms it.
 - **Stores** — request an out-of-stock part and choose purchase-from-supplier or
   substitute-from-stock; return a customer-brought part and use **Add again…**.
 - **Insurance desk** — record, deposit and realize an insurer cheque; confirm the
@@ -443,7 +447,7 @@ policies. The only anonymous portal RPC is `poll_workshop_license(text)`.
 | Advance payments | `advance_payments` | Amount > 0; unique receipt per workshop; balance = advances not yet applied at checkout. Cashier and Accounting only. |
 | Estimates | `job_estimates`, `job_estimates.section_id` | Exactly one Initial estimate per repair section (one per job when sections are off); later estimates are `SUP-01`, `SUP-02`; Draft → Awaiting Approval → Approved/Rejected; editing an approved estimate is locked and creates a new revision (`Rev 2`). Approval loads labour as unassigned tasks; the supervisor assigns workers before completion. |
 | Insurance claim | `insurance_claims`, `job_parts.salvage_*` | One claim per job; the **Insurance** tab shows approvals and cheque settlement only; draft insurer/customer bills live in the **Invoice** tab and are sent from Cashier. Estimate and parts approval are separate; release order can arrive before cheque/salvage; insurer TIN and branch override feed the IRD bill; salvage tracked per part. After release, salvage and cheque settlement stay open in **Insurance desk**: supervisors/storekeepers submit salvage; cashier/accounting record the insurer cheque, record deposit and mark it realized. Realizing the cheque posts the settlement and marks the claim settled — releasing the vehicle never settles the claim by itself. |
-| Separate vehicle bills | `vehicle_bills`, `job_tasks.assigned_bill_id`, `job_parts.assigned_bill_id` | Each vehicle can have an Insurance bill, a Customer bill and Additional shortfall bills, optionally tagged to a repair section. Ticked tasks/parts lock to one bill. New bills are saved as `Draft` and appear inside the vehicle's row in the **Cashier billing queue**, where the cashier chooses No VAT / Add VAT and marks the bill sent. The queue has a vehicle-number search and one collapsed row per vehicle; expanding shows the bills, and several can be ticked for a combined print or WhatsApp PDF. Sent insurance bills become `Awaiting Release Order` (shown as *Waiting for releasing order*); they settle on the insurer release order, while customer and additional bills are paid in full or part-paid with Owner/Accounting release approval. When every bill on the vehicle is settled the job becomes `Paid` and leaves the queue for **Paid & released**. A part-paid customer bill creates a **Part Payment** customer-credit row; the job waits in `Awaiting Release Approval` until the owner or accounting approves the gate release, and settling the credit before approval clears it to `Paid` automatically. A release order below the insurance bill creates an Additional customer bill for the difference after tax, reduced by customer-brought value already paid on the insurance bill; the credit prints as a deduction. Section bills settle independently; the consolidated **Final bill** prints only when every section bill is settled. Settled bills are immutable. Customer-brought parts are priced on the insurance bill only, never charged to the customer or sent to stores; after a swap/return the line offers **Add again…** for a customer re-add or a fresh store request. |
+| Separate vehicle bills | `vehicle_bills`, `job_tasks.assigned_bill_id`, `job_parts.assigned_bill_id` | Each vehicle can have an Insurance bill, a Customer bill and Additional shortfall bills, optionally tagged to a repair section. Ticked tasks/parts lock to one bill. New bills are saved as `Draft` and appear inside the vehicle's row in the **Cashier billing queue**, where the cashier chooses No VAT / Add VAT and marks the bill sent. The queue has a vehicle-number search and one collapsed row per vehicle; expanding shows the bills, and several can be ticked for a combined print or WhatsApp PDF. Sent insurance bills become `Awaiting Release Order` (shown as *Waiting for releasing order*); they settle on the insurer release order, while customer and additional bills are paid in full or part-paid, with Owner/Accounting release approval followed by the cashier's exit confirmation for a part payment. When every bill on the vehicle is settled the job becomes `Paid` and leaves the queue for **Paid & released**. A part-paid customer bill creates a **Part Payment** customer-credit row; the job waits in `Awaiting Release Approval` until the owner or accounting approves the gate release, and settling the credit before approval clears it to `Paid` automatically. A release order below the insurance bill creates an Additional customer bill for the difference after tax, reduced by customer-brought value already paid on the insurance bill; the credit prints as a deduction. Section bills settle independently; the consolidated **Final bill** prints only when every section bill is settled. Settled bills are immutable. Customer-brought parts are priced on the insurance bill only, never charged to the customer or sent to stores; after a swap/return the line offers **Add again…** for a customer re-add or a fresh store request. |
 | Daily Google Drive backup | `workshops.drive_backup_*`, `app_records` | A complete JSON snapshot uploads once a day to Drive through a secured Apps Script or Edge Function webhook. The browser catches up at the next launch if it was closed at the configured hour. Last success time, status and filename are stored in settings. See `docs/GOOGLE_DRIVE_BACKUP.md`. |
 | Attendance | `attendance_records` | One row per worker per date; Present/Absent/Off Day; only Present workers can be assigned to tasks. |
 | Monthly payroll | `staff_loans`, `payslips` | Basic pay prorated by payable days; commission added; loan deduction, EPF employee deduction and other deductions reduce net. EPF/ETF employer amounts are reported but not deducted. |
@@ -456,7 +460,7 @@ policies. The only anonymous portal RPC is `poll_workshop_license(text)`.
 | Banking | `bank_accounts`, `bank_transactions` | Opening balances, inflows/outflows, internal transfers, per-account statements and dashboard liquidity. Cheque deposits and supplier payments post here. |
 | Petty cash | `petty_cash_entries` | Float top-ups and expense vouchers with category/photo; printable voucher; low-balance alert under LKR 3,000; expenses included in P&L. |
 | Customer cheques | `customer_cheques` | `In_Safe` → `Deposited` → `Cleared`/`Bounced`; bounce reason reopens the invoice or credit balance. |
-| Credit payments | `credit_payments` | Part-payments by cash, card, bank transfer or dated cheque against an invoice; dated cheques remain pending until realised. A counter part payment creates a **Part Payment** credit (optionally linked to a `vehicle_bills` row) and holds the vehicle in `Awaiting Release Approval` until Owner/Accounting approves; collecting the balance through the credit ledger clears the linked bill and job. |
+| Credit payments | `credit_payments` | Part-payments by cash, card, bank transfer or dated cheque against an invoice; dated cheques remain pending until realised. A counter part payment creates a **Part Payment** credit (optionally linked to a `vehicle_bills` row) and holds the vehicle in `Awaiting Release Approval` until Owner/Accounting approves and the cashier confirms the exit; collecting the balance through the credit ledger clears the linked bill and job. |
 | Supplier PDC & loans | `supplier_cheques`, `workshop_loans`, `workshop_loan_payments` | Post-dated cheques with “Take Back Cheque & Pay Cash”; monthly loan schedule and instalments; both post to bank/petty cash and P&L. |
 | Tax invoices & printing | `workshops.*`, `job_cards.vat_*`, `insurance_companies.tin_number` | IRD A4 bordered grid with supplier/purchaser name, address, TIN, VAT rows, amount in words and AUTHORIZATION box. Normal invoices default to thermal (58/80 mm); insurance documents default to A4; cashier can override. |
 | Voice alerts | `profiles.notification_preferences` (JSONB) | Per-user voice/notification toggles using the Web Speech API; alerts respect department targeting. |
@@ -495,10 +499,12 @@ Operational notes:
   standard cash/card checkout or on a separate customer bill; the remainder opens
   a **Part Payment** customer-credit row with its own grace period and the job
   moves to `Awaiting Release Approval`. Gate clearance stays blocked until Owner
-  or Accounting approves from the customer credit ledger. Further collections on
-  a part-paid bill happen through that credit row, not the bill payment dialog.
-  Settling the credit before approval clears the job to `Paid` automatically.
-  Insurance bills and dated cheques still require full settlement.
+  or Accounting approves from the customer credit ledger. The job then stays in
+  **Paid & released** until the **cashier** approves the vehicle exit; the PRO
+  cannot hand over a part-payment release. Further collections on a part-paid
+  bill happen through that credit row, not the bill payment dialog. Settling the
+  credit before approval clears the job to `Paid` automatically. Insurance bills
+  and dated cheques still require full settlement.
 - The **PRO billing-gate override** remains separate from a part-payment release:
   it opens a 7-day credit with a mandatory reason, whereas a part-payment release
   keeps the cashier-entered grace period and needs Owner/Accounting approval.

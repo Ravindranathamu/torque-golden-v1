@@ -62,8 +62,13 @@ export function DashboardPage() {
   const pendingReleaseApprovals = state.jobCards.filter(
     (job) => job.status === "Awaiting Release Approval",
   );
+  const cashierExitQueue = state.jobCards.filter(
+    (job) => job.status === "Released on Credit" && Boolean(job.releaseApprovedAt),
+  );
   const gateQueue = state.jobCards.filter(
-    (job) => job.status === "Paid" || job.status === "Released on Credit",
+    (job) =>
+      job.status === "Paid" ||
+      (job.status === "Released on Credit" && !job.releaseApprovedAt),
   );
 
   const attention = [
@@ -88,10 +93,20 @@ export function DashboardPage() {
       label: `${pendingReleaseApprovals.length} part-payment release${
         pendingReleaseApprovals.length === 1 ? "" : "s"
       } waiting`,
-      detail: "Owner or accounting must approve before gate handover",
+      detail: "Owner or accounting must approve; the cashier then confirms the exit",
       link: "/accounting",
       tone: "amber",
       count: pendingReleaseApprovals.length,
+    },
+    {
+      icon: <Wallet />,
+      label: `${cashierExitQueue.length} approved release${
+        cashierExitQueue.length === 1 ? "" : "s"
+      } awaiting cashier exit`,
+      detail: "Credit release approved — cashier must confirm the vehicle exit",
+      link: "/cashier",
+      tone: "purple",
+      count: cashierExitQueue.length,
     },
     {
       icon: <Package />,

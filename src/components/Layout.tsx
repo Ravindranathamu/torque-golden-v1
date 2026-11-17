@@ -150,7 +150,11 @@ export function AppShell() {
   const counts = {
     gate:
       state.checkIns.filter((c) => c.status === "Awaiting Approval").length +
-      state.jobCards.filter((j) => j.status === "Paid" || j.status === "Released on Credit").length,
+      state.jobCards.filter(
+        (j) =>
+          j.status === "Paid" ||
+          (j.status === "Released on Credit" && !j.releaseApprovedAt),
+      ).length,
     workshop: state.jobCards.filter((j) => j.status === "In Progress").length,
     stores: state.parts.filter(
       (p) =>
@@ -161,6 +165,7 @@ export function AppShell() {
     cashier: state.jobCards.filter(
       (j) =>
         j.status === "Repair Completed" ||
+        (j.status === "Released on Credit" && Boolean(j.releaseApprovedAt)) ||
         (j.status === "Awaiting Release Approval" &&
           state.vehicleBills.some(
             (bill) => bill.jobCardId === j.id && bill.status === "Partially Paid",

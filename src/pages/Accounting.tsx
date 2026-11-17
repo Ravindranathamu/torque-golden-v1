@@ -628,7 +628,8 @@ export function AccountingPage() {
                       0,
                     ),
                   )}{" "}
-                  on customer credit. Approve the gate release from the customer credit ledger.
+                  on customer credit. Approve the release here; the cashier then confirms the
+                  vehicle exit.
                 </span>
                 <button
                   className="btn btn-secondary btn-sm"

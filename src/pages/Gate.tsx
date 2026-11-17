@@ -85,7 +85,11 @@ export function GatePage() {
 
   const pending = state.checkIns.filter((checkIn) => checkIn.status === "Awaiting Approval");
   const clearance = state.jobCards
-    .filter((job) => job.status === "Paid" || job.status === "Released on Credit")
+    .filter(
+      (job) =>
+        job.status === "Paid" ||
+        (job.status === "Released on Credit" && !job.releaseApprovedAt),
+    )
     .sort((a, b) => (b.paidAt ?? "").localeCompare(a.paidAt ?? ""));
   const billingQueue = state.jobCards
     .filter((job) => job.status === "Repair Completed")
@@ -96,6 +100,11 @@ export function GatePage() {
       (a.releaseApprovalRequestedAt ?? "").localeCompare(
         b.releaseApprovalRequestedAt ?? "",
       ),
+    );
+  const cashierExits = state.jobCards
+    .filter((job) => job.status === "Released on Credit" && job.releaseApprovedAt)
+    .sort((a, b) =>
+      (b.releaseApprovedAt ?? "").localeCompare(a.releaseApprovedAt ?? ""),
     );
   const acceptedJob = state.jobCards.find((job) => job.id === acceptedJobId) ?? null;
 
@@ -493,9 +502,9 @@ export function GatePage() {
         <div className="stack">
           <Alert tone="info" title="Gate clearance is controlled by billing">
             A vehicle can only be handed over after the cashier records full payment, an
-            approved credit release, or a part payment approved by the owner or accounting. A
-            supervisor cannot bypass this, but the PRO may record a reasoned override when the
-            owner accepts the risk.
+            approved credit release, or a part payment approved by the owner or accounting and
+            then confirmed for exit by the cashier. A supervisor cannot bypass this, but the PRO
+            may record a reasoned override when the owner accepts the risk.
           </Alert>
           {pendingReleases.length > 0 && (
             <Alert tone="warn" title="Part-payment releases waiting for approval">
@@ -507,7 +516,24 @@ export function GatePage() {
                       {money(job.partPaymentCredit ?? 0)} on credit ({job.id})
                     </span>
                     <span className="tiny muted">
-                      Owner / accounting must approve in Accounting before handover
+                      Owner / accounting approve in Accounting; the cashier then confirms the exit
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </Alert>
+          )}
+          {cashierExits.length > 0 && (
+            <Alert tone="info" title="Approved part-payment releases — cashier exit pending">
+              <div className="stack" style={{ gap: 6 }}>
+                {cashierExits.map((job) => (
+                  <div className="row-between wrap" key={job.id}>
+                    <span>
+                      <strong>{job.vehicleNo}</strong> · {job.customerName} ·{" "}
+                      {money(job.partPaymentCredit ?? 0)} on credit ({job.id})
+                    </span>
+                    <span className="tiny muted">
+                      Cashier must approve the exit from Paid &amp; released
                     </span>
                   </div>
                 ))}
@@ -527,7 +553,7 @@ export function GatePage() {
               <EmptyState
                 icon={<ShieldCheck size={22} />}
                 title="No vehicles waiting for handover"
-                message="Paid jobs, approved credit releases and approved part payments appear here. The customer's key handover is the final step."
+                message="Paid jobs and completed credit releases appear here. Part-payment releases wait for the cashier's exit approval before the PRO can hand them over."
                 action={
                   <Link className="btn btn-secondary" to="/cashier">
                     Open billing queue

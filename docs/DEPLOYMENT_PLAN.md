@@ -1508,9 +1508,12 @@ If you use the browser webhook for the pilot, the receiver must:
       shows the collected/credit split and leaves the job in **Awaiting Release
       Approval**; the same works for the first payment on a separate customer bill.
       Owner/Accounting approve the release from the customer credit ledger and the
-      vehicle reaches gate clearance. Repeat and settle the credit before approval;
-      the job clears to **Paid** and appears in gate clearance without approval.
-      Confirm an insurance bill or dated cheque cannot be part-paid.
+      job moves to **Released on Credit**, waiting for the cashier's exit approval.
+      Confirm the PRO gate does not show or hand over that vehicle until the cashier
+      approves the exit from **Paid & released**; the job then becomes **Dispatched**.
+      Repeat and settle the credit before approval; the job clears to **Paid** and
+      appears in gate clearance without approval. Confirm an insurance bill or dated
+      cheque cannot be part-paid.
 - [ ] Stores zero-stock smoke test: request an out-of-stock part, issue it either
       by purchase with supplier invoice or by replacing the line with a suitable
       in-stock part; confirm stock, no purchase on substitution, and the updated job

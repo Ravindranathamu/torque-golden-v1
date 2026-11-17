@@ -12,6 +12,7 @@ import {
   FileText,
   Gauge,
   History,
+  KeyRound,
   Layers,
   ListChecks,
   Lock,
@@ -1412,7 +1413,8 @@ export function JobDetailPage() {
             )}
             {invoiceReady &&
               canDispatch &&
-              (job.status === "Paid" || job.status === "Released on Credit") && (
+              (job.status === "Paid" ||
+                (job.status === "Released on Credit" && !job.releaseApprovedAt)) && (
                 <Link className="btn btn-secondary btn-sm" to="/gate">
                   <ShieldCheck />
                   Gate clearance
@@ -3085,9 +3087,14 @@ export function JobDetailPage() {
               )}
             </div>
             <div className="card-foot">
-              {job.status === "Paid" || job.status === "Released on Credit" ? (
+              {job.status === "Paid" ||
+              (job.status === "Released on Credit" && !job.releaseApprovedAt) ? (
                 <span className="badge badge-green">
                   <CheckCircle2 size={11} /> Cleared for gate handover
+                </span>
+              ) : job.status === "Released on Credit" ? (
+                <span className="badge badge-amber">
+                  <KeyRound size={11} /> Owner/accounting approved — cashier must approve exit
                 </span>
               ) : job.status === "Awaiting Release Approval" ? (
                 <span className="badge badge-amber">

@@ -395,6 +395,7 @@ interface AppStoreValue {
   checkoutJob: (jobId: string, input: CheckoutInput) => ActionResult;
   approvePartialRelease: (jobId: string, note?: string) => ActionResult;
   dispatchJob: (jobId: string) => void;
+  approveVehicleExit: (jobId: string) => ActionResult;
   overrideBillingGate: (jobId: string, reason: string) => ActionResult;
   addVehicleBill: (input: {
     jobCardId: string;
@@ -4469,7 +4470,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               "Part payment recorded — release approval needed",
               `${job.id} · ${job.vehicleNo}: ${money(collected)} collected and ${money(
                 creditBalance,
-              )} moved to customer credit. Approve the gate release once the balance is accepted.`,
+              )} moved to customer credit. Approve the release once the balance is accepted; the cashier then confirms the exit.`,
               "high",
               "/accounting",
               { vehicleNo: job.vehicleNo, eventType: "payment" },
@@ -4539,21 +4540,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ),
         notifications: notify(
           prev,
-          ["PRO", "Cashier", "Accounting"],
-          "Part-payment release approved",
-          `${job.id} · ${job.vehicleNo} may be handed over. ${money(
+          ["Cashier"],
+          "Part-payment release approved — cashier to confirm exit",
+          `${job.id} · ${job.vehicleNo} is approved for release with ${money(
             job.partPaymentCredit ?? 0,
-          )} remains on customer credit${job.partPaymentAt ? ` from ${shortDate(job.partPaymentAt)}` : ""}.${cleanNote ? ` Note: ${cleanNote}` : ""}`,
+          )} on customer credit${job.partPaymentAt ? ` from ${shortDate(job.partPaymentAt)}` : ""}. Only the cashier can approve the vehicle exit from the Paid & released tab.${cleanNote ? ` Note: ${cleanNote}` : ""}`,
           "high",
-          "/gate",
+          "/cashier",
           { vehicleNo: job.vehicleNo, eventType: "payment" },
         ),
       }));
       return {
         ok: true,
-        message: `${job.vehicleNo} approved for gate release with ${money(
+        message: `${job.vehicleNo} approved for release with ${money(
           job.partPaymentCredit ?? 0,
-        )} on credit.`,
+        )} on credit. The cashier must now confirm the vehicle exit.`,
       };
     },
     [state.jobCards, state.users, state.currentUserId],
@@ -4567,6 +4568,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ) {
       return;
     }
+    const currentUser = state.users.find((entry) => entry.id === state.currentUserId);
+    if (
+      dispatchedJob.status === "Released on Credit" &&
+      dispatchedJob.releaseApprovedAt &&
+      !currentUser?.isOwner &&
+      !currentUser?.departments.includes("Cashier")
+    ) {
+      return;
+    }
+    const dispatchedBy = currentUser?.name;
     setState((prev) => {
       const job = prev.jobCards.find((j) => j.id === jobId);
       if (!job) return prev;
@@ -4681,7 +4692,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         ...prev,
         jobCards: prev.jobCards.map((j) =>
           j.id === jobId
-            ? { ...j, status: "Dispatched" as const, dispatchedAt: nowISO }
+            ? {
+                ...j,
+                status: "Dispatched" as const,
+                dispatchedAt: nowISO,
+                dispatchedBy,
+              }
             : j,
         ),
         marketing,
@@ -4702,7 +4718,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             { ...prev, marketing },
             ["Owner", "PRO"],
             "Vehicle handed over",
-            `${job.vehicleNo} has left the workshop. Any 2-day follow-up has been queued in Marketing.`,
+            `${job.vehicleNo} has left the workshop${dispatchedBy ? ` — exit confirmed by ${dispatchedBy}` : ""}. Any 2-day follow-up has been queued in Marketing.`,
             "normal",
             "/marketing",
             { vehicleNo: job.vehicleNo, eventType: "job" },
@@ -4717,7 +4733,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
         state.settings,
       );
     }
-  }, [state.jobCards, state.settings]);
+  }, [
+    state.jobCards,
+    state.settings,
+    state.users,
+    state.currentUserId,
+  ]);
+
+  const approveVehicleExit = useCallback(
+    (jobId: string): ActionResult => {
+      const job = state.jobCards.find((entry) => entry.id === jobId);
+      if (!job) return { ok: false, message: "Job card not found." };
+      if (job.status !== "Released on Credit" || !job.releaseApprovedAt) {
+        return {
+          ok: false,
+          message: "This vehicle is not waiting for a cashier exit approval.",
+        };
+      }
+      const user = state.users.find((entry) => entry.id === state.currentUserId);
+      if (!user || (!user.isOwner && !user.departments.includes("Cashier"))) {
+        return {
+          ok: false,
+          message: "Only the cashier can approve this vehicle exit.",
+        };
+      }
+      dispatchJob(jobId);
+      return {
+        ok: true,
+        message: `${job.vehicleNo} exit approved. The gate log and marketing follow-up are updated.`,
+      };
+    },
+    [state.jobCards, state.users, state.currentUserId, dispatchJob],
+  );
 
   const overrideBillingGate = useCallback(
     (jobId: string, reason: string): ActionResult => {
@@ -5621,7 +5668,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 creditBalance,
               )} moved to customer credit.${
                 approvalPending
-                  ? " Every bill is covered, so the vehicle can be released once the owner or accounting approves."
+                  ? " Every bill is covered, so the owner or accounting can approve the release; the cashier then confirms the exit."
                   : ""
               }`,
               approvalPending ? "high" : "normal",
@@ -7248,6 +7295,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       checkoutJob,
       approvePartialRelease,
       dispatchJob,
+      approveVehicleExit,
       overrideBillingGate,
       addVehicleBill,
       prepareVehicleBill,
@@ -7365,6 +7413,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       checkoutJob,
       approvePartialRelease,
       dispatchJob,
+      approveVehicleExit,
       overrideBillingGate,
       addVehicleBill,
       prepareVehicleBill,

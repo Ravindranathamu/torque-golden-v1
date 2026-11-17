@@ -9,6 +9,7 @@ import {
   ChevronRight,
   CreditCard,
   Download,
+  KeyRound,
   MessageCircle,
   Percent,
   Phone,
@@ -42,7 +43,7 @@ import {
 } from "../lib/invoice";
 import { buildVehicleBillsPdf, printVehicleBills } from "../lib/ird";
 import { CreditLedger } from "../components/CreditLedger";
-import { EmptyState, Field, Modal, PageHeader, StatCard, StatusBadge, Tabs } from "../components/ui";
+import { EmptyState, Field, Modal, PageHeader, StatCard, StatusBadge, Tabs, Alert } from "../components/ui";
 import { useToast } from "../components/Toast";
 import type {
   AdvancePayment,
@@ -56,11 +57,20 @@ import type {
 type CashierTab = "queue" | "advances" | "settled" | "credits";
 
 export function CashierPage() {
-  const { state, currentUser, checkoutJob, recordAdvancePayment, prepareVehicleBill, settleVehicleBill } = useApp();
+  const {
+    state,
+    currentUser,
+    checkoutJob,
+    recordAdvancePayment,
+    prepareVehicleBill,
+    settleVehicleBill,
+    approveVehicleExit,
+  } = useApp();
   const { push } = useToast();
   const [tab, setTab] = useState<CashierTab>("queue");
   const [checkoutTargetId, setCheckoutTargetId] = useState<string | null>(null);
   const [successJobId, setSuccessJobId] = useState<string | null>(null);
+  const [exitTargetId, setExitTargetId] = useState<string | null>(null);
   const [discount, setDiscount] = useState("0");
   const [discountType, setDiscountType] = useState<DiscountType>("Fixed");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("Cash");
@@ -99,6 +109,9 @@ export function CashierPage() {
   const settled = state.jobCards
     .filter((job) => ["Paid", "Released on Credit", "Dispatched"].includes(job.status))
     .sort((a, b) => (b.paidAt ?? "").localeCompare(a.paidAt ?? ""));
+  const awaitingExit = settled.filter(
+    (job) => job.status === "Released on Credit" && Boolean(job.releaseApprovedAt),
+  );
   const progressingJobs = state.jobCards
     .filter((job) => !["Paid", "Released on Credit", "Dispatched"].includes(job.status))
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -200,6 +213,7 @@ export function CashierPage() {
   ]);
 
   const successJob = state.jobCards.find((job) => job.id === successJobId) ?? null;
+  const exitTarget = state.jobCards.find((job) => job.id === exitTargetId) ?? null;
   const successTotals = successJob
     ? jobTotals(successJob, state.tasks, state.parts, state.workers)
     : null;
@@ -925,6 +939,17 @@ export function CashierPage() {
     }
   }
 
+  function confirmVehicleExit() {
+    if (!exitTarget) return;
+    const result = approveVehicleExit(exitTarget.id);
+    if (!result.ok) {
+      push(result.message ?? "Could not approve the vehicle exit.", "error");
+      return;
+    }
+    push(result.message ?? `${exitTarget.vehicleNo} exit approved.`);
+    setExitTargetId(null);
+  }
+
   return (
     <div className="page">
       <PageHeader
@@ -1535,7 +1560,8 @@ export function CashierPage() {
                               insurer or customer. Insurance bills then settle on the
                               insurer release order; customer and additional bills are
                               collected in full or, with owner/accounting approval, released
-                              with the balance on customer credit. A short release order creates an
+                              with the balance on customer credit. The cashier then confirms
+                              a part-payment exit. A short release order creates an
                               additional customer bill for the difference automatically.
                             </div>
                             {multiSection && (
@@ -1658,10 +1684,26 @@ export function CashierPage() {
           <div className="card-head">
             <div>
               <h3>Paid, credit-released & dispatched</h3>
-              <p>Reprint receipts, download PDFs or resend via WhatsApp.</p>
+              <p>
+                Approve part-payment exits, reprint receipts, download PDFs or resend via
+                WhatsApp.
+              </p>
             </div>
             <span className="badge badge-green">{settled.length} records</span>
           </div>
+          {awaitingExit.length > 0 && (
+            <div style={{ padding: "0 18px 14px" }}>
+              <Alert
+                tone="warn"
+                title={`${awaitingExit.length} vehicle${
+                  awaitingExit.length === 1 ? "" : "s"
+                } waiting for your exit approval`}
+              >
+                Owner or accounting has approved the credit release. Approve each exit here; the
+                PRO gate cannot release these vehicles.
+              </Alert>
+            </div>
+          )}
           {settled.length === 0 ? (
             <EmptyState title="No settled invoices yet" message="Completed checkouts and approved credit releases will be archived here." />
           ) : (
@@ -1711,10 +1753,23 @@ export function CashierPage() {
                           {credit && credit.status !== "Settled" && (
                             <div className="cell-sub">Due {shortDate(credit.dueDate)}</div>
                           )}
+                          {job.status === "Dispatched" && job.dispatchedBy && (
+                            <div className="cell-sub">Exit: {job.dispatchedBy}</div>
+                          )}
                         </td>
                         <td><StatusBadge status={job.status} /></td>
                         <td>
                           <div className="row" style={{ justifyContent: "flex-end", gap: 3 }}>
+                            {job.status === "Released on Credit" && job.releaseApprovedAt && (
+                              <button
+                                className="btn btn-primary btn-sm"
+                                title="Approve this vehicle to leave the workshop"
+                                onClick={() => setExitTargetId(job.id)}
+                              >
+                                <KeyRound />
+                                Approve exit
+                              </button>
+                            )}
                             <button className="btn btn-ghost btn-sm" title="Print invoice" onClick={() => printJob(job)}>
                               <Printer />
                             </button>
@@ -2483,8 +2538,8 @@ export function CashierPage() {
                             <strong>Release approval required.</strong>{" "}
                             {money(collectedNow)} is collected now and{" "}
                             <strong>{money(partialCredit)}</strong> moves to the customer credit
-                            ledger. The vehicle stays in the workshop until the owner or accounting
-                            approves the release.
+                            ledger. The vehicle stays in the workshop until the owner or
+                            accounting approves the release and the cashier confirms the exit.
                           </div>
                         </div>
                       )}
@@ -2580,7 +2635,7 @@ export function CashierPage() {
               {successJob.status === "Awaiting Release Approval"
                 ? `${money(successJob.partPaymentCollected ?? 0)} collected from ${successJob.customerName}. ${money(
                     successJob.partPaymentCredit ?? 0,
-                  )} is on customer credit, so ${successJob.vehicleNo} stays in the workshop until the owner or accounting approves the release.`
+                  )} is on customer credit, so ${successJob.vehicleNo} stays in the workshop until the owner or accounting approves the release; the cashier then confirms the exit.`
                 : `${money(successTotals.total)} recorded for ${successJob.customerName}. The PRO has been notified that ${successJob.vehicleNo} is cleared for handover.`}
             </p>
 
@@ -2660,6 +2715,64 @@ export function CashierPage() {
               Tip: use "WhatsApp PDF" — it shares the invoice file on mobile and downloads it on
               desktop while opening WhatsApp.
             </p>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(exitTarget)}
+        onClose={() => setExitTargetId(null)}
+        title="Approve the vehicle exit?"
+        subtitle={
+          exitTarget
+            ? `${exitTarget.vehicleNo} · ${exitTarget.customerName} · ${exitTarget.id}`
+            : undefined
+        }
+        size="narrow"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setExitTargetId(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={confirmVehicleExit}>
+              <KeyRound />
+              Approve exit
+            </button>
+          </>
+        }
+      >
+        {exitTarget && (
+          <div className="stack">
+            <div className="card">
+              <div className="card-body">
+                <div className="kv">
+                  <span>Balance on customer credit</span>
+                  <span className="strong">{money(exitTarget.partPaymentCredit ?? 0)}</span>
+                </div>
+                <div className="kv">
+                  <span>Approved by</span>
+                  <span>{exitTarget.releaseApprovedBy ?? "Owner / Accounting"}</span>
+                </div>
+                <div className="kv">
+                  <span>Approved</span>
+                  <span>
+                    {exitTarget.releaseApprovedAt
+                      ? shortDate(exitTarget.releaseApprovedAt)
+                      : "—"}
+                  </span>
+                </div>
+                {exitTarget.releaseApprovalNote && (
+                  <div className="kv">
+                    <span>Approval note</span>
+                    <span>{exitTarget.releaseApprovalNote}</span>
+                  </div>
+                )}
+              </div>
+            </div>
+            <Alert tone="warn" title="Cashier-only exit approval">
+              This records the gate exit, updates the gate log and queues the handover follow-up.
+              The PRO cannot release this vehicle; only the cashier can confirm it here.
+            </Alert>
           </div>
         )}
       </Modal>
