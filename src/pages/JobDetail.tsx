@@ -245,7 +245,13 @@ export function JobDetailPage() {
     hasDepartment(currentUser, "Cashier");
   const credit = job ? state.customerCredits.find((entry) => entry.jobCardId === job.id) : null;
   const invoiceReady = Boolean(
-    job && ["Paid", "Released on Credit", "Dispatched"].includes(job.status),
+    job &&
+      [
+        "Awaiting Release Approval",
+        "Paid",
+        "Released on Credit",
+        "Dispatched",
+      ].includes(job.status),
   );
   const dueDate = credit?.dueDate;
 
@@ -1404,12 +1410,14 @@ export function JobDetailPage() {
                 Print invoice
               </button>
             )}
-            {invoiceReady && canDispatch && (
-              <Link className="btn btn-secondary btn-sm" to="/gate">
-                <ShieldCheck />
-                Gate clearance
-              </Link>
-            )}
+            {invoiceReady &&
+              canDispatch &&
+              (job.status === "Paid" || job.status === "Released on Credit") && (
+                <Link className="btn btn-secondary btn-sm" to="/gate">
+                  <ShieldCheck />
+                  Gate clearance
+                </Link>
+              )}
           </div>
         </div>
       </div>
@@ -1511,6 +1519,18 @@ export function JobDetailPage() {
                               : `(in ${daysUntil(credit.dueDate)}d)`)}
                         </span>
                       </div>
+                    )}
+                    {job.partPaymentAt && (
+                      <>
+                        <div className="kv">
+                          <span>Collected at checkout</span>
+                          <span>{money(job.partPaymentCollected ?? 0)}</span>
+                        </div>
+                        <div className="kv">
+                          <span>Balance on credit</span>
+                          <span>{money(job.partPaymentCredit ?? 0)}</span>
+                        </div>
+                      </>
                     )}
                     {driverEnabled && (
                       <div className="kv">
@@ -3068,6 +3088,10 @@ export function JobDetailPage() {
               {job.status === "Paid" || job.status === "Released on Credit" ? (
                 <span className="badge badge-green">
                   <CheckCircle2 size={11} /> Cleared for gate handover
+                </span>
+              ) : job.status === "Awaiting Release Approval" ? (
+                <span className="badge badge-amber">
+                  <ShieldCheck size={11} /> Waiting for owner/accounting release approval
                 </span>
               ) : job.status === "Dispatched" ? (
                 <span className="badge badge-slate">Vehicle dispatched</span>

@@ -136,6 +136,7 @@ const statusTone: Record<string, string> = {
   Rejected: "red",
   "In Progress": "blue",
   "Repair Completed": "purple",
+  "Awaiting Release Approval": "amber",
   Paid: "green",
   "Released on Credit": "amber",
   Dispatched: "slate",

@@ -145,6 +145,7 @@ export interface DamagePhoto {
 export type JobStatus =
   | "In Progress"
   | "Repair Completed"
+  | "Awaiting Release Approval"
   | "Paid"
   | "Released on Credit"
   | "Dispatched";
@@ -181,6 +182,17 @@ export interface JobCard {
   discountType: DiscountType;
   paymentMethod?: PaymentMethod;
   creditGraceDays?: number;
+  /** Amount collected at the counter when the customer settles only part of the bill. */
+  partPaymentCollected?: number;
+  /** Outstanding balance moved to customer credit after a part payment. */
+  partPaymentCredit?: number;
+  partPaymentAt?: string;
+  /** Set while the vehicle waits for Owner / Accounting release approval. */
+  releaseApprovalRequestedAt?: string;
+  releaseApprovalRequestedBy?: string;
+  releaseApprovedBy?: string;
+  releaseApprovedAt?: string;
+  releaseApprovalNote?: string;
   dispatchedBy?: string;
   /** PRO gate override — vehicle left without payment. */
   billingOverrideReason?: string;
@@ -604,6 +616,10 @@ export interface CustomerCredit {
   dueDate: string;
   graceDays: number;
   status: "Unpaid" | "Partially Paid" | "Settled";
+  /** Part-payment balance raised at checkout, versus a normal credit sale. */
+  kind?: "Credit Sale" | "Part Payment";
+  /** Vehicle bill whose balance this part payment covers. */
+  billId?: string;
 }
 
 export type ExpenseCategory =
@@ -984,6 +1000,7 @@ export interface WorkshopLoanPayment {
 export type VehicleBillStatus =
   | "Draft"
   | "Unpaid"
+  | "Partially Paid"
   | "Awaiting Release Order"
   | "Paid"
   | "Release Order";
@@ -1113,4 +1130,6 @@ export interface CheckoutInput {
   isVatInvoice?: boolean;
   vatRate?: number;
   customerTinNumber?: string;
+  /** Amount collected now. A lower figure leaves the balance on customer credit. */
+  amountPaid?: number;
 }

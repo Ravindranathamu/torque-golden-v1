@@ -90,6 +90,9 @@ export function CashierPage() {
   const [queueSearch, setQueueSearch] = useState("");
   const [expandedJobs, setExpandedJobs] = useState<string[]>([]);
   const [selectedBillIds, setSelectedBillIds] = useState<string[]>([]);
+  const [amountPaid, setAmountPaid] = useState("");
+  const [amountPaidTouched, setAmountPaidTouched] = useState(false);
+  const [billAmount, setBillAmount] = useState("");
 
   const vatFeatureEnabled = featureEnabled(state.settings, "enable_vat_invoicing");
   const effectiveVat = vatFeatureEnabled && vatEnabled;
@@ -205,6 +208,25 @@ export function CashierPage() {
     : null;
   const targetAdvances = target ? advancePaidFor(target.id) : 0;
   const targetBalance = ticket ? Math.max(0, ticket.total - targetAdvances) : 0;
+  const canPartPay = paymentMethod === "Cash" || paymentMethod === "Card";
+  const effectiveAmountPaid = amountPaidTouched
+    ? amountPaid
+    : String(Math.max(0, Math.round(targetBalance * 100) / 100));
+  const collectedNow = canPartPay ? Number(effectiveAmountPaid) : targetBalance;
+  const partialCheckout =
+    canPartPay &&
+    Number.isFinite(collectedNow) &&
+    collectedNow >= 0 &&
+    collectedNow < targetBalance - 0.5;
+  const partialCredit = partialCheckout
+    ? Math.max(0, Math.round((targetBalance - collectedNow) * 100) / 100)
+    : 0;
+  const billCollected = Number(billAmount);
+  const billPartial =
+    Boolean(paymentBill) &&
+    Number.isFinite(billCollected) &&
+    billCollected > 0 &&
+    billCollected < paymentNet - 0.5;
   const targetClaim = target?.insuranceClaimId
     ? state.insuranceJobs.find((claim) => claim.id === target.insuranceClaimId) ?? null
     : null;
@@ -230,6 +252,14 @@ export function CashierPage() {
     setVatEnabled(false);
     setVatRate(String(state.settings.defaultVatRate ?? 18));
     setCustomerTin(job?.customerTinNumber ?? "");
+    if (job) {
+      const total = jobTotals(job, state.tasks, state.parts, state.workers).total;
+      setAmountPaid(String(Math.max(0, Math.round((total - advancePaidFor(job.id)) * 100) / 100)));
+      setAmountPaidTouched(false);
+    } else {
+      setAmountPaid("");
+      setAmountPaidTouched(false);
+    }
   }
 
   function advancePaidFor(jobId: string): number {
@@ -260,14 +290,37 @@ export function CashierPage() {
       push("VAT rate must be between 0 and 100 percent.", "error");
       return;
     }
+    if (canPartPay) {
+      if (!Number.isFinite(collectedNow) || collectedNow < 0) {
+        push("Enter the amount collected at the counter.", "error");
+        return;
+      }
+      if (collectedNow > targetBalance + 0.5) {
+        push(`The amount collected cannot exceed ${money(targetBalance)}.`, "error");
+        return;
+      }
+      if (partialCheckout && collectedNow <= 0) {
+        push(
+          "Enter the amount the customer is paying now, or use the Credit release for a full credit sale.",
+          "error",
+        );
+        return;
+      }
+      if (partialCheckout && (!Number(graceDays) || Number(graceDays) < 1)) {
+        push("Enter a grace period for the part-payment balance.", "error");
+        return;
+      }
+    }
     const result = checkoutJob(target.id, {
       paymentMethod,
       discount: value,
       discountType,
-      graceDays: paymentMethod === "Credit" ? Number(graceDays) : undefined,
+      graceDays:
+        paymentMethod === "Credit" || partialCheckout ? Number(graceDays) : undefined,
       isVatInvoice: effectiveVat,
       vatRate: effectiveVat ? Number(vatRate) : 0,
       customerTinNumber: customerTin.trim() || undefined,
+      amountPaid: canPartPay ? collectedNow : undefined,
     });
     if (!result.ok) {
       push(result.message ?? "Could not complete billing.", "error");
@@ -276,9 +329,11 @@ export function CashierPage() {
     setSuccessJobId(target.id);
     setCheckoutTargetId(null);
     push(
-      paymentMethod === "Credit"
-        ? "Credit sale recorded. PRO notified for gate release."
-        : "Payment collected. PRO notified for gate clearance.",
+      partialCheckout
+        ? `Part payment recorded. ${money(partialCredit)} is on customer credit and the release needs owner/accounting approval.`
+        : paymentMethod === "Credit"
+          ? "Credit sale recorded. PRO notified for gate release."
+          : "Payment collected. PRO notified for gate clearance.",
     );
   }
 
@@ -382,6 +437,12 @@ export function CashierPage() {
 
   function billNet(bill: VehicleBill) {
     return bill.netPayable ?? bill.amount;
+  }
+
+  function billOutstanding(bill: VehicleBill) {
+    return bill.status === "Partially Paid"
+      ? Math.max(0, billNet(bill) - (bill.paidAmount ?? 0))
+      : billNet(bill);
   }
 
   function billTasks(bill: VehicleBill) {
@@ -714,9 +775,18 @@ export function CashierPage() {
   }
 
   function openPaymentBill(bill: VehicleBill) {
+    if (bill.status === "Partially Paid") {
+      setTab("credits");
+      push(
+        `${bill.billNo} has a part-payment balance. Collect the remaining amount from the customer credit ledger.`,
+        "info",
+      );
+      return;
+    }
     setPaymentBillId(bill.id);
     setBillPaymentMethod("Cash");
     setBillDiscount(String(bill.discount ?? 0));
+    setBillAmount(String(billNet(bill)));
     setReleaseBillId(null);
   }
 
@@ -751,9 +821,22 @@ export function CashierPage() {
 
   function confirmBillPayment() {
     if (!paymentBill) return;
+    const value = Number(billAmount);
+    if (!Number.isFinite(value) || value <= 0) {
+      push("Enter the amount collected from the customer.", "error");
+      return;
+    }
+    if (value > paymentNet + 0.5) {
+      push(`The amount collected cannot exceed ${money(paymentNet)}.`, "error");
+      return;
+    }
+    if (billPaymentMethod === "Cheque" && value < paymentNet - 0.5) {
+      push("A cheque must cover this bill in full.", "error");
+      return;
+    }
     const result = settleVehicleBill(paymentBill.id, {
       method: billPaymentMethod,
-      amount: billCharges(paymentBill).net,
+      amount: value,
       discount: Number(billDiscount) || 0,
     });
     if (!result.ok) {
@@ -761,7 +844,11 @@ export function CashierPage() {
       return;
     }
     push(
-      `${paymentBill.billNo} paid in full — ${money(billCharges(paymentBill).net)} collected by ${billPaymentMethod}.`,
+      value < paymentNet - 0.5
+        ? `${paymentBill.billNo}: ${money(value)} collected. The remaining ${money(
+            paymentNet - value,
+          )} is in the customer credit ledger and needs owner/accounting release approval.`
+        : `${paymentBill.billNo} paid in full — ${money(paymentNet)} collected by ${billPaymentMethod}.`,
     );
     setPaymentBillId(null);
     setTab("queue");
@@ -885,7 +972,7 @@ export function CashierPage() {
             value={money(
               queueEntries.reduce((sum, { job, bills, open }) => {
                 if (bills.length > 0) {
-                  return sum + open.reduce((total, bill) => total + billNet(bill), 0);
+                  return sum + open.reduce((total, bill) => total + billOutstanding(bill), 0);
                 }
                 return sum + jobTotals(job, state.tasks, state.parts, state.workers).total;
               }, 0),
@@ -895,9 +982,9 @@ export function CashierPage() {
             tone="purple"
           />
           <StatCard
-            label="Cash, card & bank today"
-            value={money(todayPnl.cashSales)}
-            meta="Collected at the counter"
+            label="Collected at the counter today"
+            value={money(todayPnl.cashCollected)}
+            meta="Cash, card, credit and insurance receipts"
             icon={<Banknote />}
           />
           <StatCard
@@ -981,7 +1068,7 @@ export function CashierPage() {
             queueEntries.map(({ job, bills, open }) => {
               const totals = jobTotals(job, state.tasks, state.parts, state.workers);
               const expanded = expandedJobs.includes(job.id);
-              const openTotal = open.reduce((sum, bill) => sum + billNet(bill), 0);
+              const openTotal = open.reduce((sum, bill) => sum + billOutstanding(bill), 0);
               const amount = bills.length > 0 ? openTotal : totals.total;
               const selected = bills.filter((bill) =>
                 selectedBillIds.includes(bill.id),
@@ -1165,7 +1252,7 @@ export function CashierPage() {
                                     .reduce((sum, bill) => sum + billNet(bill), 0),
                                 )}
                               </div>
-                              <div className="meta">Paid in full by the customer</div>
+                              <div className="meta">Paid in full or by approved part payment</div>
                             </div>
                             <div className="mini-stat card">
                               <div className="label">Still to settle</div>
@@ -1312,6 +1399,11 @@ export function CashierPage() {
                                             Set VAT before sending
                                           </div>
                                         )}
+                                        {bill.status === "Partially Paid" && (
+                                          <div className="cell-sub">
+                                            {money(bill.paidAmount ?? 0)} paid · balance in credit
+                                          </div>
+                                        )}
                                       </td>
                                       <td className="tiny muted">
                                         {bill.status === "Release Order" ? (
@@ -1326,6 +1418,13 @@ export function CashierPage() {
                                                     bill.releaseOrderAmount,
                                                   )}`
                                                 : ""}
+                                            </div>
+                                          </>
+                                        ) : bill.status === "Partially Paid" ? (
+                                          <>
+                                            {money(bill.paidAmount ?? 0)} of {money(billNet(bill))}
+                                            <div className="cell-sub">
+                                              {bill.paymentMethod ?? "—"} · balance in credit
                                             </div>
                                           </>
                                         ) : bill.status === "Paid" ? (
@@ -1409,8 +1508,14 @@ export function CashierPage() {
                                                       openPaymentBill(bill)
                                                     }
                                                   >
-                                                    <Wallet />
-                                                    Collect payment
+                                                    {bill.status === "Partially Paid" ? (
+                                                      <CreditCard />
+                                                    ) : (
+                                                      <Wallet />
+                                                    )}
+                                                    {bill.status === "Partially Paid"
+                                                      ? "Collect balance in credit ledger"
+                                                      : "Collect payment"}
                                                   </button>
                                                 )}
                                             </>
@@ -1429,7 +1534,8 @@ export function CashierPage() {
                               Set VAT on each draft bill here before it is sent to the
                               insurer or customer. Insurance bills then settle on the
                               insurer release order; customer and additional bills are
-                              collected in full. A short release order creates an
+                              collected in full or, with owner/accounting approval, released
+                              with the balance on customer credit. A short release order creates an
                               additional customer bill for the difference automatically.
                             </div>
                             {multiSection && (
@@ -1936,7 +2042,10 @@ export function CashierPage() {
             </button>
             <button className="btn btn-primary" onClick={confirmBillPayment}>
               <CheckCircle2 />
-              Collect {paymentBill ? money(paymentNet) : "payment"}
+              Collect{" "}
+              {paymentBill
+                ? money(billPartial ? billCollected : paymentNet)
+                : "payment"}
             </button>
           </>
         }
@@ -1981,7 +2090,12 @@ export function CashierPage() {
                   min={0}
                   step="0.01"
                   value={billDiscount}
-                  onChange={(event) => setBillDiscount(event.target.value)}
+                  onChange={(event) => {
+                    setBillDiscount(event.target.value);
+                    setBillAmount(
+                      String(billCharges(paymentBill, event.target.value).net),
+                    );
+                  }}
                 />
               </Field>
             </div>
@@ -2019,11 +2133,38 @@ export function CashierPage() {
                 <option value="Cheque">Cheque</option>
               </select>
             </Field>
+            <Field
+              label="Amount collected now (LKR)"
+              required
+              hint={`Net payable ${money(paymentNet)}. A lower amount moves the balance to customer credit and needs owner/accounting release approval.`}
+            >
+              <input
+                className="input"
+                type="number"
+                min={0}
+                max={paymentNet}
+                step="0.01"
+                value={billAmount}
+                onChange={(event) => setBillAmount(event.target.value)}
+              />
+            </Field>
+            {billPartial && (
+              <div className="alert alert-warn">
+                <AlertTriangle />
+                <div>
+                  <strong>Release approval required.</strong> {money(billCollected)} is collected
+                  now and <strong>{money(paymentNet - billCollected)}</strong> is moved to the
+                  customer credit ledger. The vehicle stays until the owner or accounting approves
+                  the release.
+                </div>
+              </div>
+            )}
             <div className="alert alert-info">
               <Wallet />
               <div>
-                Customer bills are collected in full — partial payments are not recorded here. The
-                payment is posted to the ledger against this bill only.
+                Customer bills can be collected in full or as a part payment. Once a bill has a
+                part-payment balance, further collections are recorded from the customer credit
+                ledger so the balance, reminders and release approval stay in one place.
               </div>
             </div>
           </div>
@@ -2227,6 +2368,48 @@ export function CashierPage() {
                           )}
                         </select>
                       </Field>
+                      {canPartPay && (
+                        <>
+                          <Field
+                            label="Amount collected now (LKR)"
+                            required
+                            full
+                            hint={`Balance payable ${money(targetBalance)}. Leave part unpaid only when the owner or accounting approves the release.`}
+                          >
+                            <input
+                              className="input"
+                              type="number"
+                              min={0}
+                              max={targetBalance}
+                              step="0.01"
+                              value={effectiveAmountPaid}
+                              onChange={(event) => {
+                                setAmountPaid(event.target.value);
+                                setAmountPaidTouched(true);
+                              }}
+                            />
+                          </Field>
+                          <div className="row wrap" style={{ gridColumn: "1 / -1" }}>
+                            {[0.25, 0.5, 1].map((fraction) => (
+                              <button
+                                key={fraction}
+                                type="button"
+                                className="btn btn-secondary btn-sm"
+                                onClick={() => {
+                                  setAmountPaid(
+                                    String(
+                                      Math.round(targetBalance * fraction * 100) / 100,
+                                    ),
+                                  );
+                                  setAmountPaidTouched(true);
+                                }}
+                              >
+                                {fraction === 1 ? "Full balance" : `${fraction * 100}%`}
+                              </button>
+                            ))}
+                          </div>
+                        </>
+                      )}
                       {vatFeatureEnabled && (
                         <>
                           <Field label="Invoice tax" full hint="Prints TAX INVOICE with the supplier and purchaser TIN blocks when VAT is enabled.">
@@ -2275,9 +2458,9 @@ export function CashierPage() {
                           </div>
                         </div>
                       )}
-                      {paymentMethod === "Credit" && (
+                      {(paymentMethod === "Credit" || partialCheckout) && (
                         <Field
-                          label="Grace period (days)"
+                          label={partialCheckout ? "Part-payment grace period (days)" : "Grace period (days)"}
                           required
                           full
                           hint={`Due date: ${shortDate(
@@ -2292,6 +2475,18 @@ export function CashierPage() {
                             onChange={(event) => setGraceDays(event.target.value)}
                           />
                         </Field>
+                      )}
+                      {partialCheckout && (
+                        <div className="alert alert-warn" style={{ gridColumn: "1 / -1" }}>
+                          <AlertTriangle />
+                          <div>
+                            <strong>Release approval required.</strong>{" "}
+                            {money(collectedNow)} is collected now and{" "}
+                            <strong>{money(partialCredit)}</strong> moves to the customer credit
+                            ledger. The vehicle stays in the workshop until the owner or accounting
+                            approves the release.
+                          </div>
+                        </div>
                       )}
                     </div>
                     <div className="alert alert-info">
@@ -2317,7 +2512,9 @@ export function CashierPage() {
                             )}{" "}
                             {paymentMethod === "Credit"
                               ? "The balance will appear in the customer credit ledger and accounts reminders."
-                              : "PRO is notified immediately for gate clearance after payment."}
+                              : partialCheckout
+                                ? `Only ${money(collectedNow)} is collected now. ${money(partialCredit)} goes to customer credit and owner/accounting approval is needed before release.`
+                                : "PRO is notified immediately for gate clearance after payment."}
                           </>
                         )}
                       </div>
@@ -2347,10 +2544,23 @@ export function CashierPage() {
         footer={
           <>
             <button className="btn btn-secondary" onClick={() => setSuccessJobId(null)}>Done</button>
-            <Link className="btn btn-primary" to="/gate" onClick={() => setSuccessJobId(null)}>
-              Gate clearance
-              <ArrowRight />
-            </Link>
+            {successJob?.status === "Awaiting Release Approval" ? (
+              <button
+                className="btn btn-primary"
+                onClick={() => {
+                  setSuccessJobId(null);
+                  setTab("credits");
+                }}
+              >
+                <CreditCard />
+                Customer credit ledger
+              </button>
+            ) : (
+              <Link className="btn btn-primary" to="/gate" onClick={() => setSuccessJobId(null)}>
+                Gate clearance
+                <ArrowRight />
+              </Link>
+            )}
           </>
         }
       >
@@ -2360,18 +2570,44 @@ export function CashierPage() {
               <CheckCircle2 size={32} />
             </div>
             <h2>
-              {successJob.paymentMethod === "Credit" ? "Released on credit" : "Payment received"}
+              {successJob.status === "Awaiting Release Approval"
+                ? "Part payment recorded — approval pending"
+                : successJob.paymentMethod === "Credit"
+                  ? "Released on credit"
+                  : "Payment received"}
             </h2>
             <p>
-              {money(successTotals.total)} recorded for {successJob.customerName}. The PRO has been
-              notified that {successJob.vehicleNo} is cleared for handover.
+              {successJob.status === "Awaiting Release Approval"
+                ? `${money(successJob.partPaymentCollected ?? 0)} collected from ${successJob.customerName}. ${money(
+                    successJob.partPaymentCredit ?? 0,
+                  )} is on customer credit, so ${successJob.vehicleNo} stays in the workshop until the owner or accounting approves the release.`
+                : `${money(successTotals.total)} recorded for ${successJob.customerName}. The PRO has been notified that ${successJob.vehicleNo} is cleared for handover.`}
             </p>
 
             <div className="card" style={{ marginTop: 18, textAlign: "left" }}>
               <div className="card-body">
                 <div className="kv"><span>Invoice</span><span>{successJob.id}</span></div>
-                <div className="kv"><span>Payment method</span><span>{successJob.paymentMethod}</span></div>
+                <div className="kv">
+                  <span>Payment method</span>
+                  <span>
+                    {successJob.partPaymentAt
+                      ? "Part payment — balance on credit"
+                      : successJob.paymentMethod}
+                  </span>
+                </div>
                 <div className="kv"><span>Net amount</span><span>{money(successTotals.total)}</span></div>
+                {successJob.partPaymentAt && (
+                  <>
+                    <div className="kv">
+                      <span>Collected now</span>
+                      <span>{money(successJob.partPaymentCollected ?? 0)}</span>
+                    </div>
+                    <div className="kv">
+                      <span>Balance on customer credit</span>
+                      <span className="strong">{money(successJob.partPaymentCredit ?? 0)}</span>
+                    </div>
+                  </>
+                )}
                 {successJob.isVatInvoice && (
                   <div className="kv">
                     <span>VAT</span>

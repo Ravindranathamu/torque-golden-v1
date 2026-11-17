@@ -1504,6 +1504,13 @@ If you use the browser webhook for the pilot, the receiver must:
       vehicle rows showing the open amount, expanded bills, multi-select print/send
       as one PDF, and settlement moving the vehicle to Paid & released only when
       every bill is settled.
+- [ ] Partial-settlement smoke test: cash/card checkout with less than the balance
+      shows the collected/credit split and leaves the job in **Awaiting Release
+      Approval**; the same works for the first payment on a separate customer bill.
+      Owner/Accounting approve the release from the customer credit ledger and the
+      vehicle reaches gate clearance. Repeat and settle the credit before approval;
+      the job clears to **Paid** and appears in gate clearance without approval.
+      Confirm an insurance bill or dated cheque cannot be part-paid.
 - [ ] Stores zero-stock smoke test: request an out-of-stock part, issue it either
       by purchase with supplier invoice or by replacing the line with a suitable
       in-stock part; confirm stock, no purchase on substitution, and the updated job

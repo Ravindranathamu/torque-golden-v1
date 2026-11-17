@@ -90,6 +90,13 @@ export function GatePage() {
   const billingQueue = state.jobCards
     .filter((job) => job.status === "Repair Completed")
     .sort((a, b) => (a.completedAt ?? "").localeCompare(b.completedAt ?? ""));
+  const pendingReleases = state.jobCards
+    .filter((job) => job.status === "Awaiting Release Approval")
+    .sort((a, b) =>
+      (a.releaseApprovalRequestedAt ?? "").localeCompare(
+        b.releaseApprovalRequestedAt ?? "",
+      ),
+    );
   const acceptedJob = state.jobCards.find((job) => job.id === acceptedJobId) ?? null;
 
   const nextNumeric = state.jobCards.reduce((max, job) => Math.max(max, job.numericId), 1000) + 1;
@@ -485,10 +492,28 @@ export function GatePage() {
       ) : (
         <div className="stack">
           <Alert tone="info" title="Gate clearance is controlled by billing">
-            A vehicle can only be handed over after the cashier records full payment or an
-            approved credit release. A supervisor cannot bypass this, but the PRO may record a
-            reasoned override when the owner accepts the risk.
+            A vehicle can only be handed over after the cashier records full payment, an
+            approved credit release, or a part payment approved by the owner or accounting. A
+            supervisor cannot bypass this, but the PRO may record a reasoned override when the
+            owner accepts the risk.
           </Alert>
+          {pendingReleases.length > 0 && (
+            <Alert tone="warn" title="Part-payment releases waiting for approval">
+              <div className="stack" style={{ gap: 6 }}>
+                {pendingReleases.map((job) => (
+                  <div className="row-between wrap" key={job.id}>
+                    <span>
+                      <strong>{job.vehicleNo}</strong> · {job.customerName} ·{" "}
+                      {money(job.partPaymentCredit ?? 0)} on credit ({job.id})
+                    </span>
+                    <span className="tiny muted">
+                      Owner / accounting must approve in Accounting before handover
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </Alert>
+          )}
           <div className="row wrap" style={{ justifyContent: "flex-end" }}>
             <button className="btn btn-secondary btn-sm" onClick={openOverride}>
               <ShieldCheck size={14} />
@@ -502,7 +527,7 @@ export function GatePage() {
               <EmptyState
                 icon={<ShieldCheck size={22} />}
                 title="No vehicles waiting for handover"
-                message="Paid jobs and approved credit releases appear here. The customer's key handover is the final step."
+                message="Paid jobs, approved credit releases and approved part payments appear here. The customer's key handover is the final step."
                 action={
                   <Link className="btn btn-secondary" to="/cashier">
                     Open billing queue
@@ -547,7 +572,9 @@ export function GatePage() {
                           <>
                             Override by {job.billingOverrideBy}: {job.billingOverrideReason}
                           </>
-                        ) : job.paymentMethod === "Credit" && credit ? (
+                        ) : job.paymentMethod === "Credit" &&
+                          credit &&
+                          credit.status !== "Settled" ? (
                           `Credit due ${shortDate(credit.dueDate)}`
                         ) : (
                           `Paid ${job.paidAt ? timeAgo(job.paidAt) : ""}`

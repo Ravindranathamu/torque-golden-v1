@@ -158,7 +158,14 @@ export function AppShell() {
         p.partSource !== "Customer_Brought" &&
         !(p.estimateId && !p.partSource),
     ).length,
-    cashier: state.jobCards.filter((j) => j.status === "Repair Completed").length,
+    cashier: state.jobCards.filter(
+      (j) =>
+        j.status === "Repair Completed" ||
+        (j.status === "Awaiting Release Approval" &&
+          state.vehicleBills.some(
+            (bill) => bill.jobCardId === j.id && bill.status === "Partially Paid",
+          )),
+    ).length,
     "insurance-desk": state.insuranceJobs.filter((claim) => {
       const job = state.jobCards.find((entry) => entry.id === claim.jobCardId);
       if (!job || (job.status !== "Paid" && job.status !== "Released on Credit")) return false;
@@ -172,7 +179,8 @@ export function AppShell() {
     }).length,
     accounting:
       state.purchases.filter((p) => p.status === "Unpaid" && p.type === "Credit").length +
-      state.customerCredits.filter((c) => c.status !== "Settled").length,
+      state.customerCredits.filter((c) => c.status !== "Settled").length +
+      state.jobCards.filter((j) => j.status === "Awaiting Release Approval").length,
     marketing: state.marketing.filter(
       (m) => m.status === "Pending" && (!m.readyAt || new Date(m.readyAt) <= new Date()),
     ).length,

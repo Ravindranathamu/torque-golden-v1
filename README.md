@@ -138,8 +138,9 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   **Paid & released**.
 - **Advance payments** against a job number: printable thermal or A4 receipt,
   WhatsApp e-receipt, and automatic deduction from the final bill.
-- Customer credit ledger with grace periods, partial settlements, payment method
-  (including dated cheque), and reminders.
+- Customer credit ledger with grace periods, part payments, payment method
+  (including dated cheque), and reminders. A counter part payment moves the
+  balance here and blocks gate release until Owner or Accounting approves it.
 - Accounting: rental, electricity, water, operational and other expenses;
   supplier payables with purchased-parts drawer; customer receivables; payroll
   and commission statements; bank accounts and internal transfers; petty-cash
@@ -163,7 +164,17 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   to the bill table. When a vehicle has several bills, tick them and print or
   send the whole set in one PDF. When a vehicle has bills for more than one
   repair section, Cashier prints one consolidated **Final bill** only after every
-  section bill is settled.
+  section bill is settled. Customer and additional bills can be collected in full
+  or as a part payment; a part-paid bill moves its balance to the credit ledger
+  and keeps the vehicle at the gate until Owner/Accounting approves the release.
+- **Partial settlement at checkout**: the cashier can collect part of a standard
+  cash/card invoice or the first payment on a separate customer bill. The balance
+  becomes a **Part Payment** customer-credit entry with its own grace period, and
+  the job moves to **Awaiting Release Approval**. Only Owner or Accounting can
+  approve the gate release; the credit stays in the ledger for reminders and later
+  collection. If the balance is settled before approval, the job clears to
+  **Paid** automatically and appears in gate clearance without an approval.
+  Insurance bills and dated cheques still require full settlement.
 - **PRO billing-gate override**: the PRO can release an unpaid completed vehicle
   with a mandatory reason. The job becomes *Released on Credit*, a 7-day customer
   credit opens, and Owner/Cashier/Accounting are notified.

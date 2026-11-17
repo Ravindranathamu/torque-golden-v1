@@ -21,6 +21,7 @@ import type {
   ChequeDetails,
   CreditPayment,
   CustomerCheque,
+  CustomerCredit,
   DamagePhoto,
   Department,
   DriverCommission,
@@ -76,6 +77,7 @@ import {
   nextEstimateNumber,
   normalizePhone,
   partIssueQty,
+  shortDate,
   taskCommission,
   taskCommissionShares,
   taskWorkerIds,
@@ -391,6 +393,7 @@ interface AppStoreValue {
   activateLicence: (key: string) => ActionResult;
   markRepairCompleted: (jobId: string) => ActionResult;
   checkoutJob: (jobId: string, input: CheckoutInput) => ActionResult;
+  approvePartialRelease: (jobId: string, note?: string) => ActionResult;
   dispatchJob: (jobId: string) => void;
   overrideBillingGate: (jobId: string, reason: string) => ActionResult;
   addVehicleBill: (input: {
@@ -4167,6 +4170,48 @@ export function AppProvider({ children }: { children: ReactNode }) {
         )
         .reduce((sum, advance) => sum + advance.amount, 0);
       const balanceDue = Math.max(0, totals.total - advancePaid);
+      const requestedPaid =
+        input.amountPaid === undefined ? balanceDue : Math.round(input.amountPaid * 100) / 100;
+      if (!Number.isFinite(requestedPaid)) {
+        return { ok: false, message: "Enter a valid amount collected at the counter." };
+      }
+      if (input.paymentMethod === "Cheque" && requestedPaid < balanceDue - 0.5) {
+        return {
+          ok: false,
+          message:
+            "A dated cheque must cover the full balance. Record the unpaid balance as a part payment instead.",
+        };
+      }
+      if (input.paymentMethod === "Insurance" && requestedPaid < balanceDue - 0.5) {
+        return {
+          ok: false,
+          message: "Insurance billing must cover the full invoice. Use the customer bill for a part payment.",
+        };
+      }
+      if (requestedPaid < -0.5) {
+        return { ok: false, message: "The amount collected cannot be negative." };
+      }
+      if (requestedPaid > balanceDue + 0.5) {
+        return {
+          ok: false,
+          message: `The amount collected cannot exceed the balance due of LKR ${balanceDue.toLocaleString()}.`,
+        };
+      }
+      const isPartial =
+        requestedPaid < balanceDue - 0.5 &&
+        input.paymentMethod !== "Credit" &&
+        input.paymentMethod !== "Insurance";
+      const collected = isPartial ? Math.max(0, requestedPaid) : balanceDue;
+      const creditBalance = isPartial
+        ? Math.max(0, Math.round((balanceDue - collected) * 100) / 100)
+        : 0;
+      if (isPartial && collected <= 0) {
+        return {
+          ok: false,
+          message:
+            "Enter the amount the customer is paying now. For no payment at all, use the Credit release.",
+        };
+      }
       const now = new Date().toISOString();
       if (input.paymentMethod === "Cheque") {
         if (!input.cheque?.chequeNo.trim() || !input.cheque.bank.trim() || !input.cheque.branch.trim()) {
@@ -4182,9 +4227,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           };
         }
       }
-      const paidStatus = input.paymentMethod === "Credit" ? "Released on Credit" : "Paid";
+      const paidStatus = isPartial
+        ? ("Awaiting Release Approval" as const)
+        : input.paymentMethod === "Credit"
+          ? ("Released on Credit" as const)
+          : ("Paid" as const);
       const dueDate =
-        input.paymentMethod === "Credit"
+        input.paymentMethod === "Credit" || isPartial
           ? isoDaysFrom(now, input.graceDays ?? 30)
           : undefined;
       const user = state.users.find((entry) => entry.id === state.currentUserId);
@@ -4219,7 +4268,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
               accountId: input.bankAccountId,
               date: now,
               direction: "Credit_In",
-              amount: balanceDue,
+              amount: collected,
               category: "Vehicle Payment",
               description: `${job.id} · ${job.vehicleNo} · ${input.paymentMethod}`,
               reference: job.id,
@@ -4292,6 +4341,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 createdAt: now,
               },
             ];
+      const ledgerPaymentMethod =
+        input.paymentMethod === "Credit" || isPartial
+          ? ("Credit" as const)
+          : input.paymentMethod;
       distributed.forEach((task, index) => {
         const commissionShares = taskCommissionShares(task, state.workers);
         ledgerEntries.push({
@@ -4303,7 +4356,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           partsCost: index === 0 ? totals.partsCost : 0,
           commission: taskCommission(task, state.workers),
           discount: index === 0 ? totals.discount : 0,
-          paymentMethod: input.paymentMethod,
+          paymentMethod: ledgerPaymentMethod,
           workerId: taskWorkerIds(task)[0],
           workerCommissions:
             commissionShares.length > 0
@@ -4318,8 +4371,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
           description: `${job.vehicleNo} — ${task.name}`,
         });
       });
+      if (isPartial) {
+        ledgerEntries.unshift({
+          id: uid("led"),
+          jobCardId: jobId,
+          date: now,
+          laborRevenue: 0,
+          partsRevenue: 0,
+          partsCost: 0,
+          commission: 0,
+          discount: 0,
+          paymentMethod: "Credit Settlement",
+          settlementAmount: collected,
+          description: `${job.vehicleNo} — part payment at checkout by ${input.paymentMethod}`,
+        });
+      }
       let nextCredits = state.customerCredits;
-      if (input.paymentMethod === "Credit") {
+      if (input.paymentMethod === "Credit" || isPartial) {
         nextCredits = [
           {
             id: uid("CR"),
@@ -4327,12 +4395,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
             customerName: job.customerName,
             vehicleNo: job.vehicleNo,
             phone: job.phone,
-            total: balanceDue,
+            total: isPartial ? creditBalance : balanceDue,
             paid: 0,
             creditDate: now,
             dueDate: dueDate ?? isoDaysFrom(now, 30),
             graceDays: input.graceDays ?? 30,
             status: "Unpaid" as const,
+            kind: isPartial ? ("Part Payment" as const) : ("Credit Sale" as const),
           },
           ...state.customerCredits,
         ];
@@ -4344,11 +4413,19 @@ export function AppProvider({ children }: { children: ReactNode }) {
             ? {
                 ...j,
                 status: paidStatus,
-                paymentMethod: input.paymentMethod,
+                paymentMethod:
+                  input.paymentMethod === "Credit" || isPartial
+                    ? ("Credit" as const)
+                    : input.paymentMethod,
                 discount: input.discount,
                 discountType: input.discountType,
                 creditGraceDays: input.graceDays,
                 paidAt: now,
+                partPaymentCollected: isPartial ? collected : undefined,
+                partPaymentCredit: isPartial ? creditBalance : undefined,
+                partPaymentAt: isPartial ? now : undefined,
+                releaseApprovalRequestedAt: isPartial ? now : undefined,
+                releaseApprovalRequestedBy: isPartial ? user?.name : undefined,
                 chequeId,
                 customerTinNumber: input.customerTinNumber?.trim() || j.customerTinNumber,
                 isVatInvoice: Boolean(input.isVatInvoice),
@@ -4385,19 +4462,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   : claim,
               )
             : prev.insuranceJobs,
-        notifications: notify(
-          prev,
-          ["PRO", "Accounting"],
-          input.paymentMethod === "Credit"
-            ? "Gate clearance: released on credit"
-            : input.paymentMethod === "Cheque"
-              ? "Gate clearance: dated cheque held in safe"
-              : "Gate clearance: vehicle paid",
-          `${job.id} · ${job.vehicleNo} is ready for handover.${input.paymentMethod === "Cheque" ? ` Cheque ${input.cheque?.chequeNo} must clear before funds are released.` : ""}`,
-          "high",
-          "/gate",
-          { vehicleNo: job.vehicleNo, eventType: "payment" },
-        ),
+        notifications: isPartial
+          ? notify(
+              prev,
+              ["Owner", "Accounting"],
+              "Part payment recorded — release approval needed",
+              `${job.id} · ${job.vehicleNo}: ${money(collected)} collected and ${money(
+                creditBalance,
+              )} moved to customer credit. Approve the gate release once the balance is accepted.`,
+              "high",
+              "/accounting",
+              { vehicleNo: job.vehicleNo, eventType: "payment" },
+            )
+          : notify(
+              prev,
+              ["PRO", "Accounting"],
+              input.paymentMethod === "Credit"
+                ? "Gate clearance: released on credit"
+                : input.paymentMethod === "Cheque"
+                  ? "Gate clearance: dated cheque held in safe"
+                  : "Gate clearance: vehicle paid",
+              `${job.id} · ${job.vehicleNo} is ready for handover.${input.paymentMethod === "Cheque" ? ` Cheque ${input.cheque?.chequeNo} must clear before funds are released.` : ""}`,
+              "high",
+              "/gate",
+              { vehicleNo: job.vehicleNo, eventType: "payment" },
+            ),
       }));
       return { ok: true };
     },
@@ -4416,8 +4505,68 @@ export function AppProvider({ children }: { children: ReactNode }) {
     ],
   );
 
+  const approvePartialRelease = useCallback(
+    (jobId: string, note?: string): ActionResult => {
+      const job = state.jobCards.find((entry) => entry.id === jobId);
+      if (!job) return { ok: false, message: "Job card not found." };
+      if (job.status !== "Awaiting Release Approval") {
+        return {
+          ok: false,
+          message: "This vehicle is not waiting for a part-payment release approval.",
+        };
+      }
+      const user = state.users.find((entry) => entry.id === state.currentUserId);
+      if (!user || (!user.isOwner && !user.departments.includes("Accounting"))) {
+        return {
+          ok: false,
+          message: "Only the owner or accounting department can approve a partial-payment release.",
+        };
+      }
+      const now = new Date().toISOString();
+      const cleanNote = note?.trim();
+      setState((prev) => ({
+        ...prev,
+        jobCards: prev.jobCards.map((entry) =>
+          entry.id === jobId
+            ? {
+                ...entry,
+                status: "Released on Credit" as const,
+                releaseApprovedBy: user.name,
+                releaseApprovedAt: now,
+                releaseApprovalNote: cleanNote || undefined,
+              }
+            : entry,
+        ),
+        notifications: notify(
+          prev,
+          ["PRO", "Cashier", "Accounting"],
+          "Part-payment release approved",
+          `${job.id} · ${job.vehicleNo} may be handed over. ${money(
+            job.partPaymentCredit ?? 0,
+          )} remains on customer credit${job.partPaymentAt ? ` from ${shortDate(job.partPaymentAt)}` : ""}.${cleanNote ? ` Note: ${cleanNote}` : ""}`,
+          "high",
+          "/gate",
+          { vehicleNo: job.vehicleNo, eventType: "payment" },
+        ),
+      }));
+      return {
+        ok: true,
+        message: `${job.vehicleNo} approved for gate release with ${money(
+          job.partPaymentCredit ?? 0,
+        )} on credit.`,
+      };
+    },
+    [state.jobCards, state.users, state.currentUserId],
+  );
+
   const dispatchJob = useCallback((jobId: string) => {
     const dispatchedJob = state.jobCards.find((entry) => entry.id === jobId);
+    if (
+      !dispatchedJob ||
+      (dispatchedJob.status !== "Paid" && dispatchedJob.status !== "Released on Credit")
+    ) {
+      return;
+    }
     setState((prev) => {
       const job = prev.jobCards.find((j) => j.id === jobId);
       if (!job) return prev;
@@ -5163,11 +5312,41 @@ export function AppProvider({ children }: { children: ReactNode }) {
             jobBills.every(
               (entry) => entry.status === "Paid" || entry.status === "Release Order",
             );
+          const allCovered =
+            jobBills.length > 0 &&
+            jobBills.every(
+              (entry) =>
+                entry.status === "Paid" ||
+                entry.status === "Release Order" ||
+                entry.status === "Partially Paid",
+            );
+          const hasPartial = jobBills.some(
+            (entry) => entry.status === "Partially Paid",
+          );
           const readyJob =
             allSettled &&
             job.status !== "Paid" &&
             job.status !== "Released on Credit" &&
             job.status !== "Dispatched";
+          const approvalPending =
+            allCovered &&
+            hasPartial &&
+            job.status !== "Paid" &&
+            job.status !== "Released on Credit" &&
+            job.status !== "Dispatched";
+          const collectedToDate = jobBills.reduce(
+            (sum, entry) => sum + (entry.paidAmount ?? 0),
+            0,
+          );
+          const creditToDate = prev.customerCredits
+            .filter(
+              (credit) =>
+                credit.jobCardId === job.id && credit.status !== "Settled",
+            )
+            .reduce(
+              (sum, credit) => sum + Math.max(0, credit.total - credit.paid),
+              0,
+            );
           const notifications = notify(
             prev,
             ["Cashier", "Accounting", "PRO"],
@@ -5182,9 +5361,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
                       customerPartsCredit,
                     )} were credited, so no shortfall bill is needed.`
                   : "."
-            }${readyJob ? " All separate bills are settled — vehicle ready for gate release." : ""}`,
-            shortfall > 0.005 || readyJob ? "high" : "normal",
-            readyJob ? "/gate" : "/cashier",
+            }${readyJob ? " All separate bills are settled — vehicle ready for gate release." : ""}${
+              approvalPending
+                ? " The customer bill has a part-payment balance — owner or accounting approval is needed before release."
+                : ""
+            }`,
+            shortfall > 0.005 || readyJob || approvalPending ? "high" : "normal",
+            readyJob ? "/gate" : approvalPending ? "/accounting" : "/cashier",
             { vehicleNo: job.vehicleNo, eventType: "payment" },
           );
           return {
@@ -5204,18 +5387,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
                   }
                 : claim,
             ),
-            jobCards: readyJob
-              ? prev.jobCards.map((entry) =>
-                  entry.id === job.id
-                    ? {
-                        ...entry,
-                        status: "Paid" as const,
-                        paidAt: now,
-                        paymentMethod: "Insurance" as const,
-                      }
-                    : entry,
-                )
-              : prev.jobCards,
+            jobCards:
+              readyJob || approvalPending
+                ? prev.jobCards.map((entry) =>
+                    entry.id === job.id
+                      ? {
+                          ...entry,
+                          status: readyJob
+                            ? ("Paid" as const)
+                            : ("Awaiting Release Approval" as const),
+                          paidAt: readyJob ? now : entry.paidAt,
+                          paymentMethod: readyJob
+                            ? ("Insurance" as const)
+                            : ("Credit" as const),
+                          partPaymentCollected: approvalPending
+                            ? collectedToDate
+                            : entry.partPaymentCollected,
+                          partPaymentCredit: approvalPending
+                            ? creditToDate
+                            : entry.partPaymentCredit,
+                          partPaymentAt: approvalPending
+                            ? entry.partPaymentAt ?? now
+                            : entry.partPaymentAt,
+                          releaseApprovalRequestedAt: approvalPending
+                            ? now
+                            : entry.releaseApprovalRequestedAt,
+                          releaseApprovalRequestedBy: approvalPending
+                            ? user?.name
+                            : entry.releaseApprovalRequestedBy,
+                        }
+                      : entry,
+                  )
+                : prev.jobCards,
             notifications,
           };
         });
@@ -5228,43 +5431,135 @@ export function AppProvider({ children }: { children: ReactNode }) {
           message: "Settle the insurance bill with the insurer release order.",
         };
       }
-      const amount = Math.round((input.amount ?? net) * 100) / 100;
-      if (!Number.isFinite(amount) || amount < net - 0.5) {
+      const requested = Math.round((input.amount ?? net) * 100) / 100;
+      if (!Number.isFinite(requested) || requested <= 0) {
+        return { ok: false, message: "Enter a valid amount collected from the customer." };
+      }
+      if (requested > net + 0.5) {
         return {
           ok: false,
-          message: `Collect the full net payable of ${money(net)}.`,
+          message: `The amount collected cannot exceed the net payable of ${money(net)}.`,
         };
       }
-      const ledgerEntry = {
-        id: uid("led"),
-        jobCardId: job.id,
-        date: now,
-        laborRevenue: isShortfall ? 0 : laborRevenue,
-        partsRevenue: isShortfall ? 0 : partsRevenue,
-        partsCost: isShortfall ? 0 : partsCost,
-        commission: isShortfall ? 0 : commission,
-        discount: isShortfall ? 0 : discount,
-        paymentMethod: (isShortfall
-          ? "Insurance Settlement"
-          : input.method) as "Cash" | "Card" | "Bank Transfer" | "Cheque" | "Insurance Settlement",
-        settlementAmount: net,
-        workerId: isShortfall ? undefined : workerCommissions[0]?.workerId,
-        workerCommissions:
-          !isShortfall && workerCommissions.length > 0 ? workerCommissions : undefined,
-        driverCommission: isShortfall ? 0 : driverCommission,
-        insuranceClaimId: job.insuranceClaimId,
-        description: isShortfall
-          ? `${job.vehicleNo} — release order shortfall ${bill.billNo}`
-          : `${job.vehicleNo} — ${bill.kind} bill ${bill.billNo}`,
-      };
+      if (input.method === "Cheque" && requested < net - 0.5) {
+        return {
+          ok: false,
+          message:
+            "A cheque must cover this bill in full. Split the unpaid balance into a part payment by cash, card or transfer instead.",
+        };
+      }
+      const isPartial = requested < net - 0.5;
+      if (bill.status === "Partially Paid") {
+        return {
+          ok: false,
+          message:
+            "This bill already has a part-payment balance in the customer credit ledger. Collect the remaining balance from there.",
+        };
+      }
+      const collected = isPartial ? requested : net;
+      const creditBalance = isPartial
+        ? Math.max(0, Math.round((net - collected) * 100) / 100)
+        : 0;
+      const creditId = isPartial ? uid("CR") : undefined;
+      const creditRecord: CustomerCredit | null =
+        isPartial && creditId
+          ? {
+              id: creditId,
+              jobCardId: job.id,
+              customerName: job.customerName,
+              vehicleNo: job.vehicleNo,
+              phone: job.phone,
+              total: creditBalance,
+              paid: 0,
+              creditDate: now,
+              dueDate: isoDaysFrom(now, 30),
+              graceDays: 30,
+              status: "Unpaid" as const,
+              kind: "Part Payment" as const,
+              billId: bill.id,
+            }
+          : null;
+      const ledgerEntries: AppState["ledger"] = isPartial
+        ? isShortfall
+          ? [
+              {
+                id: uid("led"),
+                jobCardId: job.id,
+                date: now,
+                laborRevenue: 0,
+                partsRevenue: 0,
+                partsCost: 0,
+                commission: 0,
+                discount: 0,
+                paymentMethod: "Insurance Settlement",
+                settlementAmount: collected,
+                description: `${job.vehicleNo} — release order shortfall ${bill.billNo} part payment`,
+              },
+            ]
+          : [
+              {
+                id: uid("led"),
+                jobCardId: job.id,
+                date: now,
+                laborRevenue,
+                partsRevenue,
+                partsCost,
+                commission,
+                discount,
+                paymentMethod: "Credit",
+                workerId: workerCommissions[0]?.workerId,
+                workerCommissions:
+                  workerCommissions.length > 0 ? workerCommissions : undefined,
+                driverCommission,
+                insuranceClaimId: job.insuranceClaimId,
+                description: `${job.vehicleNo} — ${bill.kind} bill ${bill.billNo} on credit`,
+              },
+              {
+                id: uid("led"),
+                jobCardId: job.id,
+                date: now,
+                laborRevenue: 0,
+                partsRevenue: 0,
+                partsCost: 0,
+                commission: 0,
+                discount: 0,
+                paymentMethod: "Credit Settlement",
+                settlementAmount: collected,
+                description: `${job.vehicleNo} — ${bill.billNo} part payment by ${input.method}`,
+              },
+            ]
+        : [
+            {
+              id: uid("led"),
+              jobCardId: job.id,
+              date: now,
+              laborRevenue: isShortfall ? 0 : laborRevenue,
+              partsRevenue: isShortfall ? 0 : partsRevenue,
+              partsCost: isShortfall ? 0 : partsCost,
+              commission: isShortfall ? 0 : commission,
+              discount: isShortfall ? 0 : discount,
+              paymentMethod: (isShortfall
+                ? "Insurance Settlement"
+                : input.method) as "Cash" | "Card" | "Bank Transfer" | "Cheque" | "Insurance Settlement",
+              settlementAmount: isShortfall ? collected : net,
+              workerId: isShortfall ? undefined : workerCommissions[0]?.workerId,
+              workerCommissions:
+                !isShortfall && workerCommissions.length > 0 ? workerCommissions : undefined,
+              driverCommission: isShortfall ? 0 : driverCommission,
+              insuranceClaimId: job.insuranceClaimId,
+              description: isShortfall
+                ? `${job.vehicleNo} — release order shortfall ${bill.billNo}`
+                : `${job.vehicleNo} — ${bill.kind} bill ${bill.billNo}`,
+            },
+          ];
       setState((prev) => {
         const nextBills = prev.vehicleBills.map((entry) =>
           entry.id === bill.id
             ? {
                 ...entry,
                 ...chargeFields,
-                status: "Paid" as const,
-                paidAmount: net,
+                status: isPartial ? ("Partially Paid" as const) : ("Paid" as const),
+                paidAmount: collected,
                 paidAt: now,
                 paidBy: user?.name,
                 paymentMethod: input.method,
@@ -5277,49 +5572,118 @@ export function AppProvider({ children }: { children: ReactNode }) {
           jobBills.every(
             (entry) => entry.status === "Paid" || entry.status === "Release Order",
           );
+        const allCovered =
+          jobBills.length > 0 &&
+          jobBills.every(
+            (entry) =>
+              entry.status === "Paid" ||
+              entry.status === "Release Order" ||
+              entry.status === "Partially Paid",
+          );
+        const hasPartial = jobBills.some(
+          (entry) => entry.status === "Partially Paid",
+        );
         const readyJob =
           allSettled &&
           job.status !== "Paid" &&
           job.status !== "Released on Credit" &&
           job.status !== "Dispatched";
-        const notifications = notify(
-          prev,
-          readyJob ? ["PRO", "Accounting"] : ["Cashier", "Accounting"],
-          readyJob ? "All separate bills settled — gate release ready" : "Customer bill paid",
-          `${job.vehicleNo} · ${bill.billNo} · ${money(net)} collected by ${input.method}${
-            readyJob
-              ? ". Insurance and customer bills are settled; the vehicle can be released at the gate."
-              : ". The insurer release order is still pending."
-          }`,
-          readyJob ? "high" : "normal",
-          readyJob ? "/gate" : "/cashier",
-          { vehicleNo: job.vehicleNo, eventType: "payment" },
+        const approvalPending =
+          allCovered &&
+          hasPartial &&
+          job.status !== "Paid" &&
+          job.status !== "Released on Credit" &&
+          job.status !== "Dispatched";
+        const collectedToDate = jobBills.reduce(
+          (sum, entry) => sum + (entry.paidAmount ?? 0),
+          0,
         );
+        const nextCredits = creditRecord
+          ? [creditRecord, ...prev.customerCredits]
+          : prev.customerCredits;
+        const creditToDate = nextCredits
+          .filter(
+            (credit) =>
+              credit.jobCardId === job.id && credit.status !== "Settled",
+          )
+          .reduce(
+            (sum, credit) => sum + Math.max(0, credit.total - credit.paid),
+            0,
+          );
+        const notifications = isPartial
+          ? notify(
+              prev,
+              approvalPending ? ["Owner", "Accounting"] : ["Cashier", "Accounting"],
+              approvalPending
+                ? "Part payment recorded — release approval needed"
+                : "Part payment recorded on customer bill",
+              `${job.vehicleNo} · ${bill.billNo}: ${money(collected)} collected and ${money(
+                creditBalance,
+              )} moved to customer credit.${
+                approvalPending
+                  ? " Every bill is covered, so the vehicle can be released once the owner or accounting approves."
+                  : ""
+              }`,
+              approvalPending ? "high" : "normal",
+              approvalPending ? "/accounting" : "/cashier",
+              { vehicleNo: job.vehicleNo, eventType: "payment" },
+            )
+          : notify(
+              prev,
+              readyJob ? ["PRO", "Accounting"] : ["Cashier", "Accounting"],
+              readyJob ? "All separate bills settled — gate release ready" : "Customer bill paid",
+              `${job.vehicleNo} · ${bill.billNo} · ${money(collected)} collected by ${input.method}${
+                readyJob
+                  ? ". Insurance and customer bills are settled; the vehicle can be released at the gate."
+                  : ". The insurer release order is still pending."
+              }`,
+              readyJob ? "high" : "normal",
+              readyJob ? "/gate" : "/cashier",
+              { vehicleNo: job.vehicleNo, eventType: "payment" },
+            );
         return {
           ...prev,
           vehicleBills: nextBills,
-          ledger: [ledgerEntry, ...prev.ledger],
-          jobCards: readyJob
-            ? prev.jobCards.map((entry) =>
-                entry.id === job.id
-                  ? {
-                      ...entry,
-                      status: "Paid" as const,
-                      paidAt: now,
-                      paymentMethod:
-                        input.method === "Cheque"
-                          ? ("Cheque" as const)
-                          : input.method === "Card"
-                            ? ("Card" as const)
-                            : ("Cash" as const),
-                    }
-                  : entry,
-              )
-            : prev.jobCards,
+          customerCredits: nextCredits,
+          ledger: [...ledgerEntries, ...prev.ledger],
+          jobCards:
+            readyJob || approvalPending
+              ? prev.jobCards.map((entry) =>
+                  entry.id === job.id
+                    ? {
+                        ...entry,
+                        status: readyJob
+                          ? ("Paid" as const)
+                          : ("Awaiting Release Approval" as const),
+                        paidAt: readyJob ? now : entry.paidAt,
+                        paymentMethod: readyJob
+                          ? input.method === "Cheque"
+                            ? ("Cheque" as const)
+                            : input.method === "Card"
+                              ? ("Card" as const)
+                              : ("Cash" as const)
+                          : ("Credit" as const),
+                        partPaymentCollected: approvalPending
+                          ? collectedToDate
+                          : entry.partPaymentCollected,
+                        partPaymentCredit: approvalPending
+                          ? creditToDate
+                          : entry.partPaymentCredit,
+                        partPaymentAt: approvalPending ? now : entry.partPaymentAt,
+                        releaseApprovalRequestedAt: approvalPending
+                          ? now
+                          : entry.releaseApprovalRequestedAt,
+                        releaseApprovalRequestedBy: approvalPending
+                          ? user?.name
+                          : entry.releaseApprovalRequestedBy,
+                      }
+                    : entry,
+                )
+              : prev.jobCards,
           notifications,
         };
       });
-      return { ok: true };
+      return { ok: true, reference: creditId };
     },
     [
       state.vehicleBills,
@@ -5456,6 +5820,40 @@ export function AppProvider({ children }: { children: ReactNode }) {
           : null;
       const newPaid = credit.paid + value;
       const settled = newPaid >= credit.total;
+      const linkedBill = credit.billId
+        ? state.vehicleBills.find((bill) => bill.id === credit.billId) ?? null
+        : null;
+      const linkedJob = state.jobCards.find((job) => job.id === credit.jobCardId) ?? null;
+      const otherOpenCredits = state.customerCredits.some(
+        (entry) =>
+          entry.id !== creditId &&
+          entry.jobCardId === credit.jobCardId &&
+          entry.status !== "Settled",
+      );
+      const jobBills = state.vehicleBills.filter(
+        (bill) => bill.jobCardId === credit.jobCardId,
+      );
+      const billsCleared = jobBills.every((bill) =>
+        bill.id === credit.billId
+          ? settled
+          : bill.status === "Paid" || bill.status === "Release Order",
+      );
+      const clearForGate =
+        settled &&
+        !otherOpenCredits &&
+        billsCleared &&
+        linkedJob?.status === "Awaiting Release Approval";
+      const remainingCreditAfter = state.customerCredits
+        .filter(
+          (entry) =>
+            entry.id !== creditId &&
+            entry.jobCardId === credit.jobCardId &&
+            entry.status !== "Settled",
+        )
+        .reduce(
+          (sum, entry) => sum + Math.max(0, entry.total - entry.paid),
+          0,
+        );
       setState((prev) => ({
         ...prev,
         customerCredits: prev.customerCredits.map((c) =>
@@ -5467,6 +5865,52 @@ export function AppProvider({ children }: { children: ReactNode }) {
               }
             : c,
         ),
+        vehicleBills:
+          settled && linkedBill
+            ? prev.vehicleBills.map((bill) =>
+                bill.id === linkedBill.id
+                  ? {
+                      ...bill,
+                      status: "Paid" as const,
+                      paidAmount:
+                        Math.round(((bill.paidAmount ?? 0) + value) * 100) / 100,
+                      paidAt: now,
+                      paidBy: user?.name,
+                    }
+                  : bill,
+              )
+            : prev.vehicleBills,
+        jobCards: linkedJob
+          ? prev.jobCards.map((job) =>
+              job.id === credit.jobCardId
+                ? {
+                    ...job,
+                    ...(credit.kind === "Part Payment" || job.partPaymentAt
+                      ? {
+                          partPaymentCredit:
+                            remainingCreditAfter > 0
+                              ? Math.round(remainingCreditAfter * 100) / 100
+                              : undefined,
+                        }
+                      : {}),
+                    ...(clearForGate
+                      ? { status: "Paid" as const, paidAt: now }
+                      : {}),
+                  }
+                : job,
+            )
+          : prev.jobCards,
+        notifications: clearForGate
+          ? notify(
+              prev,
+              ["PRO", "Accounting", "Cashier"],
+              "Part-payment balance settled — gate release ready",
+              `${credit.vehicleNo} · ${credit.jobCardId}: the customer credit balance is fully settled, so no owner/accounting release approval is needed.`,
+              "high",
+              "/gate",
+              { vehicleNo: credit.vehicleNo, eventType: "payment" },
+            )
+          : prev.notifications,
         creditPayments: [payment, ...prev.creditPayments],
         customerCheques: chequeRecord
           ? [chequeRecord, ...prev.customerCheques]
@@ -5497,7 +5941,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           : `Payment recorded. Remaining balance: LKR ${(credit.total - newPaid).toLocaleString()}.`,
       };
     },
-    [state.customerCredits, state.users, state.currentUserId],
+    [state.customerCredits, state.users, state.currentUserId, state.vehicleBills, state.jobCards],
   );
 
   const addSupplier = useCallback((name: string, phone: string, contactPerson: string) => {
@@ -6802,6 +7246,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       activateLicence,
       markRepairCompleted,
       checkoutJob,
+      approvePartialRelease,
       dispatchJob,
       overrideBillingGate,
       addVehicleBill,
@@ -6918,6 +7363,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       activateLicence,
       markRepairCompleted,
       checkoutJob,
+      approvePartialRelease,
       dispatchJob,
       overrideBillingGate,
       addVehicleBill,

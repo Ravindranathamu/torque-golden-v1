@@ -12,6 +12,7 @@ import {
   Megaphone,
   Package,
   ReceiptText,
+  ShieldCheck,
   TrendingUp,
   Users,
   Wallet,
@@ -58,6 +59,9 @@ export function DashboardPage() {
       (!reminder.readyAt || new Date(reminder.readyAt) <= new Date()),
   );
   const billingQueue = state.jobCards.filter((job) => job.status === "Repair Completed");
+  const pendingReleaseApprovals = state.jobCards.filter(
+    (job) => job.status === "Awaiting Release Approval",
+  );
   const gateQueue = state.jobCards.filter(
     (job) => job.status === "Paid" || job.status === "Released on Credit",
   );
@@ -78,6 +82,16 @@ export function DashboardPage() {
       link: "/cashier",
       tone: "purple",
       count: billingQueue.length,
+    },
+    {
+      icon: <ShieldCheck />,
+      label: `${pendingReleaseApprovals.length} part-payment release${
+        pendingReleaseApprovals.length === 1 ? "" : "s"
+      } waiting`,
+      detail: "Owner or accounting must approve before gate handover",
+      link: "/accounting",
+      tone: "amber",
+      count: pendingReleaseApprovals.length,
     },
     {
       icon: <Package />,

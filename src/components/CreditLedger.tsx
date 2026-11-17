@@ -5,14 +5,15 @@ import {
   Clock3,
   MessageCircle,
   Package,
+  ShieldCheck,
   Wallet,
 } from "lucide-react";
-import { useApp } from "../state/AppStore";
+import { hasDepartment, useApp } from "../state/AppStore";
 import { daysUntil, money, shortDate, waLink } from "../lib/utils";
 import { creditReminderMessage, creditSettledMessage } from "../lib/messages";
 import { EmptyState, Field, Modal, StatCard, StatusBadge, Tabs } from "./ui";
 import { useToast } from "./Toast";
-import type { CustomerCredit } from "../types";
+import type { CustomerCredit, JobCard } from "../types";
 
 type CreditFilter = "open" | "settled" | "all";
 type CreditPaymentMethod = "Cash" | "Card" | "Bank Transfer" | "Cheque";
@@ -24,7 +25,7 @@ interface PaymentResult {
 }
 
 export function CreditLedger({ defaultFilter = "open" }: { defaultFilter?: CreditFilter }) {
-  const { state, recordCreditPayment } = useApp();
+  const { state, currentUser, recordCreditPayment, approvePartialRelease } = useApp();
   const { push } = useToast();
   const [filter, setFilter] = useState<CreditFilter>(defaultFilter);
   const [selected, setSelected] = useState<CustomerCredit | null>(null);
@@ -38,8 +39,18 @@ export function CreditLedger({ defaultFilter = "open" }: { defaultFilter?: Credi
   const [chequeBranch, setChequeBranch] = useState("");
   const [chequeDate, setChequeDate] = useState("");
   const [partsCredit, setPartsCredit] = useState<CustomerCredit | null>(null);
+  const [approvalTarget, setApprovalTarget] = useState<JobCard | null>(null);
+  const [approvalNote, setApprovalNote] = useState("");
 
   const activeAccounts = state.bankAccounts.filter((account) => account.active);
+  const canApproveRelease = hasDepartment(currentUser, "Accounting");
+  const pendingReleases = state.jobCards
+    .filter((job) => job.status === "Awaiting Release Approval")
+    .sort((a, b) =>
+      (b.releaseApprovalRequestedAt ?? "").localeCompare(
+        a.releaseApprovalRequestedAt ?? "",
+      ),
+    );
 
   const credits = useMemo(
     () =>
@@ -163,8 +174,95 @@ export function CreditLedger({ defaultFilter = "open" }: { defaultFilter?: Credi
     );
   }
 
+  function openApproval(job: JobCard) {
+    setApprovalTarget(job);
+    setApprovalNote("");
+  }
+
+  function submitApproval() {
+    if (!approvalTarget) return;
+    const response = approvePartialRelease(approvalTarget.id, approvalNote);
+    if (!response.ok) {
+      push(response.message ?? "Unable to approve the release.", "error");
+      return;
+    }
+    push(response.message ?? "Part-payment release approved. PRO notified.");
+    setApprovalTarget(null);
+    setApprovalNote("");
+  }
+
   return (
     <div className="stack">
+      {pendingReleases.length > 0 && (
+        <div className="card">
+          <div className="card-head">
+            <div>
+              <h3>Part-payment release approvals</h3>
+              <p>
+                These vehicles have a part-paid bill. The owner or accounting must approve the
+                gate release while the balance stays in the credit ledger.
+              </p>
+            </div>
+            <span className="badge badge-amber">
+              {pendingReleases.length} waiting
+            </span>
+          </div>
+          <div className="table-wrap">
+            <table className="data">
+              <thead>
+                <tr>
+                  <th>Vehicle</th>
+                  <th>Customer</th>
+                  <th className="num">Collected</th>
+                  <th className="num">On credit</th>
+                  <th>Requested</th>
+                  <th />
+                </tr>
+              </thead>
+              <tbody>
+                {pendingReleases.map((job) => (
+                  <tr key={job.id}>
+                    <td>
+                      <div className="cell-main">{job.vehicleNo}</div>
+                      <div className="cell-sub">{job.id}</div>
+                    </td>
+                    <td>
+                      <div className="cell-main">{job.customerName}</div>
+                      <div className="cell-sub">{job.phone}</div>
+                    </td>
+                    <td className="num">{money(job.partPaymentCollected ?? 0)}</td>
+                    <td className="num strong">{money(job.partPaymentCredit ?? 0)}</td>
+                    <td className="tiny muted">
+                      {job.releaseApprovalRequestedAt
+                        ? shortDate(job.releaseApprovalRequestedAt)
+                        : "—"}
+                      <div className="cell-sub">
+                        {job.releaseApprovalRequestedBy ?? "Cashier"}
+                      </div>
+                    </td>
+                    <td>
+                      <div className="row" style={{ justifyContent: "flex-end" }}>
+                        {canApproveRelease ? (
+                          <button
+                            className="btn btn-primary btn-sm"
+                            onClick={() => openApproval(job)}
+                          >
+                            <ShieldCheck />
+                            Approve release
+                          </button>
+                        ) : (
+                          <span className="tiny muted">Owner / accounting approval</span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
       <div className="grid cols-4">
         <StatCard
           label="Outstanding"
@@ -263,7 +361,12 @@ export function CreditLedger({ defaultFilter = "open" }: { defaultFilter?: Credi
                         <div className="cell-main">{credit.vehicleNo}</div>
                         <div className="cell-sub">{credit.jobCardId}</div>
                       </td>
-                      <td className="num">{money(credit.total)}</td>
+                      <td className="num">
+                        {money(credit.total)}
+                        {credit.kind === "Part Payment" && (
+                          <div className="cell-sub">Part-payment balance</div>
+                        )}
+                      </td>
                       <td className="num">{money(credit.paid)}</td>
                       <td className="num strong">{money(remaining)}</td>
                       <td>
@@ -575,6 +678,76 @@ export function CreditLedger({ defaultFilter = "open" }: { defaultFilter?: Credi
                 </p>
               </>
             )}
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(approvalTarget)}
+        onClose={() => setApprovalTarget(null)}
+        title="Approve part-payment release"
+        subtitle={
+          approvalTarget
+            ? `${approvalTarget.vehicleNo} · ${approvalTarget.customerName} · ${approvalTarget.id}`
+            : undefined
+        }
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setApprovalTarget(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={submitApproval}>
+              <ShieldCheck />
+              Approve gate release
+            </button>
+          </>
+        }
+      >
+        {approvalTarget && (
+          <div className="stack">
+            <div className="card">
+              <div className="card-body">
+                <div className="kv">
+                  <span>Collected at checkout</span>
+                  <span>{money(approvalTarget.partPaymentCollected ?? 0)}</span>
+                </div>
+                <div className="kv">
+                  <span>Balance on customer credit</span>
+                  <span className="strong">{money(approvalTarget.partPaymentCredit ?? 0)}</span>
+                </div>
+                <div className="kv">
+                  <span>Requested by</span>
+                  <span>{approvalTarget.releaseApprovalRequestedBy ?? "Cashier"}</span>
+                </div>
+                <div className="kv">
+                  <span>Requested</span>
+                  <span>
+                    {approvalTarget.releaseApprovalRequestedAt
+                      ? shortDate(approvalTarget.releaseApprovalRequestedAt)
+                      : "—"}
+                  </span>
+                </div>
+              </div>
+            </div>
+            <Field
+              label="Approval note"
+              hint="Optional. Stored on the job card and shown to the gate."
+            >
+              <textarea
+                className="input"
+                rows={3}
+                placeholder="Owner accepted the balance / post-dated payment agreed…"
+                value={approvalNote}
+                onChange={(event) => setApprovalNote(event.target.value)}
+              />
+            </Field>
+            <div className="alert alert-warn">
+              <ShieldCheck />
+              <div>
+                Approving releases {approvalTarget.vehicleNo} to the gate. The credit balance
+                remains in the customer ledger with its due date and WhatsApp reminders.
+              </div>
+            </div>
           </div>
         )}
       </Modal>

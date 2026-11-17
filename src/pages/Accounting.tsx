@@ -154,6 +154,9 @@ export function AccountingPage() {
   });
 
   const pnl = useMemo(() => pnlFor(state, period), [state, period]);
+  const pendingReleaseApprovals = state.jobCards.filter(
+    (job) => job.status === "Awaiting Release Approval",
+  );
   const breakdown = useMemo(() => expenseBreakdown(state, period), [state, period]);
   const months = useMemo(() => monthlySeries(state, 6), [state]);
   const sectionRows = useMemo(() => sectionProfitability(state, period), [state, period]);
@@ -613,6 +616,29 @@ export function AccountingPage() {
 
       {tab === "overview" && (
         <div className="stack">
+          {pendingReleaseApprovals.length > 0 && (
+            <Alert tone="warn" title="Part-payment releases waiting for approval">
+              <div className="row-between wrap">
+                <span>
+                  {pendingReleaseApprovals.length} vehicle
+                  {pendingReleaseApprovals.length === 1 ? "" : "s"} with{" "}
+                  {money(
+                    pendingReleaseApprovals.reduce(
+                      (sum, job) => sum + (job.partPaymentCredit ?? 0),
+                      0,
+                    ),
+                  )}{" "}
+                  on customer credit. Approve the gate release from the customer credit ledger.
+                </span>
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setTab("credits")}
+                >
+                  Review approvals
+                </button>
+              </div>
+            </Alert>
+          )}
           <div className="row-between wrap">
             <span className="tiny muted">Profit & loss statement</span>
             <Tabs<Period>
