@@ -2675,6 +2675,57 @@ table.data tbody tr:hover {
   max-width: 420px;
 }
 
+/* ---------- Accounting reports ---------- */
+.report-doc {
+  padding: 24px;
+}
+
+.report-letterhead {
+  align-items: flex-start;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 20px;
+  justify-content: space-between;
+  margin-bottom: 18px;
+  padding-bottom: 16px;
+}
+
+.report-company {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.report-letterhead h2 {
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  margin: 6px 0 4px;
+  text-transform: uppercase;
+}
+
+.report-stamp {
+  border-left: 3px solid var(--brand);
+  padding-left: 12px;
+  text-align: right;
+}
+
+.report-row-select {
+  cursor: pointer;
+}
+
+.report-row-select:hover td {
+  background: var(--surface-2, #f8fafc);
+}
+
+.report-ledger-detail {
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+
+.report-ledger-detail > .row-between {
+  margin-bottom: 10px;
+}
+
 /* ---------- Print ---------- */
 @media print {
   .sidebar,
@@ -2688,6 +2739,26 @@ table.data tbody tr:hover {
   }
   body {
     background: #fff;
+  }
+  .report-sheet {
+    gap: 0;
+  }
+  .report-sheet .card {
+    border: 0;
+    box-shadow: none;
+    padding: 0;
+  }
+  .report-doc .report-letterhead {
+    margin-bottom: 12px;
+  }
+  .report-doc table {
+    font-size: 10px;
+  }
+  .report-doc .badge {
+    border: 1px solid #d5dde5;
+  }
+  .report-row-select {
+    cursor: default;
   }
 }
 

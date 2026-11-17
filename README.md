@@ -147,6 +147,12 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   and commission statements; bank accounts and internal transfers; petty-cash
   float and vouchers; incoming customer-cheque board; supplier post-dated
   cheques and workshop loans.
+- **Accounting reports** for any period: stock (opening, in, out, closing,
+  cost/retail value and low-stock status), a management trial balance, separate
+  customer/supplier/insurance/cash-and-bank ledgers with running balances,
+  debtor and insurance ageing, and the profit & loss statement. Presets cover
+  today, this month, last month and this year, with exact From/To dates for any
+  other range; every report prints and exports to CSV.
 - **Reservations**: tokenised WhatsApp booking link, public `/book?token=...`
   form for name, phone, vehicle, repair type and preferred slot. Requests stay
   pending until a supervisor confirms; a previous-day 4:30 p.m. review popup and
@@ -175,10 +181,13 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   the job moves to **Awaiting Release Approval**. Only Owner or Accounting can
   approve the release; the approved job then waits in **Paid & released** for the
   **cashier** to approve the vehicle exit, so the PRO gate cannot hand it over.
-  The credit stays in the ledger for reminders and later collection. If the
-  balance is settled before approval, the job clears to **Paid** automatically
-  and appears in gate clearance without an approval. Insurance bills and dated
-  cheques still require full settlement.
+  The credit stays in the ledger for reminders and later collection. The request
+  and the Owner/Accounting decision both raise a **Credit approvals** voice alert
+  that speaks the amount left on credit, so the cashier hears the release
+  instruction without watching the screen. If the balance is settled before
+  approval, the job clears to **Paid** automatically and appears in gate
+  clearance without an approval. Insurance bills and dated cheques still require
+  full settlement.
 - **PRO billing-gate override**: the PRO can release an unpaid completed vehicle
   with a mandatory reason. The job becomes *Released on Credit*, a 7-day customer
   credit opens, and Owner/Cashier/Accounting are notified.
@@ -326,9 +335,10 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   brand-colour extraction, self-service PIN/password change and per-user voice
   alert preferences.
 - **Voice alerts** announce vehicle numbers only (never job numbers) for
-  selectable job, inventory, payment, cheque and appointment events, with voice
-  choice, rate, pre-alert chime, watchdog and a tap-to-unlock gesture for
-  Android/iOS browsers.
+  selectable job, inventory, payment, credit approval, cheque and appointment
+  events, with voice choice, rate, pre-alert chime, watchdog and a tap-to-unlock
+  gesture for Android/iOS browsers. Credit requests and approvals speak a fuller
+  sentence with the balance left on credit instead of the generic title.
 - **Demo mode** is separate from the 30-day trial. Only demo mode redirects every
   WhatsApp message and PDF to `+94755756803` and shows an amber warning banner.
 - **WAHA WhatsApp**: settings and the setup wizard capture the gateway URL,

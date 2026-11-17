@@ -29,6 +29,62 @@ function payrollForMonth(state: AppState, date: Date = new Date()): number {
 
 export type Period = "today" | "month" | "year";
 
+export interface DateRange {
+  start: string;
+  end: string;
+}
+
+function localDay(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+export function rangeForPeriod(period: Period, now = new Date()): DateRange {
+  const today = localDay(now);
+  if (period === "today") return { start: today, end: today };
+  if (period === "month") {
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, "0");
+    const lastDay = new Date(year, now.getMonth() + 1, 0).getDate();
+    return { start: `${year}-${month}-01`, end: `${year}-${month}-${lastDay}` };
+  }
+  return { start: `${now.getFullYear()}-01-01`, end: `${now.getFullYear()}-12-31` };
+}
+
+function inDateRange(iso: string, start: string, end: string): boolean {
+  const day = iso.slice(0, 10);
+  return day >= start && day <= end;
+}
+
+/**
+ * Monthly payroll spread across an arbitrary report range. Whole months use
+ * the existing payroll calculation; partial months are prorated by day.
+ */
+export function payrollForRange(state: AppState, start: string, end: string): number {
+  const startDate = new Date(`${start}T12:00:00`);
+  const endDate = new Date(`${end}T12:00:00`);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return 0;
+  if (startDate > endDate) return 0;
+  let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+  let total = 0;
+  while (cursor <= endDate) {
+    const monthStart = new Date(cursor.getFullYear(), cursor.getMonth(), 1);
+    const monthEnd = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 0);
+    const coveredStart = startDate > monthStart ? startDate : monthStart;
+    const coveredEnd = endDate < monthEnd ? endDate : monthEnd;
+    const daysCovered =
+      Math.floor((coveredEnd.getTime() - coveredStart.getTime()) / 86_400_000) + 1;
+    const daysInMonth = monthEnd.getDate();
+    if (daysCovered > 0) {
+      total += payrollForMonth(state, monthStart) * (daysCovered / daysInMonth);
+    }
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  }
+  return total;
+}
+
 export interface PnlSummary {
   revenue: number;
   laborRevenue: number;
@@ -61,12 +117,21 @@ export function ledgerRevenue(entry: LedgerEntry): number {
 }
 
 export function pnlFor(state: AppState, period: Period): PnlSummary {
-  const entries = state.ledger.filter((entry) => isWithinRange(entry.date, period));
+  const range = rangeForPeriod(period);
+  return pnlForRange(state, range.start, range.end);
+}
+
+export function pnlForRange(
+  state: AppState,
+  start: string,
+  end: string,
+): PnlSummary {
+  const entries = state.ledger.filter((entry) => inDateRange(entry.date, start, end));
   const expenses = state.expenses
-    .filter((expense) => isWithinRange(expense.date, period))
+    .filter((expense) => inDateRange(expense.date, start, end))
     .reduce((sum, expense) => sum + expense.amount, 0);
   const pettyCashExpenses = state.pettyCash
-    .filter((entry) => entry.type === "Expense" && isWithinRange(entry.date, period))
+    .filter((entry) => entry.type === "Expense" && inDateRange(entry.date, start, end))
     .reduce((sum, entry) => sum + entry.amount, 0);
   const pettyCashBalance = state.pettyCash.reduce(
     (sum, entry) => sum + (entry.type === "Float_Topup" ? entry.amount : -entry.amount),
@@ -112,18 +177,7 @@ export function pnlFor(state: AppState, period: Period): PnlSummary {
     .filter((entry) => entry.paymentMethod === "Insurance Settlement")
     .reduce((sum, entry) => sum + (entry.settlementAmount ?? 0), 0);
 
-  const monthlyPayroll = payrollForMonth(state);
-  const daysInMonth = new Date(
-    new Date().getFullYear(),
-    new Date().getMonth() + 1,
-    0,
-  ).getDate();
-  const payroll =
-    period === "today"
-      ? monthlyPayroll / daysInMonth
-      : period === "year"
-        ? monthlyPayroll * 12
-        : monthlyPayroll;
+  const payroll = payrollForRange(state, start, end);
 
   const grossProfit = revenue - partsCost;
   const netProfit =
@@ -278,6 +332,15 @@ export function expenseBreakdown(
   state: AppState,
   period: Period,
 ): { category: ExpenseCategory; amount: number }[] {
+  const range = rangeForPeriod(period);
+  return expenseBreakdownForRange(state, range.start, range.end);
+}
+
+export function expenseBreakdownForRange(
+  state: AppState,
+  start: string,
+  end: string,
+): { category: ExpenseCategory; amount: number }[] {
   const categories: ExpenseCategory[] = [
     "Rental",
     "Electricity",
@@ -291,7 +354,7 @@ export function expenseBreakdown(
       amount: state.expenses
         .filter(
           (expense) =>
-            expense.category === category && isWithinRange(expense.date, period),
+            expense.category === category && inDateRange(expense.date, start, end),
         )
         .reduce((sum, expense) => sum + expense.amount, 0),
     }))

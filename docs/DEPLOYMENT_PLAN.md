@@ -1514,6 +1514,14 @@ If you use the browser webhook for the pilot, the receiver must:
       Repeat and settle the credit before approval; the job clears to **Paid** and
       appears in gate clearance without approval. Confirm an insurance bill or dated
       cheque cannot be part-paid.
+- [ ] Credit voice-alert smoke test: with **Credit approvals** enabled in Voice &
+      notification preferences, a part-payment checkout and the Owner/Accounting
+      approval each speak the vehicle and the balance left on credit; disabling the
+      event mutes both without hiding the bell notifications.
+- [ ] Accounting reports smoke test: **Accounts → Reports** renders Stock, Trial
+      balance, Separate ledgers, Debtors and Profit & loss for a preset and for a
+      custom From/To range; the trial balance debits equal credits, ledger closing
+      balances agree with receivables/payables, and Print/Export CSV work.
 - [ ] Stores zero-stock smoke test: request an out-of-stock part, issue it either
       by purchase with supplier invoice or by replacing the line with a suitable
       in-stock part; confirm stock, no purchase on substitution, and the updated job

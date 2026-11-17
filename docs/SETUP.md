@@ -63,10 +63,18 @@ Sign in as each demo role and check the workflow that belongs to it:
   is **Awaiting Release Approval**, not in gate clearance.
 - **Owner/Accounting** — open **Accounts → Customer credit**, approve the
   part-payment release, and confirm the job moves to **Released on Credit** and
-  waits for the cashier's exit approval, not PRO clearance. Record the
-  outstanding credit from the ledger and confirm the credit settles while the job
-  stays released until the cashier approves the exit. Repeat the checkout and
-  settle the credit before approval; the job should clear straight to **Paid**.
+  waits for the cashier's exit approval, not PRO clearance. The approval should
+  raise an audible **Credit approvals** alert naming the vehicle and the amount
+  left on credit. Record the outstanding credit from the ledger and confirm the
+  credit settles while the job stays released until the cashier approves the
+  exit. Repeat the checkout and settle the credit before approval; the job should
+  clear straight to **Paid**.
+- **Accounting reports** — open **Accounts → Reports**. Switch between Stock,
+  Trial balance, Separate ledgers, Debtors and Profit & loss; check that each
+  report follows the Today/This month/Last month/This year preset and an exact
+  custom From/To range. Confirm the trial balance debits equal credits, a ledger
+  opens and closes at the expected balance, and **Export CSV** and **Print**
+  produce the visible figures without the filters.
 - **Cashier** — open **Paid & released**, approve the vehicle exit, and confirm the
   job becomes **Dispatched** with the gate log and marketing follow-up updated.
 - **Gate/PRO** — hand over a paid vehicle and a released-on-credit vehicle; confirm

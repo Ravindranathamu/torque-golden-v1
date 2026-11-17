@@ -64,6 +64,7 @@ export type NotificationEventType =
   | "job"
   | "inventory"
   | "payment"
+  | "credit"
   | "cheque"
   | "appointment";
 
@@ -76,6 +77,8 @@ export interface UserNotificationPreferences {
   appointmentAlerts?: boolean;
   /** Event types that are spoken aloud. Empty means none. */
   voiceEvents?: NotificationEventType[];
+  /** Enables newly added event types once without re-enabling a later opt-out. */
+  voiceEventsVersion?: number;
   /** Optional installed voice name; empty uses the device default. */
   voiceName?: string;
   /** Speech rate between 0.7 and 1.3. */
@@ -708,6 +711,8 @@ export interface AppNotification {
   link?: string;
   /** Used for short, vehicle-only voice announcements. */
   vehicleNo?: string;
+  /** Spoken instead of the title when the alert needs a richer announcement. */
+  voiceText?: string;
   eventType?: NotificationEventType;
 }
 

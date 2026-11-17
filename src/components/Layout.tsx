@@ -604,9 +604,10 @@ function VoiceAlertBridge() {
       .filter((entry) => !entry.eventType || spokenEvents.has(entry.eventType))
       .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
     if (!candidate) return;
+    const headline = candidate.voiceText?.trim() || candidate.title;
     const text = candidate.vehicleNo
-      ? `${candidate.title}. Vehicle ${spokenVehicle(candidate.vehicleNo)}`
-      : candidate.title;
+      ? `${headline}. Vehicle ${spokenVehicle(candidate.vehicleNo)}`
+      : headline;
     setAnnouncement(text);
     void speakAlert(text, prefs).finally(() => setAnnouncement(null));
   }, [state.notifications, enabled, currentUser, prefs]);

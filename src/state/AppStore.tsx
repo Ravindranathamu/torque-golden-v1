@@ -788,7 +788,11 @@ function notify(
   message: string,
   priority: AppNotification["priority"],
   link?: string,
-  meta?: { vehicleNo?: string; eventType?: AppNotification["eventType"] },
+  meta?: {
+    vehicleNo?: string;
+    voiceText?: string;
+    eventType?: AppNotification["eventType"];
+  },
 ): AppNotification[] {
   return [
     {
@@ -801,6 +805,7 @@ function notify(
       read: false,
       link,
       vehicleNo: meta?.vehicleNo,
+      voiceText: meta?.voiceText,
       eventType: meta?.eventType,
     },
     ...state.notifications,
@@ -4473,7 +4478,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
               )} moved to customer credit. Approve the release once the balance is accepted; the cashier then confirms the exit.`,
               "high",
               "/accounting",
-              { vehicleNo: job.vehicleNo, eventType: "payment" },
+              {
+                vehicleNo: job.vehicleNo,
+                eventType: "credit",
+                voiceText: `Credit release approval needed. ${money(
+                  creditBalance,
+                )} will remain on customer credit`,
+              },
             )
           : notify(
               prev,
@@ -4547,7 +4558,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           )} on customer credit${job.partPaymentAt ? ` from ${shortDate(job.partPaymentAt)}` : ""}. Only the cashier can approve the vehicle exit from the Paid & released tab.${cleanNote ? ` Note: ${cleanNote}` : ""}`,
           "high",
           "/cashier",
-          { vehicleNo: job.vehicleNo, eventType: "payment" },
+          {
+            vehicleNo: job.vehicleNo,
+            eventType: "credit",
+            voiceText: `Credit release approved. Cashier must confirm the vehicle exit. ${money(
+              job.partPaymentCredit ?? 0,
+            )} remains on customer credit`,
+          },
         ),
       }));
       return {
@@ -4830,7 +4847,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
           `${job.vehicleNo} was released without payment. Reason: ${cleanReason}. Recorded by ${user.name}; a 7-day credit balance of LKR ${totals.total.toLocaleString()} was opened.`,
           "critical",
           "/accounting",
-          { vehicleNo: job.vehicleNo, eventType: "payment" },
+          {
+            vehicleNo: job.vehicleNo,
+            eventType: "credit",
+            voiceText: `PRO billing override. Vehicle released with a new 7-day customer credit of ${money(
+              totals.total,
+            )}`,
+          },
         ),
       }));
       return { ok: true, reference: job.id };
@@ -5673,7 +5696,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
               }`,
               approvalPending ? "high" : "normal",
               approvalPending ? "/accounting" : "/cashier",
-              { vehicleNo: job.vehicleNo, eventType: "payment" },
+              {
+                vehicleNo: job.vehicleNo,
+                eventType: "credit",
+                voiceText: approvalPending
+                  ? `Credit release approval needed. ${money(
+                      creditBalance,
+                    )} was moved to customer credit`
+                  : `Part payment recorded on a customer bill. ${money(
+                      creditBalance,
+                    )} was moved to customer credit`,
+              },
             )
           : notify(
               prev,
@@ -5955,7 +5988,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
               `${credit.vehicleNo} · ${credit.jobCardId}: the customer credit balance is fully settled, so no owner/accounting release approval is needed.`,
               "high",
               "/gate",
-              { vehicleNo: credit.vehicleNo, eventType: "payment" },
+              {
+                vehicleNo: credit.vehicleNo,
+                eventType: "credit",
+                voiceText:
+                  "Credit balance fully settled. No release approval is needed; the vehicle can go to the gate",
+              },
             )
           : prev.notifications,
         creditPayments: [payment, ...prev.creditPayments],

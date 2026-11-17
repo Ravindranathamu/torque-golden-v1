@@ -67,6 +67,7 @@ import {
   StatusBadge,
   Tabs,
 } from "../components/ui";
+import { AccountingReports } from "../components/AccountingReports";
 import { CreditLedger } from "../components/CreditLedger";
 import {
   BankAccountsPanel,
@@ -79,6 +80,7 @@ import type { ExpenseCategory } from "../types";
 
 type AccountingTab =
   | "overview"
+  | "reports"
   | "sections"
   | "expenses"
   | "payables"
@@ -556,12 +558,13 @@ export function AccountingPage() {
         title="Accounts & profitability"
         subtitle="Operating expenses, supplier credit, customer receivables and payroll in one ledger."
         actions={
-          <>
+          <div className="row wrap no-print" style={{ gap: 8 }}>
             <Tabs<AccountingTab>
               value={tab}
               onChange={setTab}
               tabs={[
                 { id: "overview", label: "Overview" },
+                { id: "reports", label: "Reports" },
                 ...(sectionsEnabled
                   ? [
                       {
@@ -606,13 +609,17 @@ export function AccountingPage() {
                   : []),
               ]}
             />
-            <button className="btn btn-primary" onClick={() => setExpenseOpen(true)}>
-              <Plus />
-              Add expense
-            </button>
-          </>
+            {tab !== "reports" && (
+              <button className="btn btn-primary" onClick={() => setExpenseOpen(true)}>
+                <Plus />
+                Add expense
+              </button>
+            )}
+          </div>
         }
       />
+
+      {tab === "reports" && <AccountingReports />}
 
       {tab === "overview" && (
         <div className="stack">
