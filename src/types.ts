@@ -735,6 +735,8 @@ export interface WorkshopSettings {
   currency: string;
   qrSlug: string;
   ownerPassword: string;
+  /** Owner's opening capital; shown as equity in the trial balance. */
+  ownerCapital?: number;
   configured: boolean;
   demoMode: boolean;
   createdAt: string;

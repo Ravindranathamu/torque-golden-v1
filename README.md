@@ -150,9 +150,10 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
 - **Accounting reports** for any period: stock (opening, in, out, closing,
   cost/retail value and low-stock status), a management trial balance, separate
   customer/supplier/insurance/cash-and-bank ledgers with running balances,
-  debtor and insurance ageing, and the profit & loss statement. Presets cover
-  today, this month, last month and this year, with exact From/To dates for any
-  other range; every report prints and exports to CSV.
+  debtor and insurance ageing, and the profit & loss statement. Owner's opening
+  capital is captured during workshop setup and shown as equity in the trial
+  balance. Presets cover today, this month, last month and this year, with exact
+  From/To dates for any other range; every report prints and exports to CSV.
 - **Reservations**: tokenised WhatsApp booking link, public `/book?token=...`
   form for name, phone, vehicle, repair type and preferred slot. Requests stay
   pending until a supervisor confirms; a previous-day 4:30 p.m. review popup and

@@ -127,6 +127,7 @@ interface SetupInput {
   ownerName: string;
   ownerPin: string;
   ownerPassword: string;
+  ownerCapital?: number;
   googleReviewUrl: string;
   logo?: string;
   brandColor: string;
@@ -987,6 +988,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       currency: "LKR",
       qrSlug: input.companyName.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, ""),
       ownerPassword: input.ownerPassword,
+      ownerCapital: Math.max(0, Number(input.ownerCapital) || 0),
       configured: true,
       demoMode: false,
       createdAt: new Date().toISOString(),

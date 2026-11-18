@@ -102,6 +102,7 @@ export function SetupPage() {
     bankAccountNumber: "",
     bankType: "Bank" as "Bank" | "Cash",
     openingBalance: "",
+    ownerCapital: "",
     tinNumber: "",
     vatRegNumber: "",
     defaultVatRate: "18",
@@ -239,6 +240,12 @@ export function SetupPage() {
     if (step === 0) {
       if (!form.companyName.trim()) return setError("Enter your workshop name.");
       if (!form.phone.trim()) return setError("Enter the workshop phone number.");
+      if (
+        form.ownerCapital.trim() !== "" &&
+        (!Number.isFinite(Number(form.ownerCapital)) || Number(form.ownerCapital) < 0)
+      ) {
+        return setError("Owner's capital must be zero or more.");
+      }
       const vatRate =
         form.defaultVatRate.trim() === "" ? 18 : Number(form.defaultVatRate);
       if (!Number.isFinite(vatRate) || vatRate < 0 || vatRate > 100) {
@@ -265,6 +272,8 @@ export function SetupPage() {
         ownerName: form.ownerName.trim(),
         ownerPin: form.ownerPin,
         ownerPassword: form.ownerPassword,
+        ownerCapital:
+          form.ownerCapital.trim() === "" ? 0 : Number(form.ownerCapital) || 0,
         googleReviewUrl: form.googleReviewUrl.trim(),
         logo: form.logo || undefined,
         brandColor: form.brandColor,
@@ -744,6 +753,29 @@ export function SetupPage() {
                           placeholder="0"
                           value={form.openingBalance}
                           onChange={(event) => set("openingBalance", event.target.value)}
+                        />
+                      </Field>
+                    </div>
+                  </div>
+
+                  <div className="field full">
+                    <div className="section-title">
+                      <span className="label">Owner's opening capital</span>
+                    </div>
+                    <div className="tiny muted" style={{ marginBottom: 8 }}>
+                      The owner's investment in the workshop. It appears as Owner's capital
+                      in the trial balance and is separate from the bank or cash opening
+                      balance above.
+                    </div>
+                    <div className="form-grid">
+                      <Field label="Owner's capital (LKR)">
+                        <input
+                          className="input"
+                          type="number"
+                          min={0}
+                          placeholder="0"
+                          value={form.ownerCapital}
+                          onChange={(event) => set("ownerCapital", event.target.value)}
                         />
                       </Field>
                     </div>

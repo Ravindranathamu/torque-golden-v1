@@ -72,9 +72,11 @@ Sign in as each demo role and check the workflow that belongs to it:
 - **Accounting reports** — open **Accounts → Reports**. Switch between Stock,
   Trial balance, Separate ledgers, Debtors and Profit & loss; check that each
   report follows the Today/This month/Last month/This year preset and an exact
-  custom From/To range. Confirm the trial balance debits equal credits, a ledger
-  opens and closes at the expected balance, and **Export CSV** and **Print**
-  produce the visible figures without the filters.
+  custom From/To range. Confirm the trial balance debits equal credits and that
+  the **Owner's capital** entered in setup appears under Equity, with any
+  difference shown as retained earnings or accumulated losses. A ledger opens
+  and closes at the expected balance, and **Export CSV** and **Print** produce
+  the visible figures without the filters.
 - **Cashier** — open **Paid & released**, approve the vehicle exit, and confirm the
   job becomes **Dispatched** with the gate log and marketing follow-up updated.
 - **Gate/PRO** — hand over a paid vehicle and a released-on-credit vehicle; confirm

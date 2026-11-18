@@ -520,9 +520,10 @@ export function AccountingReports() {
               <div>
                 This management trial balance uses closing asset and liability
                 balances at the period end and income and expenditure for the
-                selected period. The capital line is the balancing figure from
-                operational records, so opening balances and untracked tax
-                adjustments sit there.
+                selected period. Owner's capital is the opening investment entered
+                during workshop setup; any remaining difference from untracked
+                opening assets or tax adjustments is shown as retained earnings or
+                accumulated losses.
               </div>
             </div>
           </div>

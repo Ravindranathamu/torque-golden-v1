@@ -862,13 +862,28 @@ export function trialBalanceReport(
     { account: "Payroll expense", group: "Expenses", amount: payroll },
   ];
 
-  const netBeforeCapital = lines.reduce((sum, line) => sum + line.amount, 0);
-  if (Math.abs(netBeforeCapital) > 0.009) {
+  const ownerCapital = Math.max(0, state.settings.ownerCapital ?? 0);
+  if (ownerCapital > 0) {
     lines.push({
-      account:
-        netBeforeCapital < 0
-          ? "Owner's capital / accumulated losses"
-          : "Owner's capital & retained earnings",
+      account: "Owner's capital",
+      group: "Equity",
+      amount: -ownerCapital,
+    });
+  }
+
+  const netBeforeCapital = lines.reduce((sum, line) => sum + line.amount, 0);
+  if (ownerCapital > 0) {
+    if (Math.abs(netBeforeCapital) > 0.009) {
+      lines.push({
+        account:
+          netBeforeCapital > 0 ? "Retained earnings" : "Accumulated losses",
+        group: "Equity",
+        amount: -netBeforeCapital,
+      });
+    }
+  } else if (Math.abs(netBeforeCapital) > 0.009) {
+    lines.push({
+      account: "Owner's capital & retained earnings",
       group: "Equity",
       amount: -netBeforeCapital,
     });

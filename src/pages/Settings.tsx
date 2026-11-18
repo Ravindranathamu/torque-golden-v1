@@ -134,6 +134,10 @@ export function SettingsPage() {
     email: settings.email,
     googleReviewUrl: settings.googleReviewUrl,
     currency: settings.currency,
+    ownerCapital:
+      typeof settings.ownerCapital === "number" && settings.ownerCapital > 0
+        ? String(settings.ownerCapital)
+        : "",
   });
   const [brand, setBrand] = useState({
     logo: settings.logo ?? "",
@@ -245,6 +249,12 @@ export function SettingsPage() {
       push("Workshop phone is required.", "error");
       return;
     }
+    const ownerCapital =
+      profile.ownerCapital.trim() === "" ? 0 : Number(profile.ownerCapital);
+    if (!Number.isFinite(ownerCapital) || ownerCapital < 0) {
+      push("Owner's capital must be zero or more.", "error");
+      return;
+    }
     updateSettings({
       companyName: profile.companyName.trim(),
       address: profile.address.trim(),
@@ -252,6 +262,7 @@ export function SettingsPage() {
       email: profile.email.trim(),
       googleReviewUrl: profile.googleReviewUrl.trim(),
       currency: profile.currency.trim() || "LKR",
+      ownerCapital,
     });
     push("Workshop profile updated across invoices and messages.");
   }
@@ -840,6 +851,21 @@ export function SettingsPage() {
                     className="input"
                     value={profile.currency}
                     onChange={(event) => setProfile({ ...profile, currency: event.target.value })}
+                  />
+                </Field>
+                <Field
+                  label="Owner's capital (LKR)"
+                  hint="Opening investment shown as equity in the trial balance."
+                >
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    placeholder="0"
+                    value={profile.ownerCapital}
+                    onChange={(event) =>
+                      setProfile({ ...profile, ownerCapital: event.target.value })
+                    }
                   />
                 </Field>
                 <div className="field" style={{ justifyContent: "flex-end" }}>

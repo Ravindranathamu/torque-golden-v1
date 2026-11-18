@@ -2784,6 +2784,7 @@ export function createDemoState(): AppState {
     currency: "LKR",
     qrSlug: "vezel-masters-kandy",
     ownerPassword: "owner123",
+    ownerCapital: 500000,
     configured: true,
     demoMode: true,
     createdAt: daysAgoISO(1300),
