@@ -46,8 +46,8 @@ below are the remaining cutover work.
 
 | Component | RAVsoft server | Golden-master server | First client server |
 | --- | --- | --- | --- |
-| Frontend | `https://portal.ravsoft.lk` | none | `https://erp.<client-domain>` |
-| Supabase project | `ravsoft-portal-prod` | `ravsoft-golden-v1` | `ravsoft-client-<shortcode>` |
+| Frontend | `https://portal.ravsoft.lk` (live: `https://ravsoft-portal.pages.dev`) | none | `https://erp.<client-domain>` |
+| Supabase project | `ravsoft-portal-prod` (live: `cnxlrprxlcfgfcmniipw`) | `ravsoft-golden-v1` | `ravsoft-client-<shortcode>` |
 | Database / Auth / Storage | Portal only | Clean template only | Client only |
 | WhatsApp | none | none | `https://waha.<client-domain>` |
 | Deploy receiver | `https://deploy.ravsoft.lk` | none | none |
@@ -284,6 +284,48 @@ built from the old `0001_…` names, treat it as already migrated and stamp the
 timestamped versions before using `db push` again, or keep using Option A/B for
 that database.
 
+**Option D — Management API (used for the live portal):**
+
+Works where the Supabase CLI has no Windows binary. Create a personal access
+token under **Account → Access Tokens** with database write access, then send
+each file as `{"query": "<sql>"}`. JSON-encode with a script rather than a shell
+here-string; the SQL contains quotes and newlines that break naive escaping.
+
+```js
+// apply-migrations.mjs — run with: node apply-migrations.mjs
+import { readFileSync, readdirSync } from "node:fs";
+
+const token = process.env.SUPABASE_PAT;
+const ref = process.env.SUPABASE_REF;
+const dir = "supabase/migrations";
+
+for (const name of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
+  const query = readFileSync(`${dir}/${name}`, "utf8");
+  const response = await fetch(
+    `https://api.supabase.com/v1/projects/${ref}/database/query`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ query }),
+    },
+  );
+  if (!response.ok) {
+    console.error(`${name} failed: ${response.status} ${await response.text()}`);
+    process.exit(1);
+  }
+  console.log(`${name} applied`);
+}
+```
+
+The endpoint is experimental and returns `201` with an empty array on success.
+It runs as `postgres`, so the migrations are not written to
+`supabase_migrations.schema_migrations`; record them in the deployment log and
+use Option A/B/C for any database that must stay CLI-compatible.
+
+
 ### 2.3 Verify the portal schema
 
 Run in the SQL editor:
@@ -318,16 +360,33 @@ Expected:
 
 1. **Authentication → Providers**: enable **Email**.
 2. **Authentication → URL Configuration**:
-   - Site URL: `https://portal.ravsoft.lk`
+   - Site URL: the deployed portal origin — `https://portal.ravsoft.lk`, or
+     `https://ravsoft-portal.pages.dev` until the domain is attached
    - Redirect URLs:
      - `https://portal.ravsoft.lk/**`
-     - `http://localhost:5173/**` (local testing only)
-3. **Authentication → Users → Add user**: create the RAVsoft developer account
-   (for example `portal@ravsoft.lk`), auto-confirm it and set a strong password.
-4. **Authentication → Providers → Email**: disable public sign-ups after the
+     - `https://ravsoft-portal.pages.dev/**`
+     - `http://localhost:4173/**` and `http://localhost:5173/**` (local only)
+3. **Authentication → Users → Add user**: create the RAVsoft developer account,
+   auto-confirm it and set a strong password.
+4. Set `app_metadata.role = "ravsoft_admin"` on that user. The dashboard cannot
+   edit `app_metadata`; use the Admin API with the service-role or secret key:
+
+   ```powershell
+   $headers = @{
+     apikey = "<SECRET_KEY>"
+     Authorization = "Bearer <SECRET_KEY>"
+     "Content-Type" = "application/json"
+   }
+   $body = @{ app_metadata = @{ role = "ravsoft_admin" } } | ConvertTo-Json
+   Invoke-RestMethod -Method Put `
+     -Uri "https://<PORTAL_REF>.supabase.co/auth/v1/admin/users/<USER_ID>" `
+     -Headers $headers -Body $body
+   ```
+
+5. **Authentication → Providers → Email**: disable public sign-ups after the
    developer account exists.
-5. Enable MFA for the developer account.
-6. Brand the confirmation and recovery emails if they are used.
+6. Enable MFA for the developer account.
+7. Brand the confirmation and recovery emails if they are used.
 
 > The portal now has an email/password sign-in screen (`/developer`) and requires
 > `app_metadata.role = "ravsoft_admin"` on the Auth user. Gate **G2** is closed in
@@ -366,51 +425,34 @@ Build and check:
 npm ci
 npx tsc -b
 npm run lint
-npm run build -- --mode portal
+npm run build:portal
 ```
 
-Deploy `dist/` to Vercel:
+`build:portal` is `tsc -b && vite build --mode portal`. Always use it instead of
+a bare `vite build`, so a client build can never pick up the portal env file.
+
+**Cloudflare Pages (used for the live portal).** `public/_redirects` holds the
+SPA fallback (`/* /index.html 200`), so no extra host configuration is needed:
 
 ```powershell
-npx vercel login
-npx vercel --prod
+npx wrangler login
+npx wrangler pages project create ravsoft-portal --production-branch main
+npm run deploy:portal
 ```
 
-Or connect the Git repository to a Vercel project with:
+`deploy:portal` runs `build:portal` and then
+`wrangler pages deploy dist --project-name ravsoft-portal --branch main`, so a
+rebuild-and-publish is one command. Cloudflare Pages Free gives unlimited static
+bandwidth and requests, 500 builds per month and free TLS.
 
-- Framework preset: **Vite**
-- Build command: `npm run build -- --mode portal`
-- Output directory: `dist`
-- Environment variables: the `.env.portal` values above
+Alternatives, if Cloudflare is not available:
 
-Add `vercel.json` at the repository root for SPA routing:
-
-```json
-{
-  "rewrites": [
-    {
-      "source": "/(.*)",
-      "destination": "/index.html"
-    }
-  ]
-}
-```
-
-For Netlify, use:
-
-```toml
-[build]
-  command = "npm run build -- --mode portal"
-  publish = "dist"
-
-[[redirects]]
-  from = "/*"
-  to = "/index.html"
-  status = 200
-```
-
-For Cloudflare Pages, use build command `npm run build -- --mode portal`,
-output directory `dist`, and a catch-all rewrite to `/index.html`.
+- **Vercel:** `npx vercel --prod` with framework preset **Vite**, build command
+  `npm run build:portal`, output `dist`, plus a `vercel.json` rewrite of `/(.*)`
+  to `/index.html`. Hobby is personal-use only, so a business portal needs Pro.
+- **Netlify:** build `npm run build:portal`, publish `dist`, redirect `/*` to
+  `/index.html` with status 200. New accounts use credit-based pricing (300
+  credits per month) and **all sites pause when credits run out**.
 
 If the portal and client sites share this repository, set the build command in
 each host's site settings instead of committing a root `netlify.toml` that
@@ -419,11 +461,37 @@ use the portal environment.
 
 Then:
 
-1. Add the custom domain `portal.ravsoft.lk`.
+1. Add the custom domain `portal.ravsoft.lk` in the Pages project.
 2. Wait for the TLS certificate.
 3. Open `https://portal.ravsoft.lk/developer`.
-4. Confirm the header says **RAVsoft** and the badge says
-   **Master DB configured**.
+4. Confirm the header says **RAVsoft** and the badge says **Master DB**.
+
+### 2.5.1 Live portal record
+
+Filled in on 2026-11-18. Keep this table current when the project or host moves.
+
+| Item | Value |
+| --- | --- |
+| Portal URL | `https://ravsoft-portal.pages.dev` |
+| Portal route | `https://ravsoft-portal.pages.dev/developer` |
+| Host | Cloudflare Pages, project `ravsoft-portal`, branch `main` |
+| Cloudflare account | `ravsoftsolu@gmail.com` |
+| Supabase project | `ravsoft-portal-prod` (`cnxlrprxlcfgfcmniipw`) |
+| Region | `ap-south-1` |
+| API URL | `https://cnxlrprxlcfgfcmniipw.supabase.co` |
+| Publishable key | `VITE_MASTER_LICENSE_ANON_KEY` in `.env.portal` |
+| Portal admin | `ravindranath@hotmail.co.uk`, `app_metadata.role = ravsoft_admin` |
+| Latest release | `1.4.0` |
+| Fleet at cutover | 0 installations, 0 payments, 0 update runs |
+| Custom domain | not configured (optional) |
+
+Portal prerequisites for a fresh environment:
+
+1. All six migrations applied in order (§2.2).
+2. An Auth user with `app_metadata.role = "ravsoft_admin"`. Without it the portal
+   shows *Admin role required* and RLS rejects every read and write.
+3. `.env.portal` populated from the project URL and publishable key.
+4. `npm run build:portal`, then `wrangler pages deploy`.
 
 ### 2.6 Publish release 1.4.0
 
@@ -457,9 +525,10 @@ version, update both the database and that file, then rebuild the portal.
 
 ### 2.7 Clear the demo registry before real clients
 
-The portal seeds four demo clients in the browser when its local registry is
-empty. They are **not** in Supabase, but they will be pushed if you click
-**Publish registry**.
+The portal seeds four demo clients into the **browser** cache when its local
+registry is empty. They are **not** in Supabase, and the fleet table reads
+Supabase once an admin is signed in, so a fresh install shows an empty fleet.
+The risk is the **Publish fleet** button, which pushes the local cache up.
 
 In the production portal browser, open DevTools → Console and run:
 
@@ -476,9 +545,14 @@ until you have verified that Supabase contains only real rows.
 
 ### 2.8 Portal smoke test
 
-- [ ] `https://portal.ravsoft.lk/developer` loads over HTTPS.
+Run these against the live URL (`https://ravsoft-portal.pages.dev/developer`
+until a custom domain is added):
+
+- [ ] The URL loads over HTTPS and `/developer` does not 404 (SPA rewrite).
 - [ ] The RAVsoft mark and **Developer portal** title are visible.
-- [ ] The badge reads **Master DB configured**.
+- [ ] Before sign-in the badge reads **Portal sign-in required**.
+- [ ] After sign-in the badge reads **Master DB · \<admin email\>**.
+- [ ] A non-admin Auth user is rejected with *Admin role required*.
 - [ ] The **Releases** tab shows `1.4.0` as latest.
 - [ ] The fleet is empty after the localStorage reset.
 - [ ] Browser console has no errors.
@@ -592,14 +666,16 @@ RPC a client calls.
 
 ### Phase 1 checklist
 
-- [ ] Portal Supabase project created.
-- [ ] `0001`–`0004` applied in order.
-- [ ] `1.4.0` is the only `is_latest` release.
-- [ ] Developer auth user created; public sign-ups disabled.
-- [ ] Portal built with `--mode portal` and deployed to HTTPS.
-- [ ] Demo registry cleared; fleet empty.
-- [ ] Portal database has zero client rows.
-- [ ] Portal backup and secrets stored.
+- [x] Portal Supabase project created (`cnxlrprxlcfgfcmniipw`, `ap-south-1`).
+- [x] Six migrations applied in order (2026-11-18, via Management API).
+- [x] `1.4.0` is the only `is_latest` release.
+- [x] Portal admin Auth user created with `app_metadata.role = ravsoft_admin`.
+- [ ] Public sign-ups disabled; MFA enabled for the admin.
+- [x] Portal built with `--mode portal` and deployed to HTTPS.
+- [x] Demo registry cleared; fleet empty.
+- [x] Portal database has zero client rows.
+- [ ] Portal backup and secrets stored in the password manager.
+- [ ] Custom domain `portal.ravsoft.lk` added (optional).
 
 ---
 

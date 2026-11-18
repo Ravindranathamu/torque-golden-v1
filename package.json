@@ -8,6 +8,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
+    "build:portal": "tsc -b && vite build --mode portal",
+    "deploy:portal": "npm run build:portal && npx wrangler pages deploy dist --project-name ravsoft-portal --branch main",
     "lint": "oxlint",
     "preview": "vite preview",
     "whatsapp": "node server/whatsapp-gateway/index.mjs"

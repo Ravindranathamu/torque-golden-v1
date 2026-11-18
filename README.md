@@ -54,11 +54,12 @@ Every staff account uses PIN **`1234`**.
 The owner master password is **`owner123`**. It unlocks Team & HR salary editing
 and owner-only security actions.
 
-The **RAVsoft developer portal** is at <http://localhost:5173/developer>. It is
-outside the staff shell and uses its own local registry
-(`ravsoft_master_portal_v1`); use it to register client installations for any
-RAVsoft app, renew or suspend licences, switch modules remotely and generate
-signed offline tokens.
+The **RAVsoft developer portal** is at <http://localhost:5173/developer> in
+development and <https://ravsoft-portal.pages.dev/developer> in production. It
+sits outside the staff shell and signs in through Supabase Auth against the
+separate master database (`ravsoft-portal-prod`); use it to register client
+installations for any RAVsoft app, renew or suspend licences, switch modules
+remotely and generate signed offline tokens.
 
 > Demo data lives in `localStorage`. Use **Settings → Data & backup** to export a
 > JSON snapshot before clearing your browser, or reset the demo at any time.
@@ -487,11 +488,12 @@ environment wiring, follow **[docs/DEPLOYMENT_PLAN.md](docs/DEPLOYMENT_PLAN.md)*
 
 In short:
 
-1. **Supabase** — create a project and run the migrations in order:
+1. **Supabase** — create a project and run all six migrations in order:
    `20261114000100_schema.sql`, `20261114000200_golden_master.sql`,
-   `20261114000300_security_hardening.sql`, `20261114000400_portal_releases.sql`. Verify the clean
-   template with `supabase/golden-master/verify.sql`, enable email/phone auth,
-   then create the first owner by calling `public.create_workshop(...)`.
+   `20261114000300_security_hardening.sql`, `20261114000400_portal_releases.sql`,
+   `20261114000500_app_records.sql`, `20261114000600_portal_security.sql`. Verify
+   the clean template with `supabase/golden-master/verify.sql`, enable email/phone
+   auth, then create the first owner by calling `public.create_workshop(...)`.
 2. **Frontend** — copy `.env.example` to `.env`, add the Supabase URL and anon
    key, build and deploy `dist/` to Vercel, Netlify, Cloudflare Pages or any
    static host with SPA fallback.
@@ -512,12 +514,16 @@ In short:
    then activate it on the workshop. A new key with a later expiry renews the
    licence; the demo workshop stays available for evaluation.
 7. **Master portal** — create a separate Supabase project for the developer
-   portal and run all four migrations (`0001`–`0004`). They include
+   portal and run all six migrations. They include
    `developer_client_installations`, `developer_license_payments`,
-   `poll_workshop_license`, the release registry and the update-run RPCs, then
-   set `VITE_MASTER_LICENSE_URL` and `VITE_MASTER_LICENSE_ANON_KEY` in the
-   portal and client builds. Each client polls outbound only and keeps working
-   for 7 days offline after the last successful check.
+   `poll_workshop_license`, the release registry, the update-run RPCs and the
+   admin-only RLS from `20261114000600_portal_security.sql`. Create the admin Auth
+   user with `app_metadata.role = "ravsoft_admin"`, set
+   `VITE_MASTER_LICENSE_URL` and `VITE_MASTER_LICENSE_ANON_KEY` in `.env.portal`,
+   then run `npm run deploy:portal`. Each client polls outbound only and keeps
+   working for 7 days offline after the last successful check. The live portal is
+   <https://ravsoft-portal.pages.dev/developer>; see
+   [docs/DEPLOYMENT_PLAN.md §2.5.1](docs/DEPLOYMENT_PLAN.md#251-live-portal-record).
 8. **Offline tokens** — set the same `VITE_LICENSE_SIGNING_KEY` on the portal
    and client builds so signed `TRQ2.` activation tokens verify. Leave blank for
    the built-in demo secret. `VITE_LICENSE_PUBLIC_KEY` is reserved for a
