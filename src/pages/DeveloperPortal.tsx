@@ -48,7 +48,7 @@ import {
   verifyOfflineToken,
 } from "../lib/licence";
 import { money, shortDate, uid } from "../lib/utils";
-import { masterSupabase, portalConfigured } from "../lib/supabase";
+import { cloudConfigured, masterSupabase, portalConfigured } from "../lib/supabase";
 
 const PORTAL_KEY = "ravsoft_master_portal_v1";
 const LEGACY_PORTAL_KEY = "torque_master_portal_v1";
@@ -1482,9 +1482,17 @@ export function DeveloperPortalPage() {
             <Download />
             Backup
           </button>
-          <Link className="btn btn-secondary btn-sm" to="/">
+          <Link
+            className="btn btn-secondary btn-sm"
+            to="/"
+            title={
+              cloudConfigured
+                ? "Open the workshop app"
+                : "Portal builds have no client database, so this opens demo data only"
+            }
+          >
             <ArrowLeft />
-            Open app
+            {cloudConfigured ? "Open app" : "Demo app"}
           </Link>
         </div>
       </header>
