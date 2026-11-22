@@ -95,6 +95,7 @@ export function StoresPage() {
     state,
     currentUser,
     fulfillPart,
+    instantPurchasePart,
     approveExchange,
     approveReturn,
     completeWarrantyClaim,
@@ -131,6 +132,14 @@ export function StoresPage() {
   const [fulfillMode, setFulfillMode] = useState<"requested" | "substitute">("requested");
   const [fulfillSubstituteId, setFulfillSubstituteId] = useState("");
   const [fulfillSubstituteSearch, setFulfillSubstituteSearch] = useState("");
+  const [outsideTargetId, setOutsideTargetId] = useState<string | null>(null);
+  const [outsideName, setOutsideName] = useState("");
+  const [outsideQty, setOutsideQty] = useState("1");
+  const [outsideUnit, setOutsideUnit] = useState("pc");
+  const [outsideCost, setOutsideCost] = useState("0");
+  const [outsideMargin, setOutsideMargin] = useState("20");
+  const [outsideSupplier, setOutsideSupplier] = useState("");
+  const [outsideInvoice, setOutsideInvoice] = useState("");
   const [swapTargetId, setSwapTargetId] = useState<string | null>(null);
   const [swapCost, setSwapCost] = useState("");
   const [swapMargin, setSwapMargin] = useState("20");
@@ -304,6 +313,16 @@ export function StoresPage() {
   );
   const swapSelling =
     Math.round((Number(swapCost) || 0) * (1 + (Number(swapMargin) || 0) / 100) * 100) / 100;
+  const outsidePartRecord = state.parts.find((part) => part.id === outsideTargetId) ?? null;
+  const outsideJob = outsidePartRecord
+    ? state.jobCards.find((job) => job.id === outsidePartRecord.jobCardId)
+    : null;
+  const outsideRequested = outsidePartRecord
+    ? Math.max(0, outsidePartRecord.qtyRequested - outsidePartRecord.qtyIssued) ||
+      outsidePartRecord.qtyRequested
+    : 0;
+  const outsideSelling =
+    Math.round((Number(outsideCost) || 0) * (1 + (Number(outsideMargin) || 0) / 100) * 100) / 100;
 
   function unitCostOf(item: { type: StockType; packSize?: number; lastCostPrice?: number; lastSellingPrice?: number }): number {
     if (item.type === "Consumable" && item.packSize) {
@@ -327,6 +346,64 @@ export function StoresPage() {
     setFulfillMode("requested");
     setFulfillSubstituteId("");
     setFulfillSubstituteSearch("");
+  }
+
+  function openOutsidePurchase(partId: string) {
+    const part = state.parts.find((entry) => entry.id === partId);
+    if (!part) return;
+    const remaining = Math.max(0, part.qtyRequested - part.qtyIssued);
+    setOutsideTargetId(partId);
+    setOutsideName(part.itemName);
+    setOutsideQty(String(remaining > 0 ? remaining : part.qtyRequested));
+    setOutsideUnit("pc");
+    setOutsideCost(String(part.costPrice || 0));
+    setOutsideMargin(String(part.marginPercent || 20));
+    setOutsideSupplier(part.supplierId ?? state.suppliers[0]?.id ?? "");
+    setOutsideInvoice("");
+  }
+
+  function saveOutsidePurchase() {
+    if (!outsidePartRecord) return;
+    const qty = Number(outsideQty);
+    const cost = Number(outsideCost);
+    const margin = Number(outsideMargin);
+    if (!Number.isFinite(qty) || qty <= 0) {
+      push("Enter the quantity bought from the supplier.", "error");
+      return;
+    }
+    if (!Number.isFinite(cost) || cost <= 0) {
+      push("Enter the supplier cost price.", "error");
+      return;
+    }
+    if (!Number.isFinite(margin) || margin < 0) {
+      push("Enter a valid margin percentage.", "error");
+      return;
+    }
+    if (!outsideSupplier) {
+      push("Choose the supplier for this instant purchase.", "error");
+      return;
+    }
+    if (!outsideInvoice.trim()) {
+      push("Enter the supplier invoice number.", "error");
+      return;
+    }
+    const result = instantPurchasePart(outsidePartRecord.id, {
+      name: outsideName,
+      qtyIssued: qty,
+      unit: outsideUnit,
+      costPrice: cost,
+      marginPercent: margin,
+      supplierId: outsideSupplier,
+      supplierInvoiceNo: outsideInvoice,
+    });
+    if (!result.ok) {
+      push(result.message ?? "Could not complete the instant purchase.", "error");
+      return;
+    }
+    push(
+      `${outsideName} bought from ${state.suppliers.find((s) => s.id === outsideSupplier)?.name ?? "the supplier"} and issued to ${outsideJob?.vehicleNo ?? outsidePartRecord.jobCardId}.`,
+    );
+    setOutsideTargetId(null);
   }
 
   function chooseSubstitute(itemId: string) {
@@ -876,11 +953,16 @@ export function StoresPage() {
                     {issueRequests.map((part) => {
                       const item = state.inventory.find((entry) => entry.id === part.itemId);
                       const job = state.jobCards.find((entry) => entry.id === part.jobCardId);
+                      const isOutside = part.partSource === "Outside_Purchase" || !item;
                       return (
                         <tr key={part.id}>
                           <td>
                             <div className="cell-main">{part.itemName}</div>
-                            <div className="cell-sub">{item?.code ?? part.itemId} · {item?.make ? `${item.make} ${item.model}` : "Universal"}</div>
+                            <div className="cell-sub">
+                              {isOutside
+                                ? "Outside purchase — not stocked"
+                                : `${item?.code ?? part.itemId} · ${item?.make ? `${item.make} ${item.model}` : "Universal"}`}
+                            </div>
                             {sectionsEnabled && part.sectionId && (
                               <div className="tiny" style={{ color: state.sections.find((section) => section.id === part.sectionId)?.color }}>
                                 {state.sections.find((section) => section.id === part.sectionId)?.name}
@@ -902,9 +984,13 @@ export function StoresPage() {
                             )}
                           </td>
                           <td className="num">
-                            <span className={`badge ${(item?.stock ?? 0) > 0 ? "badge-green" : "badge-red"}`}>
-                              {formatQty(item?.stock ?? 0, item?.measureUnit ?? item?.unit ?? "pc")}
-                            </span>
+                            {isOutside ? (
+                              <span className="badge badge-amber">Buy in</span>
+                            ) : (
+                              <span className={`badge ${(item?.stock ?? 0) > 0 ? "badge-green" : "badge-red"}`}>
+                                {formatQty(item?.stock ?? 0, item?.measureUnit ?? item?.unit ?? "pc")}
+                              </span>
+                            )}
                           </td>
                           <td>
                             <StatusBadge status={part.status} />
@@ -916,10 +1002,20 @@ export function StoresPage() {
                           </td>
                           <td className="tiny muted">{timeAgo(part.createdAt)}</td>
                           <td>
-                            <button className="btn btn-soft btn-sm" onClick={() => openFulfill(part.id)}>
-                              <Package />
-                              Issue
-                            </button>
+                            {isOutside ? (
+                              <button
+                                className="btn btn-soft btn-sm"
+                                onClick={() => openOutsidePurchase(part.id)}
+                              >
+                                <ShoppingCart />
+                                Buy &amp; issue
+                              </button>
+                            ) : (
+                              <button className="btn btn-soft btn-sm" onClick={() => openFulfill(part.id)}>
+                                <Package />
+                                Issue
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -1865,6 +1961,121 @@ export function StoresPage() {
                 )}
               </div>
             </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        open={Boolean(outsidePartRecord)}
+        onClose={() => setOutsideTargetId(null)}
+        title="Buy in & issue part"
+        subtitle={
+          outsidePartRecord
+            ? `${outsidePartRecord.itemName} · ${outsideJob?.vehicleNo ?? outsidePartRecord.jobCardId}`
+            : undefined
+        }
+        size="wide"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setOutsideTargetId(null)}>
+              Cancel
+            </button>
+            <button className="btn btn-primary" onClick={saveOutsidePurchase}>
+              <ShoppingCart />
+              Buy &amp; issue to job
+            </button>
+          </>
+        }
+      >
+        {outsidePartRecord && (
+          <div className="stack">
+            <Alert tone="info" title="Instant purchase — nothing comes out of stock">
+              This part was requested by the workshop and is not stocked. Buying it in creates the
+              stock row, the cash supplier purchase, the stock movements and the issued job part in
+              one step. The selling price and the customer invoice update automatically.
+            </Alert>
+            <div className="form-grid">
+              <Field label="Part description" required full>
+                <input
+                  className="input"
+                  value={outsideName}
+                  onChange={(event) => setOutsideName(event.target.value)}
+                />
+              </Field>
+              <Field label="Quantity" required hint={`Requested: ${formatQty(outsideRequested, outsideUnit)}`}>
+                <input
+                  className="input"
+                  type="number"
+                  min={0.001}
+                  step="any"
+                  value={outsideQty}
+                  onChange={(event) => setOutsideQty(event.target.value)}
+                />
+              </Field>
+              <Field label="Unit">
+                <input
+                  className="input"
+                  value={outsideUnit}
+                  onChange={(event) => setOutsideUnit(event.target.value)}
+                />
+              </Field>
+              <Field label="Supplier" required>
+                <select
+                  className="select"
+                  value={outsideSupplier}
+                  onChange={(event) => setOutsideSupplier(event.target.value)}
+                >
+                  <option value="">Choose supplier</option>
+                  {state.suppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.id}>
+                      {supplier.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Supplier invoice no." required>
+                <input
+                  className="input"
+                  placeholder="INV-2041"
+                  value={outsideInvoice}
+                  onChange={(event) => setOutsideInvoice(event.target.value)}
+                />
+              </Field>
+              <Field label="Cost price (LKR)" required>
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={outsideCost}
+                  onChange={(event) => setOutsideCost(event.target.value)}
+                />
+              </Field>
+              <Field label="Margin %" required>
+                <input
+                  className="input"
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={outsideMargin}
+                  onChange={(event) => setOutsideMargin(event.target.value)}
+                />
+              </Field>
+              <Field label="Selling price">
+                <input className="input" readOnly value={money(outsideSelling)} />
+              </Field>
+            </div>
+            {Number(outsideQty) < outsideRequested - 0.0001 && (
+              <Alert tone="warn" title="Short quantity">
+                The remaining {formatQty(outsideRequested - (Number(outsideQty) || 0), outsideUnit)}{" "}
+                stays on backorder for this job.
+              </Alert>
+            )}
+            {state.suppliers.length === 0 && (
+              <Alert tone="warn" title="Add a supplier first">
+                Add the supplier under the Suppliers tab, then return to this request.
+              </Alert>
+            )}
           </div>
         )}
       </Modal>

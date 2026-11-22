@@ -10,7 +10,7 @@ IRD tax invoices, thermal/A4 printer routing and offline licence activation.
 > The demo is fully functional without any of this. Use this guide when you are
 > ready to onboard a real workshop.
 
-For deployment support or customisation, contact **RAVsoft** at
+For deployment support or customisation, contact **RAVBsoft** at
 [ravindranath@hotmail.co.uk](mailto:ravindranath@hotmail.co.uk) or
 [+94 75 575 6803](tel:+94755756803).
 
@@ -104,7 +104,7 @@ To retry from a clean seed, sign in as Owner and use **Settings → Reset demo d
 
 ### 2.2 Apply the schema
 
-Apply all six migrations **in order**. They are additive and idempotent, so
+Apply all seven migrations **in order**. They are additive and idempotent, so
 they can be re-run safely on an existing installation.
 
 | Order | File | Purpose |
@@ -115,6 +115,7 @@ they can be re-run safely on an existing installation.
 | 4 | [`20261114000400_portal_releases.sql`](../supabase/migrations/20261114000400_portal_releases.sql) | Latest-release registry, update-run ledger and portal update RPCs. |
 | 5 | [`20261114000500_app_records.sql`](../supabase/migrations/20261114000500_app_records.sql) | Workshop-scoped application-state bridge, RLS, trigger and realtime publication. |
 | 6 | [`20261114000600_portal_security.sql`](../supabase/migrations/20261114000600_portal_security.sql) | Admin-only portal policies, authenticated update wrappers and installation-ID repointing. |
+| 7 | [`20261120000100_licence_pricing.sql`](../supabase/migrations/20261120000100_licence_pricing.sql) | Lite/Starter/Growth/Pro/Enterprise plans, typed per-client monthly fees and the RAVBsoft pricing reference. |
 
 Option A — SQL editor:
 
@@ -813,8 +814,8 @@ trial and activation screen is **Settings → Licence** (owner only).
 
 1. On the client installation, open **Settings → Licence** and copy the
    **installation ID** (`WS-LK-XXXXXXXX`) and machine ID.
-2. Open the RAVsoft developer portal at `/developer` and register the client,
-   or send the IDs, client name, software name and licence period to RAVsoft
+2. Open the RAVBsoft developer portal at `/developer` and register the client,
+   or send the IDs, client name, software name and licence period to RAVBsoft
    ([ravindranath@hotmail.co.uk](mailto:ravindranath@hotmail.co.uk) /
    [+94 75 575 6803](tel:+94755756803)).
 3. Issue a key in the format `TRQ-YYYYMMDD-XXXXXXXX`, where the date is the
@@ -824,11 +825,11 @@ trial and activation screen is **Settings → Licence** (owner only).
 4. Enter the key or token and licence holder in Settings → Licence and activate.
 
 The demo helper `src/lib/licence.ts` exports `generateLicenceKey()` for
-RAVsoft-issued keys and `generateOfflineToken()`/`verifyOfflineToken()` for
+RAVBsoft-issued keys and `generateOfflineToken()`/`verifyOfflineToken()` for
 signed offline activation. A renewal is simply a new key or token with a later
 expiry; activating it replaces the old expiry.
 
-### 6.3 RAVsoft developer portal and isolated client servers
+### 6.3 RAVBsoft developer portal and isolated client servers
 
 Each client runs its own isolated server and never opens an inbound licence
 port. When `VITE_MASTER_LICENSE_URL` is configured:

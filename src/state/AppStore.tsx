@@ -258,6 +258,24 @@ interface AppStoreValue {
     sectionId?: string,
     options?: { isCustomerExtra?: boolean },
   ) => ActionResult;
+  /** Request a part that is not stocked so Stores can buy it in and issue it. */
+  requestOutsidePart: (
+    jobId: string,
+    data: { name: string; qty: number; unit?: string; sectionId?: string },
+  ) => ActionResult;
+  /** Stores buys an outside-purchase request in and issues it in one step. */
+  instantPurchasePart: (
+    partId: string,
+    data: {
+      name: string;
+      qtyIssued: number;
+      unit: string;
+      costPrice: number;
+      marginPercent: number;
+      supplierId?: string;
+      supplierInvoiceNo: string;
+    },
+  ) => ActionResult;
   addCustomerBroughtPart: (
     jobId: string,
     data: { name: string; qty: number; unitPrice: number; sectionId?: string },
@@ -395,7 +413,7 @@ interface AppStoreValue {
   markRepairCompleted: (jobId: string) => ActionResult;
   checkoutJob: (jobId: string, input: CheckoutInput) => ActionResult;
   approvePartialRelease: (jobId: string, note?: string) => ActionResult;
-  dispatchJob: (jobId: string) => void;
+  dispatchJob: (jobId: string) => ActionResult;
   approveVehicleExit: (jobId: string) => ActionResult;
   overrideBillingGate: (jobId: string, reason: string) => ActionResult;
   addVehicleBill: (input: {
@@ -1960,6 +1978,53 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [state.inventory, state.jobCards],
   );
 
+  const requestOutsidePart = useCallback(
+    (
+      jobId: string,
+      data: { name: string; qty: number; unit?: string; sectionId?: string },
+    ): ActionResult => {
+      const job = state.jobCards.find((entry) => entry.id === jobId);
+      if (!job) return { ok: false, message: "Job card not found." };
+      const name = data.name.trim();
+      if (!name) return { ok: false, message: "Enter the part description." };
+      const qty = Math.max(0.001, Number(data.qty) || 1);
+      const now = new Date().toISOString();
+      const record: JobPart = {
+        id: uid("jp"),
+        jobCardId: jobId,
+        itemId: `outside_${uid("part")}`,
+        itemName: name,
+        qtyRequested: qty,
+        qtyIssued: 0,
+        costPrice: 0,
+        marginPercent: 20,
+        sellingPrice: 0,
+        status: "Requested",
+        sectionId: data.sectionId || job.sectionIds?.[0],
+        includedInLabor: false,
+        measuredQty: qty % 1 !== 0,
+        partSource: "Outside_Purchase",
+        createdAt: now,
+        updatedAt: now,
+      };
+      setState((prev) => ({
+        ...prev,
+        parts: [...prev.parts, record],
+        notifications: notify(
+          prev,
+          ["Stores"],
+          "Outside purchase requested",
+          `${job.id} · ${job.vehicleNo} needs ${formatQty(qty, data.unit || "pc")} of ${name}. This part is not stocked — buy it in and issue it to the job.`,
+          "high",
+          "/stores",
+          { vehicleNo: job.vehicleNo, eventType: "inventory" },
+        ),
+      }));
+      return { ok: true, reference: record.id };
+    },
+    [state.jobCards],
+  );
+
   const addCustomerBroughtPart = useCallback(
     (
       jobId: string,
@@ -2231,6 +2296,188 @@ export function AppProvider({ children }: { children: ReactNode }) {
       return { ok: true };
     },
     [state.parts, state.inventory, state.suppliers, state.jobCards, state.users, state.currentUserId],
+  );
+
+  const instantPurchasePart = useCallback(
+    (
+      partId: string,
+      data: {
+        name: string;
+        qtyIssued: number;
+        unit: string;
+        costPrice: number;
+        marginPercent: number;
+        supplierId?: string;
+        supplierInvoiceNo: string;
+      },
+    ): ActionResult => {
+      const part = state.parts.find((entry) => entry.id === partId);
+      if (!part) return { ok: false, message: "Part request not found." };
+      if (part.status !== "Requested" && part.status !== "Backordered") {
+        return { ok: false, message: "This request has already been actioned." };
+      }
+      const job = state.jobCards.find((entry) => entry.id === part.jobCardId);
+      if (!job) return { ok: false, message: "Job card not found." };
+      const name = data.name.trim() || part.itemName;
+      if (!name) return { ok: false, message: "Enter the part description." };
+      const qty = Math.max(0.001, Number(data.qtyIssued) || 0);
+      const cost = Math.max(0, Number(data.costPrice) || 0);
+      const margin = Math.max(0, Number(data.marginPercent) || 0);
+      const invoiceNo = data.supplierInvoiceNo.trim();
+      const supplierId = data.supplierId || part.supplierId;
+      if (!invoiceNo) {
+        return {
+          ok: false,
+          message: "Enter the supplier invoice number for this instant purchase.",
+        };
+      }
+      if (!supplierId || !state.suppliers.some((supplier) => supplier.id === supplierId)) {
+        return { ok: false, message: "Choose the supplier for this instant purchase." };
+      }
+      const remaining = Math.max(0, part.qtyRequested - part.qtyIssued);
+      const requested = remaining > 0 ? remaining : part.qtyRequested;
+      const issueQty = Math.min(qty, requested);
+      const leftover = Math.max(0, Math.round((requested - issueQty) * 1000) / 1000);
+      const selling = Math.round(cost * (1 + margin / 100) * 100) / 100;
+      const unit = data.unit.trim() || "pc";
+      const now = new Date().toISOString();
+      const user = state.users.find((entry) => entry.id === state.currentUserId);
+      const itemId = uid("inv");
+      const code = `OUT-${job.numericId}-${state.inventory.length + 1}`;
+      const newItem: InventoryItem = {
+        id: itemId,
+        code,
+        name,
+        type: "Spare Part",
+        stock: 0,
+        minStock: 0,
+        unit,
+        measureUnit: unit,
+        packSize: 1,
+        lastCostPrice: cost,
+        lastSellingPrice: selling,
+        supplierId,
+        sectionId: part.sectionId,
+        isOpeningStock: false,
+        openingStockSetAt: now,
+      };
+      const purchase: SupplierPurchase = {
+        id: `PO-${8843 + state.purchases.length}`,
+        supplierId,
+        invoiceNo,
+        amount: Math.round(issueQty * cost * 100) / 100,
+        type: "Cash",
+        creditDays: 0,
+        purchaseDate: now,
+        status: "Paid",
+        description: `Instant purchase for ${job.id} · ${job.vehicleNo} · ${name}`,
+        lines: [
+          {
+            id: uid("pl"),
+            itemId,
+            itemName: name,
+            qty: issueQty,
+            costPrice: cost,
+            sellingPrice: selling,
+          },
+        ],
+        goodsConfirmedBy: user?.name,
+        goodsConfirmedAt: now,
+        paidBy: user?.name,
+        paidAt: now,
+        paymentMethod: "Cash",
+      };
+      setState((prev) => {
+        const nextParts = prev.parts.map((entry) =>
+          entry.id === part.id
+            ? {
+                ...entry,
+                itemId,
+                itemName: name,
+                qtyIssued: issueQty,
+                qtyRequested: issueQty,
+                costPrice: cost,
+                marginPercent: margin,
+                sellingPrice:
+                  entry.insuranceApprovedPrice !== undefined && entry.insuranceApprovedPrice > 0
+                    ? entry.insuranceApprovedPrice
+                    : entry.estimateId && entry.sellingPrice > 0
+                      ? entry.sellingPrice
+                      : selling,
+                status: "Issued" as const,
+                supplierId,
+                supplierInvoiceNo: invoiceNo,
+                measuredQty: issueQty % 1 !== 0,
+                partSource: "Outside_Purchase" as const,
+                updatedAt: now,
+              }
+            : entry,
+        );
+        if (leftover > 0.0001) {
+          nextParts.push({
+            ...part,
+            id: uid("jp"),
+            qtyRequested: leftover,
+            qtyIssued: 0,
+            costPrice: 0,
+            sellingPrice: 0,
+            status: "Backordered",
+            createdAt: now,
+            updatedAt: now,
+          });
+        }
+        const movements: StockMovement[] = [
+          {
+            id: uid("stk"),
+            itemId,
+            itemName: name,
+            date: now,
+            type: "Purchase",
+            qty: issueQty,
+            reference: invoiceNo,
+            note: `Instant purchase for ${job.id} · ${job.vehicleNo}`,
+            createdBy: user?.name,
+          },
+          {
+            id: uid("stk"),
+            itemId,
+            itemName: name,
+            date: now,
+            type: "Job_Issue",
+            qty: -issueQty,
+            reference: job.id,
+            note: `Issued ${formatQty(issueQty, unit)} outside-purchase part to ${job.id}`,
+            createdBy: user?.name,
+          },
+        ];
+        return {
+          ...prev,
+          parts: nextParts,
+          inventory: [...prev.inventory, newItem],
+          purchases: [purchase, ...prev.purchases],
+          stockMovements: [...movements, ...prev.stockMovements],
+          notifications: notify(
+            prev,
+            ["Supervisor", "Accounting"],
+            "Outside part purchased & issued",
+            `${formatQty(issueQty, unit)} of ${name} bought from ${state.suppliers.find((s) => s.id === supplierId)?.name ?? "supplier"} on invoice ${invoiceNo} and issued to ${job.id} (${job.vehicleNo}). Selling price ${money(selling)}.`,
+            "normal",
+            `/jobs/${job.id}`,
+            { vehicleNo: job.vehicleNo, eventType: "inventory" },
+          ),
+        };
+      });
+      return { ok: true };
+    },
+    [
+      state.parts,
+      state.jobCards,
+      state.suppliers,
+      state.purchases.length,
+      state.inventory.length,
+      state.users,
+      state.currentUserId,
+    ],
   );
 
   const requestExchange = useCallback((partId: string) => {
@@ -4434,6 +4681,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 partPaymentAt: isPartial ? now : undefined,
                 releaseApprovalRequestedAt: isPartial ? now : undefined,
                 releaseApprovalRequestedBy: isPartial ? user?.name : undefined,
+                releaseApprovedBy:
+                  !isPartial && input.paymentMethod === "Credit" ? user?.name : undefined,
+                releaseApprovedAt:
+                  !isPartial && input.paymentMethod === "Credit" ? now : undefined,
+                exitApprovedBy:
+                  !isPartial && input.paymentMethod === "Credit" ? user?.name : undefined,
+                exitApprovedAt:
+                  !isPartial && input.paymentMethod === "Credit" ? now : undefined,
                 chequeId,
                 customerTinNumber: input.customerTinNumber?.trim() || j.customerTinNumber,
                 isVatInvoice: Boolean(input.isVatInvoice),
@@ -4579,24 +4834,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [state.jobCards, state.users, state.currentUserId],
   );
 
-  const dispatchJob = useCallback((jobId: string) => {
+  const dispatchJob = useCallback((jobId: string): ActionResult => {
     const dispatchedJob = state.jobCards.find((entry) => entry.id === jobId);
-    if (
-      !dispatchedJob ||
-      (dispatchedJob.status !== "Paid" && dispatchedJob.status !== "Released on Credit")
-    ) {
-      return;
-    }
+    if (!dispatchedJob) return { ok: false, message: "Job card not found." };
     const currentUser = state.users.find((entry) => entry.id === state.currentUserId);
-    if (
-      dispatchedJob.status === "Released on Credit" &&
-      dispatchedJob.releaseApprovedAt &&
-      !currentUser?.isOwner &&
-      !currentUser?.departments.includes("Cashier")
-    ) {
-      return;
+    if (!currentUser || (!currentUser.isOwner && !currentUser.departments.includes("PRO"))) {
+      return {
+        ok: false,
+        message: "Only the PRO or owner can hand over a vehicle at the gate.",
+      };
     }
-    const dispatchedBy = currentUser?.name;
+    const paid = dispatchedJob.status === "Paid";
+    const creditReady =
+      dispatchedJob.status === "Released on Credit" &&
+      Boolean(dispatchedJob.exitApprovedAt) &&
+      (!dispatchedJob.partPaymentAt || Boolean(dispatchedJob.releaseApprovedAt));
+    if (!paid && !creditReady) {
+      return {
+        ok: false,
+        message:
+          dispatchedJob.status === "Released on Credit"
+            ? "The cashier must approve the exit before the PRO can hand over this credit release."
+            : "This vehicle is not cleared for handover yet.",
+      };
+    }
+    const dispatchedBy = currentUser.name;
     setState((prev) => {
       const job = prev.jobCards.find((j) => j.id === jobId);
       if (!job) return prev;
@@ -4726,8 +4988,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
             ? notify(
                 { ...prev, marketing },
                 ["Owner", "Cashier", "Accounting"],
-                "Vehicle exited on PRO override",
-                `${job.vehicleNo} left the gate with an unpaid balance. Override by ${job.billingOverrideBy ?? "PRO"}: ${job.billingOverrideReason}`,
+                "Vehicle exited on cashier override",
+                `${job.vehicleNo} left the gate with an unpaid balance. Override by ${job.billingOverrideBy ?? "cashier"}: ${job.billingOverrideReason}`,
                 "critical",
                 "/accounting",
                 { vehicleNo: job.vehicleNo, eventType: "payment" },
@@ -4752,6 +5014,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
         state.settings,
       );
     }
+    return {
+      ok: true,
+      message: `${dispatchedJob.vehicleNo} handed over by ${dispatchedBy}. Gate log and marketing follow-up updated.`,
+    };
   }, [
     state.jobCards,
     state.settings,
@@ -4776,13 +5042,38 @@ export function AppProvider({ children }: { children: ReactNode }) {
           message: "Only the cashier can approve this vehicle exit.",
         };
       }
-      dispatchJob(jobId);
+      const now = new Date().toISOString();
+      setState((prev) => ({
+        ...prev,
+        jobCards: prev.jobCards.map((entry) =>
+          entry.id === job.id
+            ? {
+                ...entry,
+                exitApprovedBy: user.name,
+                exitApprovedAt: now,
+              }
+            : entry,
+        ),
+        notifications: notify(
+          prev,
+          ["PRO", "Owner"],
+          "Cashier exit approved — PRO to hand over",
+          `${job.id} · ${job.vehicleNo} is cleared to leave. The PRO must complete the handover at the gate.`,
+          "high",
+          "/gate",
+          {
+            vehicleNo: job.vehicleNo,
+            eventType: "payment",
+            voiceText: `Cashier exit approved. PRO to hand over vehicle ${job.vehicleNo}`,
+          },
+        ),
+      }));
       return {
         ok: true,
-        message: `${job.vehicleNo} exit approved. The gate log and marketing follow-up are updated.`,
+        message: `${job.vehicleNo} exit approved. The PRO can now hand over the vehicle at the gate.`,
       };
     },
-    [state.jobCards, state.users, state.currentUserId, dispatchJob],
+    [state.jobCards, state.users, state.currentUserId],
   );
 
   const overrideBillingGate = useCallback(
@@ -4800,8 +5091,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         return { ok: false, message: "Enter a clear reason (at least 8 characters) for the override." };
       }
       const user = state.users.find((entry) => entry.id === state.currentUserId);
-      if (!user || (!user.isOwner && !user.departments.includes("PRO"))) {
-        return { ok: false, message: "Only the PRO or owner can override the billing gate." };
+      if (!user || (!user.isOwner && !user.departments.includes("Cashier"))) {
+        return { ok: false, message: "Only the cashier or owner can override the billing gate." };
       }
       const totals = jobTotals(job, state.tasks, state.parts, state.workers);
       const now = new Date().toISOString();
@@ -4818,6 +5109,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
                 status: "Released on Credit" as const,
                 paymentMethod: "Credit" as const,
                 creditGraceDays: 7,
+                releaseApprovedBy: user.name,
+                releaseApprovedAt: now,
+                exitApprovedBy: user.name,
+                exitApprovedAt: now,
                 billingOverrideReason: cleanReason,
                 billingOverrideBy: user.name,
                 billingOverrideAt: now,
@@ -4845,14 +5140,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
         notifications: notify(
           prev,
           ["Owner", "Cashier", "Accounting"],
-          "PRO billing override — vehicle released",
-          `${job.vehicleNo} was released without payment. Reason: ${cleanReason}. Recorded by ${user.name}; a 7-day credit balance of LKR ${totals.total.toLocaleString()} was opened.`,
+          "Cashier billing override — vehicle released",
+          `${job.vehicleNo} was released without payment. Reason: ${cleanReason}. Recorded by ${user.name}; a 7-day credit balance of LKR ${totals.total.toLocaleString()} was opened. The PRO will complete the handover.`,
           "critical",
           "/accounting",
           {
             vehicleNo: job.vehicleNo,
             eventType: "credit",
-            voiceText: `PRO billing override. Vehicle released with a new 7-day customer credit of ${money(
+            voiceText: `Cashier billing override. Vehicle released with a new 7-day customer credit of ${money(
               totals.total,
             )}`,
           },
@@ -7292,6 +7587,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTask,
       removePart,
       requestPart,
+      requestOutsidePart,
+      instantPurchasePart,
       addCustomerBroughtPart,
       fulfillPart,
       requestExchange,
@@ -7410,6 +7707,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateTask,
       removePart,
       requestPart,
+      requestOutsidePart,
+      instantPurchasePart,
       addCustomerBroughtPart,
       fulfillPart,
       requestExchange,

@@ -132,7 +132,14 @@ export const MODULE_PRESETS: {
   name: string;
   caption: string;
   flags: FeatureFlagKey[];
-}[] = [  {
+}[] = [
+  {
+    id: "garage-lite",
+    name: "Small garage",
+    caption: "Job cards, estimates, basic stock and credit — no ledger, payroll, insurance or sections.",
+    flags: ["enable_estimates_module", "enable_voice_notifications"],
+  },
+  {
     id: "quick-lube",
     name: "Quick service bay",
     caption: "Single-floor service workshop with estimates and thermal invoices.",

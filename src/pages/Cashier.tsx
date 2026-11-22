@@ -18,6 +18,7 @@ import {
   ReceiptText,
   Search,
   Send,
+  ShieldAlert,
   ShieldCheck,
   Star,
   UserRound,
@@ -65,12 +66,15 @@ export function CashierPage() {
     prepareVehicleBill,
     settleVehicleBill,
     approveVehicleExit,
+    overrideBillingGate,
   } = useApp();
   const { push } = useToast();
   const [tab, setTab] = useState<CashierTab>("queue");
   const [checkoutTargetId, setCheckoutTargetId] = useState<string | null>(null);
   const [successJobId, setSuccessJobId] = useState<string | null>(null);
   const [exitTargetId, setExitTargetId] = useState<string | null>(null);
+  const [overrideTargetId, setOverrideTargetId] = useState<string | null>(null);
+  const [overrideReason, setOverrideReason] = useState("");
   const [discount, setDiscount] = useState("0");
   const [discountType, setDiscountType] = useState<DiscountType>("Fixed");
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>("Cash");
@@ -110,7 +114,10 @@ export function CashierPage() {
     .filter((job) => ["Paid", "Released on Credit", "Dispatched"].includes(job.status))
     .sort((a, b) => (b.paidAt ?? "").localeCompare(a.paidAt ?? ""));
   const awaitingExit = settled.filter(
-    (job) => job.status === "Released on Credit" && Boolean(job.releaseApprovedAt),
+    (job) =>
+      job.status === "Released on Credit" &&
+      Boolean(job.releaseApprovedAt || !job.partPaymentAt) &&
+      !job.exitApprovedAt,
   );
   const progressingJobs = state.jobCards
     .filter((job) => !["Paid", "Released on Credit", "Dispatched"].includes(job.status))
@@ -214,6 +221,11 @@ export function CashierPage() {
 
   const successJob = state.jobCards.find((job) => job.id === successJobId) ?? null;
   const exitTarget = state.jobCards.find((job) => job.id === exitTargetId) ?? null;
+  const overrideTarget =
+    state.jobCards.find((job) => job.id === overrideTargetId) ?? null;
+  const canOverrideBill = Boolean(
+    currentUser && (currentUser.isOwner || currentUser.departments.includes("Cashier")),
+  );
   const successTotals = successJob
     ? jobTotals(successJob, state.tasks, state.parts, state.workers)
     : null;
@@ -950,11 +962,26 @@ export function CashierPage() {
     setExitTargetId(null);
   }
 
+  function confirmOverride() {
+    if (!overrideTarget) return;
+    const result = overrideBillingGate(overrideTarget.id, overrideReason);
+    if (!result.ok) {
+      push(result.message ?? "Could not override the billing gate.", "error");
+      return;
+    }
+    push(
+      result.message ??
+        `${overrideTarget.vehicleNo} released on cashier override. The PRO will complete the handover.`,
+    );
+    setOverrideTargetId(null);
+    setOverrideReason("");
+  }
+
   return (
     <div className="page">
       <PageHeader
         title="Billing & cashier"
-        subtitle="Discounts, payment capture, thermal receipts, PDF invoices and credit releases — with PRO gate clearance built in."
+        subtitle="Discounts, payment capture, thermal receipts, PDF invoices and credit releases — the cashier clears the exit, the PRO hands over at the gate."
         actions={
           <>
             <Tabs<CashierTab>
@@ -1242,6 +1269,19 @@ export function CashierPage() {
                               <Link className="btn btn-ghost btn-sm" to={`/jobs/${job.id}`}>
                                 Review job
                               </Link>
+                              {canOverrideBill && (
+                                <button
+                                  className="btn btn-ghost btn-sm"
+                                  onClick={() => {
+                                    setOverrideTargetId(job.id);
+                                    setOverrideReason("");
+                                  }}
+                                  title="Release the vehicle without payment and open a customer credit"
+                                >
+                                  <ShieldAlert />
+                                  Override gate
+                                </button>
+                              )}
                               <button
                                 className="btn btn-primary"
                                 onClick={() => openCheckout(job.id)}
@@ -1700,7 +1740,7 @@ export function CashierPage() {
                 } waiting for your exit approval`}
               >
                 Owner or accounting has approved the credit release. Approve each exit here; the
-                PRO gate cannot release these vehicles.
+                PRO then completes the handover at the gate.
               </Alert>
             </div>
           )}
@@ -1760,7 +1800,9 @@ export function CashierPage() {
                         <td><StatusBadge status={job.status} /></td>
                         <td>
                           <div className="row" style={{ justifyContent: "flex-end", gap: 3 }}>
-                            {job.status === "Released on Credit" && job.releaseApprovedAt && (
+                            {job.status === "Released on Credit" &&
+                              (job.releaseApprovedAt || !job.partPaymentAt) &&
+                              !job.exitApprovedAt && (
                               <button
                                 className="btn btn-primary btn-sm"
                                 title="Approve this vehicle to leave the workshop"
@@ -1769,6 +1811,11 @@ export function CashierPage() {
                                 <KeyRound />
                                 Approve exit
                               </button>
+                            )}
+                            {job.status === "Released on Credit" && job.exitApprovedAt && (
+                              <span className="badge badge-amber" title="The PRO completes the handover">
+                                PRO to hand over
+                              </span>
                             )}
                             <button className="btn btn-ghost btn-sm" title="Print invoice" onClick={() => printJob(job)}>
                               <Printer />
@@ -2720,6 +2767,70 @@ export function CashierPage() {
       </Modal>
 
       <Modal
+        open={Boolean(overrideTarget)}
+        onClose={() => setOverrideTargetId(null)}
+        title="Cashier billing override"
+        subtitle={
+          overrideTarget
+            ? `${overrideTarget.vehicleNo} · ${overrideTarget.customerName} · ${overrideTarget.id}`
+            : undefined
+        }
+        size="narrow"
+        footer={
+          <>
+            <button className="btn btn-secondary" onClick={() => setOverrideTargetId(null)}>
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={confirmOverride}
+              disabled={overrideReason.trim().length < 8}
+            >
+              <ShieldAlert />
+              Release on credit
+            </button>
+          </>
+        }
+      >
+        {overrideTarget && (
+          <div className="stack">
+            <Alert tone="warn" title="Only the cashier or owner can override">
+              The PRO cannot release an unpaid vehicle. This records the override, opens a 7-day
+              customer credit for the full invoice and clears the exit. The PRO still performs the
+              physical handover at the gate.
+            </Alert>
+            <Field
+              label="Reason"
+              required
+              hint="At least 8 characters. Shown to the owner, PRO and accounting."
+            >
+              <textarea
+                className="input"
+                rows={3}
+                value={overrideReason}
+                onChange={(event) => setOverrideReason(event.target.value)}
+                placeholder="Owner approved release pending bank transfer…"
+                autoFocus
+              />
+            </Field>
+            <div className="kv">
+              <span>Invoice value</span>
+              <span className="strong">
+                {money(
+                  jobTotals(
+                    overrideTarget,
+                    state.tasks,
+                    state.parts,
+                    state.workers,
+                  ).total,
+                )}
+              </span>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
         open={Boolean(exitTarget)}
         onClose={() => setExitTargetId(null)}
         title="Approve the vehicle exit?"
@@ -2770,8 +2881,8 @@ export function CashierPage() {
               </div>
             </div>
             <Alert tone="warn" title="Cashier-only exit approval">
-              This records the gate exit, updates the gate log and queues the handover follow-up.
-              The PRO cannot release this vehicle; only the cashier can confirm it here.
+              This records the cashier exit approval and notifies the PRO. The PRO then performs the
+              physical handover at the gate — the cashier cannot dispatch the vehicle.
             </Alert>
           </div>
         )}

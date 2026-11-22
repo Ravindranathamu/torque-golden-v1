@@ -23,6 +23,7 @@ import { LicenceLockPage } from "./pages/LicenceLock";
 import { DeveloperPortalPage } from "./pages/DeveloperPortal";
 import { licenceInfo } from "./lib/licence";
 import { featureFlagsFor } from "./lib/features";
+import { cloudConfigured } from "./lib/supabase";
 import type { Department, FeatureFlagKey } from "./types";
 
 function ProtectedShell() {
@@ -64,7 +65,7 @@ function RequireFeature({
 
 function PublicCheckInGate() {
   const { state } = useApp();
-  if (!state.settings.configured) return <Navigate to="/setup" replace />;
+  if (!state.settings.configured && !cloudConfigured) return <Navigate to="/setup" replace />;
   return <PublicCheckInPage />;
 }
 

@@ -91,8 +91,8 @@ values
   (
     'licence_plans',
     'Licensing',
-    '["Starter","Professional","Enterprise"]'::jsonb,
-    'RAVsoft licence plans.'
+    '["Lite","Starter","Growth","Pro","Enterprise"]'::jsonb,
+    'RAVBsoft licence plans.'
   ),
   (
     'release_channels',
@@ -107,7 +107,7 @@ on conflict (key) do nothing;
 -- ---------------------------------------------------------------------------
 create table if not exists public.golden_master_manifest (
   id text primary key,
-  schema_version text not null default '0001-0004',
+  schema_version text not null default '0001-0007',
   reference_version text not null default 'gm-ref-2026-11-14',
   app_version text not null default '1.4.0',
   client_data_allowed boolean not null default false,
@@ -119,7 +119,7 @@ insert into public.golden_master_manifest (
   id, schema_version, reference_version, app_version, client_data_allowed, notes
 ) values (
   'RAVSOFT-GM-V1',
-  '0001-0004',
+  '0001-0007',
   'gm-ref-2026-11-14',
   '1.4.0',
   false,

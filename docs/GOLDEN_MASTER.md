@@ -1,11 +1,27 @@
 # Golden master
 
-The **golden master** is the clean installation template that every RAVsoft
+The **golden master** is the clean installation template that every RAVBsoft
 client server is cloned from. It contains the production schema and the global
 reference lists the UI needs, and **no client data of any kind**.
 
 > Never onboard a real workshop into the golden-master project. Clone a fresh
 > Supabase project from it first, then run onboarding there.
+
+## Live template
+
+| Item | Value |
+| --- | --- |
+| Project | `ravsoft-golden-v1` |
+| Ref | `nydlpgucdwaifgvgrlib` |
+| Region | `ap-south-1` |
+| Verified | 2026-11-18 |
+| App version | `1.4.0` |
+| Schema version | `0001-0007` |
+| Tenant rows / auth users / storage objects | `0` / `0` / `0` |
+| Sign-ups | disabled |
+
+Verification results and the snapshot hash are recorded in
+[`docs/DEPLOYMENT_PLAN.md` §3.7](DEPLOYMENT_PLAN.md#37-live-golden-master-record).
 
 ---
 
@@ -13,7 +29,7 @@ reference lists the UI needs, and **no client data of any kind**.
 
 | Layer | Included in the golden master |
 | --- | --- |
-| Schema | All tables, views, functions, triggers, RLS policies and storage buckets from migrations `0001`–`0004`. |
+| Schema | All tables, views, functions, triggers, RLS policies and storage buckets from migrations `0001`–`0007`. |
 | Reference data | Expense and petty-cash categories, payment methods, service types, suggested vehicle makes, the Sri Lankan insurance directory, licence plans and release channels (`system_reference_data`). |
 | Release registry | `developer_releases` with the current stable release and `developer_update_runs` for the portal. |
 | Manifest | One `golden_master_manifest` row (`RAVSOFT-GM-V1`) recording schema, reference and app versions. |
@@ -55,6 +71,9 @@ of the golden master and is never inserted into the database.
    | `20261114000200_golden_master.sql` | Global reference seeds, manifest, clean-state verification. |
    | `20261114000300_security_hardening.sql` | Audit log, private PDF buckets, owner-only WhatsApp secrets, database licence enforcement. |
    | `20261114000400_portal_releases.sql` | Latest-release registry, update-run ledger and portal RPCs. |
+   | `20261114000500_app_records.sql` | Cloud app-records bridge for multi-device workshop data. |
+   | `20261114000600_portal_security.sql` | Portal admin role helpers and admin-only RLS. |
+   | `20261120000100_licence_pricing.sql` | Lite/Starter/Growth/Pro/Enterprise plans, per-client monthly fees and the RAVBsoft pricing reference. |
 
 3. Run the verification script as the service role:
 
@@ -64,7 +83,7 @@ of the golden master and is never inserted into the database.
 
 4. Confirm `has_client_data` is `false` and the row counts are all `0`.
 5. Take a database backup and store it as the golden-master snapshot.
-6. If the template also hosts the RAVsoft portal, keep the portal tables in a
+6. If the template also hosts the RAVBsoft portal, keep the portal tables in a
    separate project. The client template does not need portal write access.
 
 All migrations are additive and idempotent. Re-running them never overwrites
@@ -77,9 +96,10 @@ operator-customised reference values because the seeds use
 
 1. **Clone** the golden-master database into a new Supabase project — one
    project per client, never a shared schema. The canonical clone is a replay
-   of the verified migrations `0001`–`0004`; the `pg_dump` snapshot is for
-   audit and disaster recovery. If you use a physical restore, re-run `0003`
-   and `0004` so the private PDF buckets, policies and release registry exist.
+   of the verified migrations `0001`–`0007`; the `pg_dump` snapshot is for
+   audit and disaster recovery. If you use a physical restore, re-run `0003`,
+   `0004` and `0006` so the private PDF buckets, policies and release registry
+   exist.
 2. Set the client-specific environment variables:
    `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`, WhatsApp/WAHA values and the
    master licence URL.
@@ -89,7 +109,7 @@ operator-customised reference values because the seeds use
    user's JWT. This is the first and only `workshops` row in that project.
 5. Configure branding, printer routing, WAHA pairing, licence and modules in
    **Settings**.
-6. Register the installation in the RAVsoft portal with its installation ID,
+6. Register the installation in the RAVBsoft portal with its installation ID,
    server address, software name, plan and Git branch.
 7. Record the clone date and the app/reference versions in the portal notes.
 

@@ -483,7 +483,7 @@ export async function loadCloudContext(): Promise<CloudContext | null> {
   if (profileError) throw profileError;
   if (!profile) {
     throw new Error(
-      "This account has no workshop profile yet. Ask RAVsoft to provision the installation.",
+      "This account has no workshop profile yet. Ask RAVBsoft to provision the installation.",
     );
   }
 
@@ -496,7 +496,7 @@ export async function loadCloudContext(): Promise<CloudContext | null> {
   if (workshopError) throw workshopError;
   if (!workshop) {
     throw new Error(
-      "This account is linked to a missing workshop. Ask RAVsoft to repair the installation.",
+      "This account is linked to a missing workshop. Ask RAVBsoft to repair the installation.",
     );
   }
 

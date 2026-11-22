@@ -17,6 +17,9 @@ dist-ssr
 .env.*
 !.env.example
 
+# Database dumps and snapshot artifacts (never commit)
+/backups/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

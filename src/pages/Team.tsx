@@ -135,7 +135,7 @@ export function TeamPage() {
     }
     if (cloudMode) {
       push(
-        "Sign-in accounts live on the workshop server. Ask RAVsoft to create the Auth account, then assign its departments here.",
+        "Sign-in accounts live on the workshop server. Ask RAVBsoft to create the Auth account, then assign its departments here.",
       );
       return;
     }
@@ -282,7 +282,7 @@ export function TeamPage() {
     if (!removeTarget) return;
     if (cloudMode) {
       push(
-        "Removing a sign-in account is a server-side action. Suspend the profile instead, or ask RAVsoft to delete the Auth user.",
+        "Removing a sign-in account is a server-side action. Suspend the profile instead, or ask RAVBsoft to delete the Auth user.",
         "error",
       );
       setRemoveTarget(null);
@@ -624,7 +624,7 @@ export function TeamPage() {
                               disabled={!unlocked || cloudMode}
                               title={
                                 cloudMode
-                                  ? "Sign-in accounts are deleted on the workshop server by RAVsoft"
+                                  ? "Sign-in accounts are deleted on the workshop server by RAVBsoft"
                                   : "Remove account"
                               }
                             >

@@ -301,7 +301,7 @@ function CloudLoginPage() {
 
   async function submit() {
     if (!email.trim() || !password) {
-      setError("Enter the email and password issued by RAVsoft.");
+      setError("Enter the email and password issued by RAVBsoft.");
       return;
     }
     setBusy(true);
@@ -365,7 +365,7 @@ function CloudLoginPage() {
         <div className="auth-art-foot">
           <div className="row" style={{ gap: 7, color: "#a8c4c8" }}>
             <QrCode size={13} />
-            <span>Licensed by RAVsoft</span>
+            <span>Licensed by RAVBsoft</span>
           </div>
           <div style={{ marginTop: 7 }}>Torque ERP · cloud workshop · v1.4</div>
           <DeveloperCredit dark compact />
@@ -382,8 +382,8 @@ function CloudLoginPage() {
           </h1>
           <p className="sub">
             {cloudStatus === "unprovisioned"
-              ? "This account is not linked to a workshop yet. RAVsoft must create the workshop and owner profile first."
-              : "Use the email and password issued by RAVsoft. The app loads this workshop's data and keeps it in sync across devices."}
+              ? "This account is not linked to a workshop yet. RAVBsoft must create the workshop and owner profile first."
+              : "Use the email and password issued by RAVBsoft. The app loads this workshop's data and keeps it in sync across devices."}
           </p>
 
           {error && (
@@ -515,9 +515,9 @@ function CloudLoginPage() {
             <ShieldCheck />
             <div>
               <strong style={{ display: "block", color: "var(--ink-2)", marginBottom: 2 }}>
-                RAVsoft support
+                RAVBsoft support
               </strong>
-              If you have lost the workshop password, contact RAVsoft. Do not create a
+              If you have lost the workshop password, contact RAVBsoft. Do not create a
               new account.
             </div>
           </div>

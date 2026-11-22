@@ -42,7 +42,7 @@ export function LicenceLockPage() {
             {state.settings.licenseExpiresAt
               ? `The licence for ${state.settings.companyName} expired on ${shortDate(state.settings.licenseExpiresAt)}.`
               : `${state.settings.companyName} completed its ${TRIAL_DAYS}-day trial on ${trialEnd ? shortDate(trialEnd.toISOString()) : "record"}.`}{" "}
-            Your workshop data is safe. Enter the RAVsoft licence key for this installation to
+            Your workshop data is safe. Enter the RAVBsoft licence key for this installation to
             continue.
           </p>
 

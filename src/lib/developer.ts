@@ -1,5 +1,5 @@
 export const DEVELOPER = {
-  name: "RAVsoft",
+  name: "RAVBsoft",
   email: "ravindranath@hotmail.co.uk",
   phone: "+94755756803",
   phoneDisplay: "+94 75 575 6803",

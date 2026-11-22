@@ -325,17 +325,17 @@ export function SetupPage() {
             </span>
             <h1 style={{ marginTop: 12 }}>
               {cloudStatus === "unprovisioned"
-                ? "RAVsoft provisioning required"
+                ? "RAVBsoft provisioning required"
                 : cloudStatus === "loading"
                   ? "Loading the workshop"
                   : "Cloud sign-in required"}
             </h1>
             <p className="sub">
               {cloudStatus === "unprovisioned"
-                ? "This Supabase account is active, but it has no workshop profile yet. RAVsoft must create the workshop and owner profile before the app can start."
+                ? "This Supabase account is active, but it has no workshop profile yet. RAVBsoft must create the workshop and owner profile before the app can start."
                 : cloudStatus === "loading"
                   ? "Checking your Supabase session, workshop profile and licence."
-                  : "This client build reads its workshop from Supabase. Sign in with the account RAVsoft issued."}
+                  : "This client build reads its workshop from Supabase. Sign in with the account RAVBsoft issued."}
             </p>
             {cloudMessage && (
               <div style={{ marginTop: 14 }}>

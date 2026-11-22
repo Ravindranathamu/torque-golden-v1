@@ -10,6 +10,7 @@ import {
   MessageCircle,
   Package,
   Phone,
+  ReceiptText,
   Search,
   ShieldCheck,
   Truck,
@@ -305,6 +306,9 @@ export function HistoryPage() {
                     const totals = jobTotals(job, state.tasks, state.parts, state.workers);
                     const jobTasks = state.tasks.filter((task) => task.jobCardId === job.id);
                     const jobParts = state.parts.filter((part) => part.jobCardId === job.id);
+                    const jobBills = state.vehicleBills.filter(
+                      (bill) => bill.jobCardId === job.id,
+                    );
                     const serviceRecord = state.serviceRecords.find(
                       (record) => record.jobCardId === job.id,
                     );
@@ -436,6 +440,42 @@ export function HistoryPage() {
                               </>
                             )}
                           </div>
+
+                          {jobBills.length > 0 && (
+                            <div className="history-section" style={{ borderBottom: 0 }}>
+                              <div className="section-title">
+                                <span className="label">
+                                  <ReceiptText size={12} /> Separate bills
+                                </span>
+                                <span className="tiny muted">
+                                  {money(jobBills.reduce((sum, bill) => sum + bill.amount, 0))}
+                                </span>
+                              </div>
+                              {jobBills.map((bill) => (
+                                <div className="history-line" key={bill.id}>
+                                  <span>
+                                    {bill.billNo} · {bill.kind} bill
+                                    <small style={{ display: "block", marginTop: 2 }}>
+                                      {bill.status ?? (bill.paidAt ? "Paid" : "Unpaid")}
+                                      {bill.paymentMethod ? ` · ${bill.paymentMethod}` : ""}
+                                      {bill.releaseOrderNo
+                                        ? ` · Release order ${bill.releaseOrderNo}`
+                                        : ""}
+                                      {bill.paidAt ? ` · Paid ${shortDate(bill.paidAt)}` : ""}
+                                    </small>
+                                  </span>
+                                  <span style={{ textAlign: "right" }}>
+                                    {money(bill.amount)}
+                                    <small style={{ display: "block" }}>
+                                      {job.dispatchedAt
+                                        ? `Dispatched ${shortDate(job.dispatchedAt)}`
+                                        : "Vehicle still at workshop"}
+                                    </small>
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
 
                           {serviceRecord && (
                             <div className="history-section" style={{ borderBottom: 0 }}>

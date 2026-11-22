@@ -1,12 +1,12 @@
 # Golden master SQL
 
-This folder holds the clean-template verification for the RAVsoft golden master.
+This folder holds the clean-template verification for the RAVBsoft golden master.
 
 | File | Purpose |
 | --- | --- |
 | `verify.sql` | Fails if the template contains client rows, is missing reference seeds, has no manifest or has more than one latest release. |
 
-Run it with the service role after applying migrations `0001`–`0004` and before
+Run it with the service role after applying migrations `0001`–`0007` and before
 taking a snapshot:
 
 ```bash

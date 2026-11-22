@@ -176,7 +176,7 @@ export async function pollRemoteLicence(
       ok: true,
       configured: true,
       status: normaliseStatus(row.status),
-      plan: String(row.plan ?? "Professional"),
+      plan: String(row.plan ?? "Growth"),
       expiresAt: row.expires_at ? String(row.expires_at) : undefined,
       featureFlags: normaliseFlags(row.feature_flags),
       serverTime: String(row.server_time ?? new Date().toISOString()),
@@ -186,7 +186,7 @@ export async function pollRemoteLicence(
     writeLicenceCache({
       installationId,
       status: result.status ?? "Active",
-      plan: String(result.plan ?? "Professional"),
+      plan: String(result.plan ?? "Growth"),
       expiresAt: result.expiresAt,
       featureFlags: result.featureFlags ?? defaultFeatureFlags(),
       holder: result.holder,

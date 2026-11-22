@@ -1,10 +1,10 @@
 # `src/custom` — client override area
 
-RAVsoft keeps one shared core on `main`. A client that needs a bespoke layout,
+RAVBsoft keeps one shared core on `main`. A client that needs a bespoke layout,
 wording, approval step or integration gets its own branch:
 
 ```
-main                        RAVsoft core
+main                        RAVBsoft core
 client/WS-LK-XXXXXXXX       one branch per installed client
 ```
 
@@ -15,7 +15,7 @@ client/WS-LK-XXXXXXXX       one branch per installed client
 2. **One branch per installation.** The branch name uses the installation ID
    shown in Settings → Licence, for example `client/WS-LK-DEMO0001`.
 3. **Keep the portal in sync.** Record the branch, tick *Custom build* and add a
-   short customisation summary in the RAVsoft developer portal.
+   short customisation summary in the RAVBsoft developer portal.
 4. **Never put secrets here.** Use server-side environment variables for WAHA
    API keys, service-role keys and signing secrets.
 5. **Prefer configuration over code.** If a change can be a setting, feature

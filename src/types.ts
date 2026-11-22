@@ -196,8 +196,11 @@ export interface JobCard {
   releaseApprovedBy?: string;
   releaseApprovedAt?: string;
   releaseApprovalNote?: string;
+  /** Cashier has cleared the vehicle to leave; the PRO performs the actual handover. */
+  exitApprovedBy?: string;
+  exitApprovedAt?: string;
   dispatchedBy?: string;
-  /** PRO gate override — vehicle left without payment. */
+  /** Cashier gate override — vehicle left without payment. */
   billingOverrideReason?: string;
   billingOverrideBy?: string;
   billingOverrideAt?: string;
@@ -271,8 +274,8 @@ export interface JobPart {
   updatedAt: string;
   /** Split bill this part was ticked onto. */
   assignedBillId?: string;
-  /** Insurance job only — supplied by the customer, never deducted from stores. */
-  partSource?: "Workshop_Store" | "Customer_Brought";
+  /** Store-supplied, customer-supplied, or a part Stores must buy in from outside. */
+  partSource?: "Workshop_Store" | "Customer_Brought" | "Outside_Purchase";
   /** Customer-brought part handed back / swapped back to the owner. */
   customerReturnAt?: string;
   customerReturnMode?: "Return" | "Swap";
@@ -721,7 +724,7 @@ export type ThermalPaperWidth = "58mm" | "80mm";
 export type StandardPaperSize = "A4" | "A5";
 
 export type LicenceStatus = "Trial" | "Active" | "Suspended" | "Expired";
-export type LicencePlan = "Starter" | "Professional" | "Enterprise";
+export type LicencePlan = "Lite" | "Starter" | "Growth" | "Pro" | "Enterprise";
 
 export interface WorkshopSettings {
   companyName: string;
@@ -734,6 +737,8 @@ export interface WorkshopSettings {
   googleReviewUrl: string;
   currency: string;
   qrSlug: string;
+  /** Public app URL used inside printed QR codes. Falls back to the current origin. */
+  publicBaseUrl?: string;
   ownerPassword: string;
   /** Owner's opening capital; shown as equity in the trial balance. */
   ownerCapital?: number;

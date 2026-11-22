@@ -28,6 +28,7 @@ import {
   Send,
   ShieldAlert,
   ShieldCheck,
+  ShoppingCart,
   Trash2,
   UserRound,
   Wallet,
@@ -102,6 +103,7 @@ export function JobDetailPage() {
     updateTask,
     removeTask,
     requestPart,
+    requestOutsidePart,
     addCustomerBroughtPart,
     removePart,
     requestExchange,
@@ -166,13 +168,16 @@ export function JobDetailPage() {
   const [splitExcess, setSplitExcess] = useState("0");
   const [splitDepreciation, setSplitDepreciation] = useState("0");
   const [splitNotes, setSplitNotes] = useState("");
-  const [partSource, setPartSource] = useState<"Workshop_Store" | "Customer_Brought">(
-    "Workshop_Store",
-  );
+  const [partSource, setPartSource] = useState<
+    "Workshop_Store" | "Customer_Brought" | "Outside_Purchase"
+  >("Workshop_Store");
   const [partExtra, setPartExtra] = useState(false);
   const [customerPartName, setCustomerPartName] = useState("");
   const [customerPartQty, setCustomerPartQty] = useState("1");
   const [customerPartValue, setCustomerPartValue] = useState("");
+  const [outsidePartName, setOutsidePartName] = useState("");
+  const [outsidePartQty, setOutsidePartQty] = useState("1");
+  const [outsidePartUnit, setOutsidePartUnit] = useState("pc");
   const [readdPartId, setReaddPartId] = useState<string | null>(null);
   const [readdQty, setReaddQty] = useState("1");
   const [readdSearch, setReaddSearch] = useState("");
@@ -1023,6 +1028,9 @@ export function JobDetailPage() {
     setCustomerPartName("");
     setCustomerPartQty("1");
     setCustomerPartValue("");
+    setOutsidePartName("");
+    setOutsidePartQty("1");
+    setOutsidePartUnit("pc");
     setPartOpen(true);
   }
 
@@ -1039,6 +1047,23 @@ export function JobDetailPage() {
     }
     push(
       `${customerPartName.trim()} added as customer-brought. Insurance bill only — no stock deduction.`,
+    );
+    setPartOpen(false);
+  }
+
+  function sendOutsidePartRequest() {
+    const result = requestOutsidePart(activeJob.id, {
+      name: outsidePartName,
+      qty: Number(outsidePartQty),
+      unit: outsidePartUnit,
+      sectionId: partSectionId || undefined,
+    });
+    if (!result.ok) {
+      push(result.message ?? "Could not send the outside purchase request.", "error");
+      return;
+    }
+    push(
+      `${outsidePartName.trim()} sent to Stores as an outside purchase request. Stores will buy it in and issue it to this job.`,
     );
     setPartOpen(false);
   }
@@ -3417,6 +3442,15 @@ export function JobDetailPage() {
                 <Package />
                 Add customer-brought part
               </button>
+            ) : partSource === "Outside_Purchase" ? (
+              <button
+                className="btn btn-primary"
+                onClick={sendOutsidePartRequest}
+                disabled={!outsidePartName.trim()}
+              >
+                <ShoppingCart />
+                Send outside purchase request
+              </button>
             ) : (
               <button className="btn btn-primary" onClick={sendPartRequest} disabled={!selectedItem}>
                 <Package />
@@ -3427,16 +3461,24 @@ export function JobDetailPage() {
         }
       >
         <div className="stack">
-          {claim && (
-            <div className="row wrap" style={{ gap: 8 }}>
-              <button
-                type="button"
-                className={`btn btn-sm ${partSource === "Workshop_Store" ? "btn-primary" : "btn-secondary"}`}
-                onClick={() => setPartSource("Workshop_Store")}
-              >
-                <Package />
-                Workshop store
-              </button>
+          <div className="row wrap" style={{ gap: 8 }}>
+            <button
+              type="button"
+              className={`btn btn-sm ${partSource === "Workshop_Store" ? "btn-primary" : "btn-secondary"}`}
+              onClick={() => setPartSource("Workshop_Store")}
+            >
+              <Package />
+              Workshop store
+            </button>
+            <button
+              type="button"
+              className={`btn btn-sm ${partSource === "Outside_Purchase" ? "btn-primary" : "btn-secondary"}`}
+              onClick={() => setPartSource("Outside_Purchase")}
+            >
+              <ShoppingCart />
+              Not in store — outside purchase
+            </button>
+            {claim && (
               <button
                 type="button"
                 className={`btn btn-sm ${partSource === "Customer_Brought" ? "btn-primary" : "btn-secondary"}`}
@@ -3445,8 +3487,8 @@ export function JobDetailPage() {
                 <UserRound />
                 Customer brought
               </button>
-            </div>
-          )}
+            )}
+          </div>
           {partSource === "Customer_Brought" ? (
             <>
               <Alert tone="info" title="Customer-supplied part">
@@ -3498,6 +3540,70 @@ export function JobDetailPage() {
                     </select>
                   </Field>
                 )}
+              </div>
+            </>
+          ) : partSource === "Outside_Purchase" ? (
+            <>
+              <Alert tone="info" title="Part not stocked — Stores will buy it in">
+                Describe the exact part the vehicle needs. Stores receives the request
+                immediately, buys it from an outside supplier at issue time, records the
+                supplier invoice and issues it to this job. Nothing is deducted from stock.
+              </Alert>
+              <div className="form-grid">
+                <Field
+                  label="Part description"
+                  required
+                  full
+                  hint="Include brand, part number or any detail the supplier will need."
+                >
+                  <input
+                    className="input"
+                    placeholder="e.g. Toyota Vezel front lower arm — right side"
+                    value={outsidePartName}
+                    onChange={(event) => setOutsidePartName(event.target.value)}
+                    autoFocus
+                  />
+                </Field>
+                <Field label="Quantity" required>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0.001}
+                    step="any"
+                    value={outsidePartQty}
+                    onChange={(event) => setOutsidePartQty(event.target.value)}
+                  />
+                </Field>
+                <Field label="Unit" hint="pc, set, litre, kg…">
+                  <input
+                    className="input"
+                    value={outsidePartUnit}
+                    onChange={(event) => setOutsidePartUnit(event.target.value)}
+                  />
+                </Field>
+                {sectionsEnabled && (
+                  <Field label="Section">
+                    <select
+                      className="select"
+                      value={partSectionId}
+                      onChange={(event) => setPartSectionId(event.target.value)}
+                    >
+                      <option value="">Unassigned</option>
+                      {activeSections.map((section) => (
+                        <option key={section.id} value={section.id}>
+                          {section.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                )}
+              </div>
+              <div className="alert alert-warn">
+                <ShoppingCart />
+                <div>
+                  Stores sets the supplier cost, margin and final selling price when the part is
+                  purchased and issued. The job and customer invoice update automatically.
+                </div>
               </div>
             </>
           ) : (

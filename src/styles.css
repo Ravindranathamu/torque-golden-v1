@@ -3533,8 +3533,134 @@ table.data tbody tr:hover {
 
 .text-amber { color: #b45309 !important; }
 
+/* ---------- Portal plan cards ---------- */
+.developer-plan-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(185px, 1fr));
+  gap: 10px;
+}
+.developer-plan-card {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: #fbfdfd;
+}
+.developer-plan-card strong { font-size: 13px; }
+.developer-plan-price {
+  font-size: 23px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  line-height: 1.1;
+}
+.developer-plan-price span {
+  margin-left: 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted);
+  letter-spacing: 0;
+}
+.developer-plan-card p { margin: 2px 0; line-height: 1.45; }
+
+.developer-logo {
+  width: 44px;
+  height: 44px;
+  flex: 0 0 44px;
+  border-radius: 10px;
+  object-fit: cover;
+  object-position: 50% 32%;
+  border: 1px solid rgba(255, 255, 255, 0.22);
+  box-shadow: 0 4px 12px rgba(2, 6, 23, 0.28);
+}
+
+.developer-hero-side {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.developer-product-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px 8px 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.94);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  max-width: 340px;
+}
+.developer-product-badge img {
+  width: 116px;
+  height: 76px;
+  object-fit: contain;
+  object-position: center;
+  flex: 0 0 116px;
+  border-radius: 0;
+  background: transparent;
+}
+.developer-product-badge strong {
+  display: block;
+  color: #0f172a;
+  font-size: 12.5px;
+}
+.developer-product-badge span {
+  display: block;
+  color: #64748b;
+  font-size: 9.5px;
+  line-height: 1.35;
+}
+
 @keyframes torque-spin { to { transform: rotate(360deg); } }
 .spin { animation: torque-spin 0.9s linear infinite; }
+
+@media (max-width: 720px) {
+  /* Dense report tables keep their headers and scroll inside the card. */
+  table.data:not(.attendance-table) { font-size: 12px; }
+  table.data:not(.attendance-table) th { padding: 8px 10px; }
+  table.data:not(.attendance-table) td { padding: 9px 10px; }
+
+  /* Attendance becomes stacked cards so phones never scroll sideways. */
+  .table-cards { overflow-x: visible; }
+  .attendance-table { display: block; width: 100%; font-size: 12.5px; }
+  .attendance-table thead { display: none; }
+  .attendance-table tbody,
+  .attendance-table tr,
+  .attendance-table td { display: block; width: 100%; }
+  .attendance-table tr {
+    margin: 0 0 10px;
+    padding: 8px 12px;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: #fff;
+  }
+  .attendance-table tr:hover { background: #fff; }
+  .attendance-table td {
+    padding: 6px 0;
+    border-bottom: 1px dashed #e8eef1;
+    white-space: normal;
+    text-align: left;
+    overflow-wrap: anywhere;
+  }
+  .attendance-table td:last-child { border-bottom: 0; }
+  .attendance-table td:empty { display: none; }
+  .attendance-table td.num { text-align: left; white-space: normal; }
+  .attendance-table td[data-label]::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 3px;
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .attendance-table td[data-label="Mark today"] .btn { flex: 1 1 auto; }
+  .developer-plan-grid { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+}
 
 @media (max-width: 640px) {
   .developer-topbar { padding: 10px 14px; }

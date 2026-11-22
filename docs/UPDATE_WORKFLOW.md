@@ -1,6 +1,6 @@
 # Client update workflow
 
-RAVsoft ships one shared core on `main` and keeps each client isolated on its
+RAVBsoft ships one shared core on `main` and keeps each client isolated on its
 own server and Git branch. Updates merge the core into the client branch, apply
 additive database migrations and preserve every client row.
 
@@ -9,7 +9,7 @@ additive database migrations and preserve every client row.
 ## Branch model
 
 ```
-main                     RAVsoft core, shared by every installation
+main                     RAVBsoft core, shared by every installation
 client/WS-LK-XXXXXXXX    one branch per installed client
 ```
 

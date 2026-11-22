@@ -1,5 +1,5 @@
 -- ============================================================================
--- 0004 — RAVsoft master portal: release registry and one-click update runs
+-- 0004 — RAVBsoft master portal: release registry and one-click update runs
 --
 -- The portal already tracks each client installation. This migration adds the
 -- shared latest-release registry and an auditable update-run ledger so a deploy
@@ -36,7 +36,7 @@ insert into public.developer_releases (
     '2026-11-10',
     'Reservations, demo routing and thermal vouchers',
     'Booking links, supervisor review, WAHA settings, demo-mode override, thermal payslip/supplier/petty-cash vouchers.',
-    array['20261114000100_schema.sql','20261114000200_golden_master.sql','20261114000300_security_hardening.sql','20261114000400_portal_releases.sql','20261114000500_app_records.sql','20261114000600_portal_security.sql'],
+    array['20261114000100_schema.sql','20261114000200_golden_master.sql','20261114000300_security_hardening.sql','20261114000400_portal_releases.sql','20261114000500_app_records.sql','20261114000600_portal_security.sql','20261120000100_licence_pricing.sql'],
     'Stable',
     true,
     'Core release. Additive migrations only.'
@@ -158,7 +158,7 @@ begin
     v_client.app_version,
     v_version,
     'Queued',
-    'RAVsoft portal',
+    'RAVBsoft portal',
     case when v_client.deploy_webhook_url is null then 'Not configured' else 'Pending' end
   )
   returning id into v_run;
@@ -223,7 +223,7 @@ begin
        set app_version = v_run.to_version,
            latest_version = v_run.to_version,
            last_deployed_at = now(),
-           last_deployed_by = 'RAVsoft portal',
+           last_deployed_by = 'RAVBsoft portal',
            updated_at = now()
      where id = v_run.client_id;
     v_ok := true;

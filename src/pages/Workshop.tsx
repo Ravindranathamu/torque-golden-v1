@@ -326,8 +326,8 @@ export function WorkshopPage() {
             )}
           </div>
         </div>
-        <div className="table-wrap">
-          <table className="data">
+        <div className="table-wrap table-cards">
+          <table className="data attendance-table">
             <thead>
               <tr>
                 <th>Worker</th>
@@ -343,7 +343,7 @@ export function WorkshopPage() {
                 const status = record?.status ?? "Not marked";
                 return (
                   <tr key={worker.id}>
-                    <td>
+                    <td data-label="Worker">
                       <div className="cell-main">{worker.fullName}</div>
                       <div className="cell-sub">{worker.phone}</div>
                       {sectionsEnabled && (
@@ -355,13 +355,13 @@ export function WorkshopPage() {
                         </div>
                       )}
                     </td>
-                    <td className="tiny">
+                    <td className="tiny" data-label="Pay basis">
                       {worker.payType === "Daily"
                         ? `Daily · ${money(worker.dailyRate)}`
                         : `Monthly · ${money(worker.baseSalary)}${worker.epfEnabled ? " · EPF" : ""}${worker.etfEnabled ? " · ETF" : ""}`}
                     </td>
-                    <td className="num">{worker.allowedOffDaysPerMonth}</td>
-                    <td>
+                    <td className="num" data-label="Allowed off days">{worker.allowedOffDaysPerMonth}</td>
+                    <td data-label="Status">
                       <span
                         className={`badge ${
                           status === "Present"
@@ -377,7 +377,7 @@ export function WorkshopPage() {
                       </span>
                       {record?.markedBy && <div className="cell-sub">{record.markedBy}</div>}
                     </td>
-                    <td>
+                    <td data-label="Mark today">
                       {canMarkAttendance ? (
                         <div className="row wrap" style={{ gap: 4 }}>
                           {(["Present", "Absent", "Off Day"] as const).map((option) => (

@@ -52,7 +52,7 @@ import {
 } from "../lib/licence";
 import { readLicenceCache } from "../lib/licenceSync";
 import { FEATURE_FLAGS, MODULE_PRESETS, featureFlagsFor } from "../lib/features";
-import { dateOnly, money, shortDate, waLink } from "../lib/utils";
+import { checkInUrl as buildCheckInUrl, dateOnly, money, shortDate, waLink } from "../lib/utils";
 import { printPrinterTest } from "../lib/invoice";
 import { STORAGE_KEY } from "../data/seed";
 import {
@@ -157,6 +157,7 @@ export function SettingsPage() {
   });
   const [uploading, setUploading] = useState(false);
   const [qrSlug, setQrSlug] = useState(settings.qrSlug);
+  const [publicBaseUrl, setPublicBaseUrl] = useState(settings.publicBaseUrl ?? "");
   const [qrData, setQrData] = useState("");
   const [passwordForm, setPasswordForm] = useState({
     current: "",
@@ -214,7 +215,7 @@ export function SettingsPage() {
   const storekeepers = state.users.filter((user) => user.departments.includes("Stores"));
   const activeWorkers = state.workers.filter((worker) => worker.status === "Active");
 
-  const checkInUrl = `${window.location.origin}/check-in/${qrSlug || "workshop"}`;
+  const checkInUrl = buildCheckInUrl({ publicBaseUrl: settings.publicBaseUrl, qrSlug });
   const backupSize = useMemo(
     () => new Blob([JSON.stringify(state)]).size,
     [state],
@@ -316,8 +317,14 @@ export function SettingsPage() {
       push("Enter a valid check-in link name.", "error");
       return;
     }
-    updateSettings({ qrSlug: slug });
+    const base = publicBaseUrl.trim().replace(/\/+$/, "");
+    if (base && !/^https?:\/\/[^/\s]+/i.test(base)) {
+      push("Public app URL must start with http:// or https://.", "error");
+      return;
+    }
+    updateSettings({ qrSlug: slug, publicBaseUrl: base || undefined });
     setQrSlug(slug);
+    setPublicBaseUrl(base);
     push("Check-in link updated. Reprint any QR posters that used the old link.");
   }
 
@@ -1174,6 +1181,17 @@ export function SettingsPage() {
                     onChange={(event) => setQrSlug(event.target.value)}
                   />
                 </div>
+              </Field>
+              <Field
+                label="Public app URL"
+                hint="Used inside the printed QR. Set the live client URL when you print from a local or demo copy. Leave blank to use this browser's address."
+              >
+                <input
+                  className="input"
+                  placeholder="https://erp.yourworkshop.lk"
+                  value={publicBaseUrl}
+                  onChange={(event) => setPublicBaseUrl(event.target.value)}
+                />
               </Field>
               <div className="row wrap">
                 <button className="btn btn-primary" onClick={saveQrSlug}>
@@ -2075,7 +2093,7 @@ export function SettingsPage() {
             <div className="card-head">
               <div>
                 <h3>Licence & activation</h3>
-                <p>30-day trial, then activate this installation with a RAVsoft licence key.</p>
+                <p>30-day trial, then activate this installation with a RAVBsoft licence key.</p>
               </div>
               <span
                 className={`badge ${
@@ -2292,7 +2310,7 @@ export function SettingsPage() {
             <div className="alert alert-brand">
               <Sparkles />
               <div>
-                <strong>RAVsoft client installations</strong>
+                <strong>RAVBsoft client installations</strong>
                 Each client receives its own licence key bound to its machine ID. Contact{" "}
                 {DEVELOPER.email} · {DEVELOPER.phoneDisplay} for pricing and renewals.
               </div>

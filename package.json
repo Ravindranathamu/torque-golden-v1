@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.4.0",
   "description": "Mobile-first automobile workshop ERP, billing and stock management PWA",
-  "author": "RavSoft <ravindranath@hotmail.co.uk>",
+  "author": "RAVBsoft <ravindranath@hotmail.co.uk>",
   "type": "module",
   "scripts": {
     "dev": "vite",

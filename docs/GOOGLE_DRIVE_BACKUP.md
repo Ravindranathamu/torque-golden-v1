@@ -34,7 +34,7 @@ it contains staff PINs and the local owner password in demo mode.
 ## 1. Create the Drive folder
 
 1. Open Google Drive with the workshop account.
-2. Create a folder such as `RAVsoft Backups`.
+2. Create a folder such as `RAVBsoft Backups`.
 3. Copy the folder ID from the URL:
    `https://drive.google.com/drive/folders/<FOLDER_ID>`.
 

@@ -11,7 +11,7 @@ The repository ships with a **fully working demo** that runs without a backend,
 plus a **production Supabase schema** and a **self-hosted WAHA WhatsApp
 gateway** (with an optional Meta Cloud API scaffold) for going live. Client
 installations start on a **30-day trial** and are activated with an offline
-RAVsoft licence key.
+RAVBsoft licence key.
 
 Every worker can hold a fixed basic salary plus labour commission, with optional
 EPF/ETF, salary advances and staff loans. Two or three technicians can share one
@@ -22,7 +22,7 @@ Sri Lankan labour price catalogue, supplier invoice numbers, warranty returns,
 morning attendance, daily wage payouts and optional driver commissions are built
 in.
 
-**Developed and maintained by RAVsoft.**  
+**Developed and maintained by RAVBsoft.**  
 Email: [ravindranath@hotmail.co.uk](mailto:ravindranath@hotmail.co.uk) · Phone:
 [+94 75 575 6803](tel:+94755756803)
 
@@ -54,11 +54,11 @@ Every staff account uses PIN **`1234`**.
 The owner master password is **`owner123`**. It unlocks Team & HR salary editing
 and owner-only security actions.
 
-The **RAVsoft developer portal** is at <http://localhost:5173/developer> in
+The **RAVBsoft developer portal** is at <http://localhost:5173/developer> in
 development and <https://ravsoft-portal.pages.dev/developer> in production. It
 sits outside the staff shell and signs in through Supabase Auth against the
 separate master database (`ravsoft-portal-prod`); use it to register client
-installations for any RAVsoft app, renew or suspend licences, switch modules
+installations for any RAVBsoft app, renew or suspend licences, switch modules
 remotely and generate signed offline tokens.
 
 > Demo data lives in `localStorage`. Use **Settings → Data & backup** to export a
@@ -356,7 +356,7 @@ numbers, salvage, insurance status, workers/tasks and driver commission).
   the installation ID, plan, expiry and module flags, and a 7-day offline grace
   period from the last successful check. Clock rollback is detected and forces a
   fresh online check before operations resume.
-- **RAVsoft developer portal** at `/developer`: fleet KPIs, searchable client
+- **RAVBsoft developer portal** at `/developer`: fleet KPIs, searchable client
   registry, client registration with software name and server address, activate/
   renew/suspend licensing, LKR payment log, remote module switches, offline token
   generator and WhatsApp renewal reminders. The demo registry is local
@@ -488,7 +488,7 @@ environment wiring, follow **[docs/DEPLOYMENT_PLAN.md](docs/DEPLOYMENT_PLAN.md)*
 
 In short:
 
-1. **Supabase** — create a project and run all six migrations in order:
+1. **Supabase** — create a project and run all seven migrations in order:
    `20261114000100_schema.sql`, `20261114000200_golden_master.sql`,
    `20261114000300_security_hardening.sql`, `20261114000400_portal_releases.sql`,
    `20261114000500_app_records.sql`, `20261114000600_portal_security.sql`. Verify
@@ -514,7 +514,7 @@ In short:
    then activate it on the workshop. A new key with a later expiry renews the
    licence; the demo workshop stays available for evaluation.
 7. **Master portal** — create a separate Supabase project for the developer
-   portal and run all six migrations. They include
+   portal and run all seven migrations. They include
    `developer_client_installations`, `developer_license_payments`,
    `poll_workshop_license`, the release registry, the update-run RPCs and the
    admin-only RLS from `20261114000600_portal_security.sql`. Create the admin Auth
@@ -532,9 +532,12 @@ In short:
 ### Golden master and client updates
 
 - The **golden master** is the clean template: full schema, global reference
-  seeds and no client rows. Verify it with
+  seeds and no client rows. The live template is `ravsoft-golden-v1`
+  (`nydlpgucdwaifgvgrlib`, `ap-south-1`): 0 tenant rows, 0 auth users, 0 storage
+  objects, release `1.4.0`, all seven migrations applied. Verify any copy with
   `supabase/golden-master/verify.sql` before every snapshot. See
-  [docs/GOLDEN_MASTER.md](docs/GOLDEN_MASTER.md).
+  [docs/GOLDEN_MASTER.md](docs/GOLDEN_MASTER.md) and
+  [docs/DEPLOYMENT_PLAN.md §3.7](docs/DEPLOYMENT_PLAN.md#37-live-golden-master-record).
 - Each client keeps its own server and branch,
   `client/<installation-id>`. Client-specific code lives in `src/custom` so core
   releases merge cleanly from `main`.
@@ -558,7 +561,7 @@ In short:
 - WhatsApp template messages must be approved by Meta when using the Cloud API
   gateway. WAHA sends through the paired WhatsApp Web session, so keep the
   company number active and respect WhatsApp's anti-spam rules. Demo mode routes
-  all outbound messages to the RAVsoft test number.
+  all outbound messages to the RAVBsoft test number.
 - Back up `localStorage` data before switching to Supabase; there is no automatic
   migration from the demo store.
 - The demo licence check runs in the browser so it can be evaluated offline.
@@ -587,17 +590,17 @@ new version, users receive the updated shell on their next navigation.
 
 ## Developer & support
 
-Torque ERP is developed and maintained by **RAVsoft**.
+Torque ERP is developed and maintained by **RAVBsoft**.
 
 - **Email:** [ravindranath@hotmail.co.uk](mailto:ravindranath@hotmail.co.uk)
 - **Phone:** [+94 75 575 6803](tel:+94755756803)
 
-Contact RAVsoft for production setup, Supabase integration, Google Drive photo
+Contact RAVBsoft for production setup, Supabase integration, Google Drive photo
 storage, WhatsApp messaging, workshop-specific customisations or licensing.
 
 ## Copyright
 
-Copyright © 2026 RAVsoft. All rights reserved.
+Copyright © 2026 RAVBsoft. All rights reserved.
 
 Torque ERP and its source code may not be copied, redistributed or resold
-without written permission from RAVsoft.
+without written permission from RAVBsoft.

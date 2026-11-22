@@ -1,6 +1,6 @@
-# RAVsoft deployment plan
+# RAVBsoft deployment plan
 
-**Scope:** deploy the RAVsoft developer portal first, then the clean golden-master
+**Scope:** deploy the RAVBsoft developer portal first, then the clean golden-master
 template, then the first isolated client installation — each on its own server
 and Supabase project — and wire them together.
 
@@ -23,7 +23,7 @@ below are the remaining cutover work.
 | **G2 — Portal admin security** | Closed in code | `20261114000600_portal_security.sql` removes anon access, adds `is_portal_admin()` policies and admin wrappers. The portal signs in with Supabase Auth and writes with the session JWT. | With the anon key, `select * from developer_client_installations` must fail or return nothing. A non-admin Auth user must be rejected. An admin must read and write. |
 | **G3 — Installation ID match** | Closed in code | The registration form accepts the app's ID; `portal_change_installation_id` repoints payments and update runs. | Copy the ID from the client **Settings → Licence**, register it, then confirm `poll_workshop_license` returns the plan and expiry. |
 | **G4 — Update audit wiring** | Closed in code | **Deploy latest** calls `portal_request_client_update` first, fires the webhook with the run ID, then calls `portal_record_client_update_result`; only `Deployed` promotes `app_version`. | Deploy a test client and confirm one `developer_update_runs` row, then confirm `app_version` changes only after `Deployed`. |
-| **G5 — CLI migration names** | Closed | All six migrations use `<14-digit timestamp>_name.sql`; `supabase db push` is now a first-class option (§2.2). | `supabase_migrations.schema_migrations` shows six rows ending in `20261114000600`. |
+| **G5 — CLI migration names** | Closed | All seven migrations use `<14-digit timestamp>_name.sql`; `supabase db push` is now a first-class option (§2.2). | `supabase_migrations.schema_migrations` shows seven rows ending in `20261120000100`. |
 | **G6 — Git remote** | Closed locally | The workspace is a Git repository with an initial commit. | Add the private remote and push `main`: `git remote add origin <url>` then `git push -u origin main`. |
 | **G7 — PWA shortcut** | Closed | `public/manifest.webmanifest` opens `/check-in`, which resolves the signed-in or configured workshop slug. | Install the PWA and confirm the shortcut lands on the client's check-in form. |
 
@@ -44,10 +44,10 @@ below are the remaining cutover work.
 
 ### 0.1 Server map
 
-| Component | RAVsoft server | Golden-master server | First client server |
+| Component | RAVBsoft server | Golden-master server | First client server |
 | --- | --- | --- | --- |
 | Frontend | `https://portal.ravsoft.lk` (live: `https://ravsoft-portal.pages.dev`) | none | `https://erp.<client-domain>` |
-| Supabase project | `ravsoft-portal-prod` (live: `cnxlrprxlcfgfcmniipw`) | `ravsoft-golden-v1` | `ravsoft-client-<shortcode>` |
+| Supabase project | `ravsoft-portal-prod` (live: `cnxlrprxlcfgfcmniipw`) | `ravsoft-golden-v1` (live: `nydlpgucdwaifgvgrlib`) | `ravsoft-client-<shortcode>` |
 | Database / Auth / Storage | Portal only | Clean template only | Client only |
 | WhatsApp | none | none | `https://waha.<client-domain>` |
 | Deploy receiver | `https://deploy.ravsoft.lk` | none | none |
@@ -81,7 +81,7 @@ Client browser
   ├─ HTTPS → portal Supabase  POST /rest/v1/rpc/poll_workshop_license
   └─ HTTPS → client WAHA      /api/sendText, /api/sendFile
 
-RAVsoft browser
+RAVBsoft browser
   └─ HTTPS → portal Supabase (licence registry, payments, releases)
 
 Trusted deploy receiver
@@ -168,7 +168,7 @@ client branches:
 ```powershell
 git init
 git add .
-git commit -m "chore: RAVsoft 1.4.0 baseline"
+git commit -m "chore: RAVBsoft 1.4.0 baseline"
 git branch -M main
 git remote add origin <PRIVATE_REPO_URL>
 git push -u origin main
@@ -203,9 +203,9 @@ Replace these consistently:
 
 ---
 
-## 2. Phase 1 — RAVsoft developer portal
+## 2. Phase 1 — RAVBsoft developer portal
 
-**Goal:** a RAVsoft-branded, multi-app portal on its own Supabase project, with
+**Goal:** a RAVBsoft-branded, multi-app portal on its own Supabase project, with
 release `1.4.0` published and the licence RPC reachable by clients.
 
 ### 2.1 Create the portal Supabase project
@@ -225,7 +225,7 @@ release `1.4.0` published and the licence RPC reachable by clients.
 
 ### 2.2 Apply the migrations
 
-Apply all six files **in order**. They are additive and idempotent.
+Apply all seven files **in order**. They are additive and idempotent.
 
 | Order | File |
 | --- | --- |
@@ -235,12 +235,13 @@ Apply all six files **in order**. They are additive and idempotent.
 | 4 | `supabase/migrations/20261114000400_portal_releases.sql` |
 | 5 | `supabase/migrations/20261114000500_app_records.sql` |
 | 6 | `supabase/migrations/20261114000600_portal_security.sql` |
+| 7 | `supabase/migrations/20261120000100_licence_pricing.sql` |
 
 **Option A — SQL editor:**
 
 1. Open **SQL Editor**.
 2. Paste `20261114000100_schema.sql`, click **Run**, wait for success.
-3. Repeat for `20261114000200` through `20261114000600`.
+3. Repeat for `20261114000200` through `20261120000100`.
 4. If any file fails, stop and fix the error before continuing.
 
 **Option B — `psql`:**
@@ -255,6 +256,7 @@ psql $PORTAL_DB -v ON_ERROR_STOP=1 -f .\supabase\migrations\20261114000300_secur
 psql $PORTAL_DB -v ON_ERROR_STOP=1 -f .\supabase\migrations\20261114000400_portal_releases.sql
 psql $PORTAL_DB -v ON_ERROR_STOP=1 -f .\supabase\migrations\20261114000500_app_records.sql
 psql $PORTAL_DB -v ON_ERROR_STOP=1 -f .\supabase\migrations\20261114000600_portal_security.sql
+psql $PORTAL_DB -v ON_ERROR_STOP=1 -f .\supabase\migrations\20261120000100_licence_pricing.sql
 ```
 
 If the password contains `@`, `:`, `/` or `#`, URL-encode it before putting it
@@ -278,7 +280,7 @@ select version, name
  order by version;
 ```
 
-Expect six rows ending in `20261114000600`. Never rename a migration that has
+Expect seven rows ending in `20261120000100`. Never rename a migration that has
 already been applied: the CLI matches history by filename. If a database was
 built from the old `0001_…` names, treat it as already migrated and stamp the
 timestamped versions before using `db push` again, or keep using Option A/B for
@@ -366,7 +368,7 @@ Expected:
      - `https://portal.ravsoft.lk/**`
      - `https://ravsoft-portal.pages.dev/**`
      - `http://localhost:4173/**` and `http://localhost:5173/**` (local only)
-3. **Authentication → Users → Add user**: create the RAVsoft developer account,
+3. **Authentication → Users → Add user**: create the RAVBsoft developer account,
    auto-confirm it and set a strong password.
 4. Set `app_metadata.role = "ravsoft_admin"` on that user. The dashboard cannot
    edit `app_metadata`; use the Admin API with the service-role or secret key:
@@ -464,7 +466,7 @@ Then:
 1. Add the custom domain `portal.ravsoft.lk` in the Pages project.
 2. Wait for the TLS certificate.
 3. Open `https://portal.ravsoft.lk/developer`.
-4. Confirm the header says **RAVsoft** and the badge says **Master DB**.
+4. Confirm the header says **RAVBsoft** and the badge says **Master DB**.
 
 ### 2.5.1 Live portal record
 
@@ -487,7 +489,7 @@ Filled in on 2026-11-18. Keep this table current when the project or host moves.
 
 Portal prerequisites for a fresh environment:
 
-1. All six migrations applied in order (§2.2).
+1. All seven migrations applied in order (§2.2).
 2. An Auth user with `app_metadata.role = "ravsoft_admin"`. Without it the portal
    shows *Admin role required* and RLS rejects every read and write.
 3. `.env.portal` populated from the project URL and publishable key.
@@ -549,7 +551,7 @@ Run these against the live URL (`https://ravsoft-portal.pages.dev/developer`
 until a custom domain is added):
 
 - [ ] The URL loads over HTTPS and `/developer` does not 404 (SPA rewrite).
-- [ ] The RAVsoft mark and **Developer portal** title are visible.
+- [ ] The RAVBsoft mark and **Developer portal** title are visible.
 - [ ] Before sign-in the badge reads **Portal sign-in required**.
 - [ ] After sign-in the badge reads **Master DB · \<admin email\>**.
 - [ ] A non-admin Auth user is rejected with *Admin role required*.
@@ -667,7 +669,7 @@ RPC a client calls.
 ### Phase 1 checklist
 
 - [x] Portal Supabase project created (`cnxlrprxlcfgfcmniipw`, `ap-south-1`).
-- [x] Six migrations applied in order (2026-11-18, via Management API).
+- [x] Seven migrations applied in order (2026-11-18, via Management API).
 - [x] `1.4.0` is the only `is_latest` release.
 - [x] Portal admin Auth user created with `app_metadata.role = ravsoft_admin`.
 - [ ] Public sign-ups disabled; MFA enabled for the admin.
@@ -699,7 +701,7 @@ storage objects.
 
 ### 3.2 Apply the migrations
 
-Apply all six files in order, using §2.2 Option A, B or C, against
+Apply all seven files in order, using §2.2 Option A, B or C, against
 `<GOLDEN_REF>`.
 
 ### 3.3 Run the clean-template verification
@@ -838,25 +840,59 @@ an offline drive). Do not commit dumps to Git.
 
 ### 3.6 Lock the template
 
-- [ ] No frontend is deployed from this project.
-- [ ] No auth users exist.
-- [ ] No storage objects exist.
-- [ ] No WhatsApp or WAHA configuration.
-- [ ] Public sign-ups are disabled.
-- [ ] The anon key is not embedded in any deployed app.
-- [ ] `client_data_allowed = false`.
-- [ ] The last `verify.sql` run passed after the last migration.
+- [x] No frontend is deployed from this project.
+- [x] No auth users exist.
+- [x] No storage objects exist.
+- [x] No WhatsApp or WAHA configuration.
+- [x] Public sign-ups are disabled.
+- [x] The anon key is not embedded in any deployed app.
+- [x] `client_data_allowed = false`.
+- [x] The last `verify.sql` run passed after the last migration.
+
+### 3.7 Live golden-master record
+
+Filled in on 2026-11-18 from the live project.
+
+| Item | Value |
+| --- | --- |
+| Project | `ravsoft-golden-v1` |
+| Project ref | `nydlpgucdwaifgvgrlib` |
+| Region | `ap-south-1` |
+| Status | `ACTIVE_HEALTHY`, Postgres 17 |
+| API URL | `https://nydlpgucdwaifgvgrlib.supabase.co` |
+| Migrations | all seven applied in order via Management API |
+| `schema_migrations` | empty — Option D does not write CLI bookkeeping |
+| Latest release | `1.4.0` (3 release rows, exactly one latest) |
+| Tenant rows | `0` in every table (`has_client_data = false`) |
+| Auth users | `0` |
+| Storage objects | `0` |
+| Buckets | `branding`, `invoice-pdfs`, `job-photos`, `payroll-pdfs` |
+| Reference data | 8 keys across Finance, Insurance, Licensing, Workshop |
+| RLS | enabled on every `public` table |
+| Sign-ups | disabled (`disable_signup = true`) |
+| Reference snapshot | `backups/ravsoft-golden-v1-1.4.0-reference.json` |
+| Snapshot SHA-256 | `257b371e444cd2d4a7cb9c4c11a5660a149d7dc0c28b75e2fada0b148b835471` |
+
+The project was created from the dashboard as `torque Golden v1` and renamed to
+`ravsoft-golden-v1` through the Management API. The reference snapshot is JSON,
+not a `pg_dump`: the client tools are not installed on this workstation and the
+database password is not stored here. The schema remains reproducible from
+`supabase/migrations`, so provisioning never depends on a dump.
+
+To take the full physical dump later, install the PostgreSQL client
+(`winget install PostgreSQL.PostgreSQL.17`), set `PGPASSWORD`, and run the two
+`pg_dump` commands in §3.5. Keep the output in `backups/`, which is gitignored.
 
 ### Phase 2 checklist
 
-- [ ] Golden project created separately from the portal.
-- [ ] `0001`–`0004` applied in order.
-- [ ] `verify.sql` passes.
-- [ ] Zero tenant rows and zero auth users.
-- [ ] Exactly one latest release (`1.4.0`).
-- [ ] Snapshot and SHA-256 recorded.
-- [ ] `golden-gm-v1.4.0` tag pushed.
-- [ ] Template locked; no client data allowed.
+- [x] Golden project created separately from the portal.
+- [x] All seven migrations applied in order.
+- [x] `verify.sql` passes.
+- [x] Zero tenant rows and zero auth users.
+- [x] Exactly one latest release (`1.4.0`).
+- [x] Reference snapshot and SHA-256 recorded (full `pg_dump` pending).
+- [ ] `golden-gm-v1.4.0` tag pushed (no Git remote configured).
+- [x] Template locked; no client data allowed.
 
 ---
 
@@ -908,7 +944,7 @@ database and app to that value before the first licence poll.
 
 **Recommended — replay the verified migrations:**
 
-Apply `0001`–`0004` in order to `<CLIENT_REF>` using §2.2 Option A or B.
+Apply `0001`–`0007` in order to `<CLIENT_REF>` using §2.2 Option A or B.
 
 Run the golden verification before creating any client data:
 
@@ -924,7 +960,7 @@ psql $CLIENT_DB -v ON_ERROR_STOP=1 -f .\supabase\golden-master\verify.sql
 The golden dump is an audit and disaster-recovery artifact, not the provisioning
 mechanism. Restoring `public` into a fresh project can fail before `pgcrypto`
 and `pg_trgm` exist, and restoring it after the migrations can duplicate the
-reference seeds. Replaying `0001`–`0004` produces exactly the same schema,
+reference seeds. Replaying `0001`–`0007` produces exactly the same schema,
 reference data and storage buckets, deterministically.
 
 If your Supabase plan offers a project restore/clone feature, use that for a
@@ -1310,7 +1346,7 @@ waha.vezelmasters.lk {
 }
 ```
 
-Restrict the dashboard to the RAVsoft VPN or an IP allow-list. The API must be
+Restrict the dashboard to the RAVBsoft VPN or an IP allow-list. The API must be
 HTTPS and protected by `WHATSAPP_API_KEY`.
 
 Pair the company phone:
@@ -1346,7 +1382,7 @@ Test from PowerShell:
 $body = @{
   session = "default"
   chatId = "94755756803@c.us"
-  text = "RAVsoft WAHA test from Vezel Masters Kandy"
+  text = "RAVBsoft WAHA test from Vezel Masters Kandy"
 } | ConvertTo-Json
 
 Invoke-RestMethod `
@@ -1371,7 +1407,7 @@ with a consented number.
 | Field | Value |
 | --- | --- |
 | Client / workshop | `Vezel Masters Kandy` |
-| Software | `Torque ERP` (free text; add other RAVsoft apps as needed) |
+| Software | `Torque ERP` (free text; add other RAVBsoft apps as needed) |
 | Server address | `https://erp.vezelmasters.lk` |
 | Owner | `Nimal Perera` |
 | Phone | `+94 81 234 5678` |
@@ -1671,8 +1707,8 @@ Key points:
 | Client browser | Client Supabase | HTTPS | Supabase Auth JWT |
 | Client browser | Portal Supabase | HTTPS | Anon key + installation ID |
 | Client browser | Client WAHA | HTTPS | `X-Api-Key` from Settings |
-| RAVsoft browser | Portal frontend | HTTPS | Host access / portal login |
-| RAVsoft browser | Portal Supabase | HTTPS | Admin Supabase Auth JWT (RLS `ravsoft_admin`) |
+| RAVBsoft browser | Portal frontend | HTTPS | Host access / portal login |
+| RAVBsoft browser | Portal Supabase | HTTPS | Admin Supabase Auth JWT (RLS `ravsoft_admin`) |
 | Deploy receiver | Client Supabase | Postgres | Service role |
 | Deploy receiver | Portal Supabase | HTTPS/Postgres | Service role |
 | Deploy receiver | Git host | HTTPS | Read-only token |
@@ -1707,7 +1743,7 @@ Run this after Phase 3 and before handover.
 ### 6.1 Portal
 
 - [ ] `https://portal.ravsoft.lk/developer` loads over HTTPS.
-- [ ] RAVsoft branding, multi-app software field and release registry visible.
+- [ ] RAVBsoft branding, multi-app software field and release registry visible.
 - [ ] Release `1.4.0` is latest; only one row has `is_latest = true`.
 - [ ] Exactly one real client row exists.
 - [ ] Server address displays shortened, copy button copies the full URL.
@@ -2050,7 +2086,7 @@ Record this in the portal notes and the internal deployment log:
 | G3 | `20261114000600_portal_security.sql` | `portal_change_installation_id` moves payments and update runs. |
 | G4 | `src/pages/DeveloperPortal.tsx` | `deployClient()` queues the run, posts the webhook, records the result. |
 | G4 | `20261114000400_portal_releases.sql` | `request_client_update` and `record_client_update_result`. |
-| G5 | `supabase/migrations/` | Six timestamped files, `20261114000100`–`20261114000600`. |
+| G5 | `supabase/migrations/` | Seven timestamped files, `20261114000100`–`20261120000100`. |
 | G6 | repository root | `.gitignore` excludes `.env`; initial commit on `main`. |
 | G7 | `public/manifest.webmanifest` | Shortcut opens `/check-in`, not a demo slug. |
 

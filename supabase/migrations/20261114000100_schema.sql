@@ -2506,7 +2506,7 @@ alter table public.ledger_entries add constraint ledger_entries_payment_method_c
   check (payment_method in ('Cash','Card','Credit','Credit Settlement','Insurance','Insurance Settlement','Cheque'));
 
 -- ---------------------------------------------------------------------------
--- 14. RAVsoft developer portal: client installations, LKR payments and the
+-- 14. RAVBsoft developer portal: client installations, LKR payments and the
 --     outbound-only licence poll used by each isolated client server
 -- ---------------------------------------------------------------------------
 create table if not exists public.developer_client_installations (
@@ -2519,8 +2519,10 @@ create table if not exists public.developer_client_installations (
   email text,
   district text not null default '',
   address text,
-  plan text not null default 'Professional'
-    check (plan in ('Starter','Professional','Enterprise')),
+  plan text not null default 'Growth'
+    check (plan in ('Lite','Starter','Growth','Pro','Enterprise')),
+  monthly_fee numeric(12,2)
+    check (monthly_fee is null or monthly_fee >= 0),
   status text not null default 'Active'
     check (status in ('Trial','Active','Expired','Suspended')),
   expires_at timestamptz,

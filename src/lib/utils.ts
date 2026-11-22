@@ -214,6 +214,19 @@ export function isDemoMode(): boolean {
   }
 }
 
+/** Public site URL used in QR codes and customer-facing links. */
+export function publicAppUrl(settings: { publicBaseUrl?: string }): string {
+  const configured = settings.publicBaseUrl?.trim();
+  if (configured) return configured.replace(/\/+$/, "");
+  return typeof window === "undefined" ? "" : window.location.origin;
+}
+
+export function checkInUrl(
+  settings: { publicBaseUrl?: string; qrSlug?: string },
+): string {
+  return `${publicAppUrl(settings)}/check-in/${settings.qrSlug || "workshop"}`;
+}
+
 export function waLink(phone: string, message: string): string {
   const recipient = isDemoMode() ? DEMO_WHATSAPP_NUMBER : normalizePhone(phone);
   return `https://wa.me/${recipient}?text=${encodeURIComponent(message)}`;

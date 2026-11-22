@@ -52,7 +52,7 @@ import { cloudConfigured, masterSupabase, portalConfigured } from "../lib/supaba
 
 const PORTAL_KEY = "ravsoft_master_portal_v1";
 const LEGACY_PORTAL_KEY = "torque_master_portal_v1";
-const SOFTWARE_OPTIONS = ["Torque ERP"];
+const SOFTWARE_OPTIONS = ["Torque ERP", "RAVBsoft"];
 const LATEST_APP_VERSION = "1.4.0";
 const RELEASES = [
   {
@@ -97,6 +97,8 @@ interface PortalClient {
   district: string;
   address?: string;
   plan: LicencePlan;
+  /** Monthly licence fee typed by the RAVBsoft admin. Falls back to the plan rate card. */
+  monthlyFee?: number;
   status: LicenceStatus;
   expiresAt: string;
   lastSeenAt?: string;
@@ -143,6 +145,7 @@ interface PortalClientRow {
   district?: string | null;
   address?: string | null;
   plan?: string | null;
+  monthly_fee?: number | null;
   status?: string | null;
   expires_at?: string | null;
   last_seen_at?: string | null;
@@ -166,7 +169,9 @@ interface PortalPaymentRow {
 const INSTALLATION_ID_PATTERN = /^WS-LK-[A-Z0-9]{6,16}$/;
 
 function planFromValue(value: unknown): LicencePlan {
-  return PLAN_ORDER.includes(value as LicencePlan) ? (value as LicencePlan) : "Professional";
+  const raw = typeof value === "string" ? value.trim() : "";
+  if (raw === "Professional") return "Growth";
+  return PLAN_ORDER.includes(raw as LicencePlan) ? (raw as LicencePlan) : "Growth";
 }
 
 function statusFromValue(value: unknown): LicenceStatus {
@@ -201,6 +206,7 @@ function clientFromRow(row: PortalClientRow): PortalClient {
     district: row.district ?? "",
     address: row.address ?? undefined,
     plan: planFromValue(row.plan),
+    monthlyFee: row.monthly_fee == null ? undefined : Number(row.monthly_fee) || 0,
     status: statusFromValue(row.status),
     expiresAt: row.expires_at ?? new Date().toISOString(),
     lastSeenAt: row.last_seen_at ?? undefined,
@@ -235,6 +241,7 @@ function clientToRow(clientRecord: PortalClient): PortalClientRow {
     district: clientRecord.district,
     address: clientRecord.address ?? null,
     plan: clientRecord.plan,
+    monthly_fee: clientRecord.monthlyFee ?? null,
     status: clientRecord.status,
     expires_at: clientRecord.expiresAt,
     last_seen_at: clientRecord.lastSeenAt ?? null,
@@ -272,12 +279,40 @@ function paymentToRow(payment: PortalPayment): PortalPaymentRow {
 }
 
 const PLAN_PRICES: Record<LicencePlan, number> = {
-  Starter: 9500,
-  Professional: 18500,
-  Enterprise: 32500,
+  Lite: 1900,
+  Starter: 4900,
+  Growth: 8900,
+  Pro: 16900,
+  Enterprise: 29900,
 };
 
-const PLAN_ORDER: LicencePlan[] = ["Starter", "Professional", "Enterprise"];
+const PLAN_ORDER: LicencePlan[] = ["Lite", "Starter", "Growth", "Pro", "Enterprise"];
+
+const PLAN_DESCRIPTIONS: Record<LicencePlan, string> = {
+  Lite: "Small garage — job cards, estimates, basic stock and credit. No ledger or payroll modules.",
+  Starter: "Growing workshop — billing, inventory, suppliers, staff and core reports.",
+  Growth: "Multi-bay garage — insurance, sections, commissions and advanced stock.",
+  Pro: "Busy operation — payroll, banking, cheques, marketing and full reporting.",
+  Enterprise: "Multi-branch groups — every module, attendance, API access and priority support.",
+};
+
+/** Default module preset applied to each plan. */
+const PLAN_PRESETS: Record<LicencePlan, string> = {
+  Lite: "garage-lite",
+  Starter: "quick-lube",
+  Growth: "full-workshop",
+  Pro: "full-workshop",
+  Enterprise: "full-workshop",
+};
+
+/** Annual billing is 10 months for 12 — two months free. */
+const ANNUAL_MONTHS_CHARGED = 10;
+
+function monthlyFeeFor(client: { plan: LicencePlan; monthlyFee?: number }): number {
+  const custom = Number(client.monthlyFee);
+  if (client.monthlyFee !== undefined && Number.isFinite(custom) && custom >= 0) return custom;
+  return PLAN_PRICES[client.plan];
+}
 
 function isoDays(days: number): string {
   const date = new Date();
@@ -346,7 +381,7 @@ function seedPortal(): PortalData {
         email: "dinesh@autolanka.lk",
         district: "Colombo",
         address: "122, High Level Road, Nugegoda",
-        plan: "Professional",
+        plan: "Growth",
         status: "Active",
         expiresAt: isoDays(21),
         lastSeenAt: isoDays(-1),
@@ -422,7 +457,7 @@ function seedPortal(): PortalData {
         method: "Online",
         reference: "PAY-55190",
         months: 6,
-        note: "Professional plan, six months.",
+        note: "Growth plan, six months.",
       },
       {
         id: "pay_demo_03",
@@ -524,7 +559,7 @@ function DeveloperPortalLogin() {
       return;
     }
     if (!email.trim() || !password) {
-      setError("Enter the RAVsoft administrator email and password.");
+      setError("Enter the RAVBsoft administrator email and password.");
       return;
     }
     setBusy(true);
@@ -541,7 +576,7 @@ function DeveloperPortalLogin() {
     if (data.user?.app_metadata?.role !== "ravsoft_admin") {
       await masterSupabase.auth.signOut();
       setError(
-        "This account is not a RAVsoft administrator. Ask the account owner to add app_metadata.role = ravsoft_admin.",
+        "This account is not a RAVBsoft administrator. Ask the account owner to add app_metadata.role = ravsoft_admin.",
       );
     }
   }
@@ -550,11 +585,13 @@ function DeveloperPortalLogin() {
     <div className="auth-shell">
       <aside className="auth-art">
         <div className="auth-brand">
-          <div className="brand-mark" style={{ overflow: "hidden" }}>
-            <Layers size={18} />
-          </div>
+          <img
+            className="developer-logo"
+            src="/brand/ravbsoft-mark.jpg"
+            alt="RAVBsoft"
+          />
           <div>
-            <strong>RAVsoft</strong>
+            <strong>RAVBsoft</strong>
             <span>Developer portal</span>
           </div>
         </div>
@@ -568,7 +605,7 @@ function DeveloperPortalLogin() {
           </h2>
           <p>
             The master portal holds client installations, licence payments and
-            release runs. Only a RAVsoft administrator account can read or change
+            release runs. Only a RAVBsoft administrator account can read or change
             this registry.
           </p>
           <div className="auth-features">
@@ -587,7 +624,7 @@ function DeveloperPortalLogin() {
           </div>
         </div>
         <div className="auth-art-foot">
-          <div>RAVsoft · application licensing · v1.4</div>
+          <div>RAVBsoft · application licensing · v1.4</div>
         </div>
       </aside>
 
@@ -681,7 +718,7 @@ function DeveloperPortalLogin() {
 
 export function DeveloperPortalPage() {
   const [data, setData] = useState<PortalData>(() => loadPortal());
-  const [tab, setTab] = useState<"fleet" | "payments" | "releases" | "offline">("fleet");
+  const [tab, setTab] = useState<"fleet" | "payments" | "releases" | "plans" | "offline">("fleet");
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | LicenceStatus>("all");
   const [notice, setNotice] = useState<{ tone: "ok" | "warn" | "error"; text: string } | null>(
@@ -699,9 +736,10 @@ export function DeveloperPortalPage() {
     email: "",
     district: "",
     address: "",
-    plan: "Professional" as LicencePlan,
+    plan: "Starter" as LicencePlan,
+    monthlyFee: "",
     months: 12,
-    preset: "full-workshop",
+    preset: "quick-lube",
     notes: "",
     gitBranch: "",
     customBuild: false,
@@ -814,7 +852,7 @@ export function DeveloperPortalPage() {
 
   useEffect(() => {
     const previous = document.title;
-    document.title = "RAVsoft — Developer Portal";
+    document.title = "RAVBsoft — Developer Portal";
     return () => {
       document.title = previous;
     };
@@ -846,7 +884,7 @@ export function DeveloperPortalPage() {
     .filter((payment) => payment.date.slice(0, 7) === monthKey)
     .reduce((sum, payment) => sum + payment.amount, 0);
   const annualValue = activeClients.reduce(
-    (sum, entry) => sum + PLAN_PRICES[entry.plan] * 12,
+    (sum, entry) => sum + monthlyFeeFor(entry) * ANNUAL_MONTHS_CHARGED,
     0,
   );
   const onlineCount = data.clients.filter(
@@ -860,7 +898,7 @@ export function DeveloperPortalPage() {
           <div className="auth-card">
             <Loader2 className="spin" />
             <h1 style={{ marginTop: 12 }}>Checking portal session</h1>
-            <p className="sub">Verifying the RAVsoft administrator sign-in.</p>
+            <p className="sub">Verifying the RAVBsoft administrator sign-in.</p>
           </div>
         </main>
       </div>
@@ -931,9 +969,10 @@ export function DeveloperPortalPage() {
       email: "",
       district: "",
       address: "",
-      plan: "Professional",
+      plan: "Starter",
+      monthlyFee: String(PLAN_PRICES.Starter),
       months: 12,
-      preset: "full-workshop",
+      preset: "quick-lube",
       notes: "",
       gitBranch: "",
       customBuild: false,
@@ -942,6 +981,13 @@ export function DeveloperPortalPage() {
       installationId: "",
     });
     setRegisterOpen(true);
+  }
+
+  function editorMonthly(): number | undefined {
+    const value = Number(editor.monthlyFee);
+    return editor.monthlyFee.trim() !== "" && Number.isFinite(value) && value >= 0
+      ? value
+      : undefined;
   }
 
   async function submitRegister() {
@@ -978,6 +1024,7 @@ export function DeveloperPortalPage() {
       district: editor.district.trim(),
       address: editor.address.trim() || undefined,
       plan: editor.plan,
+      monthlyFee: editorMonthly(),
       status: "Trial",
       appVersion: LATEST_APP_VERSION,
       latestVersion: LATEST_APP_VERSION,
@@ -1048,6 +1095,7 @@ export function DeveloperPortalPage() {
       address: editor.address.trim() || undefined,
       notes: editor.notes.trim() || undefined,
       plan: editor.plan,
+      monthlyFee: editorMonthly(),
       gitBranch:
         editor.gitBranch.trim() ||
         client.gitBranch ||
@@ -1157,7 +1205,7 @@ export function DeveloperPortalPage() {
       appVersion: LATEST_APP_VERSION,
       latestVersion: LATEST_APP_VERSION,
       lastDeployedAt: new Date().toISOString(),
-      lastDeployedBy: "RAVsoft portal",
+      lastDeployedBy: "RAVBsoft portal",
     };
     await updateClient(updated);
     let webhookNote = "Registry updated.";
@@ -1203,6 +1251,7 @@ export function DeveloperPortalPage() {
       district: client.district,
       address: client.address ?? "",
       plan: client.plan,
+      monthlyFee: String(client.monthlyFee ?? PLAN_PRICES[client.plan]),
       months: 12,
       preset: "full-workshop",
       notes: client.notes ?? "",
@@ -1226,7 +1275,8 @@ export function DeveloperPortalPage() {
     const startFrom =
       daysUntil(client.expiresAt) > 0 ? client.expiresAt : new Date().toISOString();
     const expiresAt = addMonths(startFrom, months);
-    const amount = PLAN_PRICES[client.plan] * months;
+    const billedMonths = months === 12 ? ANNUAL_MONTHS_CHARGED : months;
+    const amount = monthlyFeeFor(client) * billedMonths;
     const payment: PortalPayment = {
       id: uid("pay"),
       clientId: client.id,
@@ -1236,7 +1286,10 @@ export function DeveloperPortalPage() {
       method: renewMethod,
       reference: renewReference.trim() || undefined,
       months,
-      note: `Renewed ${months} month${months === 1 ? "" : "s"}`,
+      note:
+        months === 12
+          ? `Annual renewal · 12 months billed as ${ANNUAL_MONTHS_CHARGED}`
+          : `Renewed ${months} month${months === 1 ? "" : "s"}`,
     };
     setData((prev) => ({
       ...prev,
@@ -1296,7 +1349,7 @@ export function DeveloperPortalPage() {
     }
     const token = generateOfflineToken({
       installationId: tokenInstallation.trim().toUpperCase(),
-      holder: tokenHolder.trim() || "RAVsoft client",
+      holder: tokenHolder.trim() || "RAVBsoft client",
       plan: tokenPlan,
       status: "Active",
       expiresAt: addMonths(new Date().toISOString(), Math.max(1, tokenMonths)),
@@ -1319,7 +1372,7 @@ export function DeveloperPortalPage() {
 
   function reminder(clientRecord: PortalClient) {
     const link = `https://wa.me/${whatsappNumber(clientRecord.phone)}?text=${encodeURIComponent(
-      `Hello ${clientRecord.ownerName}, this is RAVsoft. The ${clientRecord.softwareName} ${clientRecord.plan} licence for ${clientRecord.workshopName} (${clientRecord.id}) expires on ${shortDate(clientRecord.expiresAt)}. Please renew to keep modules and cloud sync active.`,
+      `Hello ${clientRecord.ownerName}, this is RAVBsoft. The ${clientRecord.softwareName} ${clientRecord.plan} licence for ${clientRecord.workshopName} (${clientRecord.id}) expires on ${shortDate(clientRecord.expiresAt)}. Please renew to keep modules and cloud sync active.`,
     )}`;
     window.open(link, "_blank", "noopener,noreferrer");
   }
@@ -1329,7 +1382,7 @@ export function DeveloperPortalPage() {
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
-    anchor.download = `ravsoft-master-portal-${new Date().toISOString().slice(0, 10)}.json`;
+    anchor.download = `RAVBsoft-master-portal-${new Date().toISOString().slice(0, 10)}.json`;
     anchor.click();
     URL.revokeObjectURL(url);
     setNotice({ tone: "ok", text: "Portal backup downloaded." });
@@ -1445,11 +1498,13 @@ export function DeveloperPortalPage() {
       </datalist>
       <header className="developer-topbar">
         <div className="row" style={{ gap: 10 }}>
-          <div className="developer-mark">
-            <Layers size={18} />
-          </div>
+          <img
+            className="developer-logo"
+            src="/brand/ravbsoft-mark.jpg"
+            alt="RAVBsoft — enterprise management systems"
+          />
           <div>
-            <div className="developer-brand">RAVsoft</div>
+            <div className="developer-brand">RAVBsoft</div>
             <div className="developer-sub">Developer portal · App licensing</div>
           </div>
         </div>
@@ -1523,24 +1578,33 @@ export function DeveloperPortalPage() {
             <span className="developer-eyebrow">APP FLEET</span>
             <h1>Every client, every app, one console</h1>
             <p>
-              Register client installations for any RAVsoft app, renew LKR licences, switch
+              Register client installations for any RAVBsoft app, renew LKR licences, switch
               modules remotely and issue signed offline activation tokens for disconnected sites.
             </p>
           </div>
-          <div className="row wrap" style={{ gap: 8 }}>
-            <button
-              className="btn btn-secondary"
-              onClick={pushAll}
-              disabled={syncing}
-              title="Publish the local registry to the master Supabase database"
-            >
-              <RefreshCw className={syncing ? "spin" : undefined} />
-              {syncing ? "Publishing…" : "Publish fleet"}
-            </button>
-            <button className="btn btn-primary" onClick={openRegister}>
-              <Plus />
-              Register client
-            </button>
+          <div className="developer-hero-side">
+            <div className="developer-product-badge">
+              <img src="/brand/torque-erp-logo.png" alt="Torque ERP — workshop management solution" />
+              <div>
+                <strong>Torque ERP</strong>
+                <span>Workshop management solution · powered by RAVBsoft</span>
+              </div>
+            </div>
+            <div className="row wrap" style={{ gap: 8 }}>
+              <button
+                className="btn btn-secondary"
+                onClick={pushAll}
+                disabled={syncing}
+                title="Publish the local registry to the master Supabase database"
+              >
+                <RefreshCw className={syncing ? "spin" : undefined} />
+                {syncing ? "Publishing…" : "Publish fleet"}
+              </button>
+              <button className="btn btn-primary" onClick={openRegister}>
+                <Plus />
+                Register client
+              </button>
+            </div>
           </div>
         </div>
 
@@ -1585,6 +1649,7 @@ export function DeveloperPortalPage() {
               ["fleet", "Fleet", <Wrench key="fleet" size={14} />],
               ["payments", "Payments", <Wallet key="payments" size={14} />],
               ["releases", "Releases", <Layers key="releases" size={14} />],
+              ["plans", "Plans & pricing", <Banknote key="plans" size={14} />],
               ["offline", "Offline activation", <KeyRound key="offline" size={14} />],
             ] as const
           ).map(([key, label, icon]) => (
@@ -1691,7 +1756,9 @@ export function DeveloperPortalPage() {
                             </button>
                           </td>
                           <td>
-                            <div className="cell-main">{entry.plan}</div>
+                            <div className="cell-main">
+                              {entry.plan} · {money(monthlyFeeFor(entry))}/mo
+                            </div>
                             <div className="row wrap" style={{ gap: 5, marginTop: 2 }}>
                               <span className={`badge ${entry.appVersion === LATEST_APP_VERSION ? "badge-green" : "badge-amber"}`}>
                                 v{entry.appVersion}
@@ -1982,6 +2049,59 @@ export function DeveloperPortalPage() {
           </>
         )}
 
+        {tab === "plans" && (
+          <div className="stack" style={{ gap: 16 }}>
+            <div className="card">
+              <div className="card-head">
+                <div>
+                  <h3>Licence rate card</h3>
+                  <p>
+                    Monthly LKR rates. Annual billing is 12 months for the price of{" "}
+                    {ANNUAL_MONTHS_CHARGED} — two months free. Each client can still carry a
+                    typed custom monthly fee on its own record.
+                  </p>
+                </div>
+                <Wallet size={16} />
+              </div>
+              <div className="card-body">
+                <div className="developer-plan-grid">
+                  {PLAN_ORDER.map((plan) => {
+                    const preset = MODULE_PRESETS.find(
+                      (entry) => entry.id === PLAN_PRESETS[plan],
+                    );
+                    return (
+                      <div key={plan} className="developer-plan-card">
+                        <div className="row-between">
+                          <strong>{plan}</strong>
+                          <span className="badge badge-brand">{PLAN_PRICES[plan]}</span>
+                        </div>
+                        <div className="developer-plan-price">
+                          {money(PLAN_PRICES[plan])}
+                          <span>/month</span>
+                        </div>
+                        <div className="tiny muted">
+                          Annual {money(PLAN_PRICES[plan] * ANNUAL_MONTHS_CHARGED)}
+                        </div>
+                        <p className="tiny">{PLAN_DESCRIPTIONS[plan]}</p>
+                        <div className="tiny muted">
+                          Default preset: {preset?.name ?? "Full workshop"}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="alert alert-info" style={{ marginTop: 14 }}>
+                  <CircleAlert />
+                  <span>
+                    Open a client and edit its monthly fee to override the rate card. Renewals use
+                    that typed fee, so discounts and legacy contracts stay accurate.
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {tab === "offline" && (
           <div className="developer-two-col">
             <div className="card">
@@ -2241,9 +2361,14 @@ export function DeveloperPortalPage() {
                   <select
                     className="select"
                     value={editor.plan}
-                    onChange={(event) =>
-                      setEditor((prev) => ({ ...prev, plan: event.target.value as LicencePlan }))
-                    }
+                    onChange={(event) => {
+                      const plan = event.target.value as LicencePlan;
+                      setEditor((prev) => ({
+                        ...prev,
+                        plan,
+                        monthlyFee: String(PLAN_PRICES[plan]),
+                      }));
+                    }}
                   >
                     {PLAN_ORDER.map((plan) => (
                       <option key={plan} value={plan}>
@@ -2251,6 +2376,23 @@ export function DeveloperPortalPage() {
                       </option>
                     ))}
                   </select>
+                </label>
+                <label className="field">
+                  <span className="label">Monthly fee (LKR)</span>
+                  <input
+                    className="input"
+                    type="number"
+                    min={0}
+                    step="any"
+                    value={editor.monthlyFee}
+                    onChange={(event) =>
+                      setEditor((prev) => ({ ...prev, monthlyFee: event.target.value }))
+                    }
+                    placeholder={String(PLAN_PRICES[editor.plan])}
+                  />
+                  <span className="hint">
+                    Type the agreed fee. Leave blank to use the {editor.plan} rate card.
+                  </span>
                 </label>
                 <label className="field">
                   <span className="label">Trial / licence months</span>
@@ -2451,7 +2593,7 @@ export function DeveloperPortalPage() {
                   </div>
                   <div className="tiny muted" style={{ marginTop: 6 }}>
                     {client.lastDeployedAt
-                      ? `Last deployed ${shortDate(client.lastDeployedAt)} by ${client.lastDeployedBy ?? "RAVsoft"}.`
+                      ? `Last deployed ${shortDate(client.lastDeployedAt)} by ${client.lastDeployedBy ?? "RAVBsoft"}.`
                       : "No deployment recorded yet."}{" "}
                     Updates apply additive migrations only; client data is never rewritten.
                   </div>
@@ -2533,6 +2675,10 @@ export function DeveloperPortalPage() {
                         value={renewMonths}
                         onChange={(event) => setRenewMonths(Number(event.target.value))}
                       />
+                      <span className="hint">
+                        {money(monthlyFeeFor(client))}/mo · 12 months billed as{" "}
+                        {ANNUAL_MONTHS_CHARGED}
+                      </span>
                     </label>
                     <label className="field">
                       <span className="label">Method</span>
@@ -2560,7 +2706,7 @@ export function DeveloperPortalPage() {
                     </label>
                     <button className="btn btn-primary" onClick={renewClient}>
                       <Banknote />
-                      Renew · {money(PLAN_PRICES[client.plan] * Math.max(1, renewMonths))}
+                      Renew · {money(monthlyFeeFor(client) * (Math.max(1, renewMonths) === 12 ? ANNUAL_MONTHS_CHARGED : Math.max(1, renewMonths)))}
                     </button>
                   </div>
 
@@ -2725,17 +2871,36 @@ export function DeveloperPortalPage() {
                       <select
                         className="select"
                         value={editor.plan}
-                        onChange={(event) =>
+                        onChange={(event) => {
+                          const plan = event.target.value as LicencePlan;
                           setEditor((prev) => ({
                             ...prev,
-                            plan: event.target.value as LicencePlan,
-                          }))
-                        }
+                            plan,
+                            monthlyFee: String(PLAN_PRICES[plan]),
+                          }));
+                        }}
                       >
                         {PLAN_ORDER.map((plan) => (
                           <option key={plan}>{plan}</option>
                         ))}
                       </select>
+                    </label>
+                    <label className="field">
+                      <span className="label">Monthly fee (LKR)</span>
+                      <input
+                        className="input"
+                        type="number"
+                        min={0}
+                        step="any"
+                        value={editor.monthlyFee}
+                        onChange={(event) =>
+                          setEditor((prev) => ({ ...prev, monthlyFee: event.target.value }))
+                        }
+                        placeholder={String(PLAN_PRICES[editor.plan])}
+                      />
+                      <span className="hint">
+                        Typed per client. Blank uses the plan rate card.
+                      </span>
                     </label>
                     <label className="field">
                       <span className="label">Notes</span>

@@ -28,7 +28,7 @@ import { featureEnabled } from "../lib/features";
 import { acceptanceMessage, handoverMessage } from "../lib/messages";
 import { compressPhoto } from "../lib/branding";
 import { autoWhatsAppEnabled } from "../lib/whatsapp";
-import { jobTotals, money, shortDate, timeAgo, waLink } from "../lib/utils";
+import { jobTotals, money, shortDate, timeAgo, waLink, checkInUrl as buildCheckInUrl } from "../lib/utils";
 import {
   Alert,
   CopyButton,
@@ -58,7 +58,7 @@ const repairTypes = [
 type GateTab = "pending" | "clearance";
 
 export function GatePage() {
-  const { state, acceptCheckIn, rejectCheckIn, dispatchJob, overrideBillingGate } = useApp();
+  const { state, currentUser, acceptCheckIn, rejectCheckIn, dispatchJob, overrideBillingGate } = useApp();
   const { push } = useToast();
   const [tab, setTab] = useState<GateTab>("pending");
   const [accepting, setAccepting] = useState<CheckIn | null>(null);
@@ -88,9 +88,15 @@ export function GatePage() {
     .filter(
       (job) =>
         job.status === "Paid" ||
-        (job.status === "Released on Credit" && !job.releaseApprovedAt),
+        (job.status === "Released on Credit" &&
+          Boolean(job.exitApprovedAt) &&
+          (!job.partPaymentAt || Boolean(job.releaseApprovedAt))),
     )
     .sort((a, b) => (b.paidAt ?? "").localeCompare(a.paidAt ?? ""));
+  const canOverride = Boolean(
+    currentUser &&
+      (currentUser.isOwner || currentUser.departments.includes("Cashier")),
+  );
   const billingQueue = state.jobCards
     .filter((job) => job.status === "Repair Completed")
     .sort((a, b) => (a.completedAt ?? "").localeCompare(b.completedAt ?? ""));
@@ -102,14 +108,19 @@ export function GatePage() {
       ),
     );
   const cashierExits = state.jobCards
-    .filter((job) => job.status === "Released on Credit" && job.releaseApprovedAt)
+    .filter(
+      (job) =>
+        job.status === "Released on Credit" &&
+        Boolean(job.releaseApprovedAt || !job.partPaymentAt) &&
+        !job.exitApprovedAt,
+    )
     .sort((a, b) =>
       (b.releaseApprovedAt ?? "").localeCompare(a.releaseApprovedAt ?? ""),
     );
   const acceptedJob = state.jobCards.find((job) => job.id === acceptedJobId) ?? null;
 
   const nextNumeric = state.jobCards.reduce((max, job) => Math.max(max, job.numericId), 1000) + 1;
-  const checkInUrl = `${window.location.origin}/check-in/${state.settings.qrSlug || "workshop"}`;
+  const checkInUrl = buildCheckInUrl(state.settings);
   const qrPosterUrl = useMemo(() => checkInUrl, [checkInUrl]);
 
   useEffect(() => {
@@ -275,10 +286,14 @@ export function GatePage() {
   function confirmDispatch() {
     if (!dispatchTarget) return;
     const job = dispatchTarget;
-    dispatchJob(job.id);
+    const result = dispatchJob(job.id);
+    if (!result.ok) {
+      push(result.message ?? "The vehicle could not be handed over.", "error");
+      return;
+    }
     setHandoverJob(job);
     setDispatchTarget(null);
-    push(`${job.vehicleNo} released through the gate.`);
+    push(result.message ?? `${job.vehicleNo} released through the gate.`);
   }
 
   function openOverride() {
@@ -299,7 +314,7 @@ export function GatePage() {
       return;
     }
     push(
-      `${targetJob?.vehicleNo ?? "Vehicle"} released on PRO override. Owner, cashier and accounts notified.`,
+      `${targetJob?.vehicleNo ?? "Vehicle"} released on cashier override. Owner, PRO and accounts notified.`,
     );
     setOverrideOpen(false);
     setOverrideReason("");
@@ -503,8 +518,9 @@ export function GatePage() {
           <Alert tone="info" title="Gate clearance is controlled by billing">
             A vehicle can only be handed over after the cashier records full payment, an
             approved credit release, or a part payment approved by the owner or accounting and
-            then confirmed for exit by the cashier. A supervisor cannot bypass this, but the PRO
-            may record a reasoned override when the owner accepts the risk.
+            then confirmed for exit by the cashier. A supervisor cannot bypass this, and the PRO
+            cannot override billing — only the cashier or owner can record a reasoned override when
+            the owner accepts the risk.
           </Alert>
           {pendingReleases.length > 0 && (
             <Alert tone="warn" title="Part-payment releases waiting for approval">
@@ -540,13 +556,15 @@ export function GatePage() {
               </div>
             </Alert>
           )}
-          <div className="row wrap" style={{ justifyContent: "flex-end" }}>
-            <button className="btn btn-secondary btn-sm" onClick={openOverride}>
-              <ShieldCheck size={14} />
-              PRO billing override
-              {billingQueue.length > 0 && <span className="chip">{billingQueue.length}</span>}
-            </button>
-          </div>
+          {canOverride && (
+            <div className="row wrap" style={{ justifyContent: "flex-end" }}>
+              <button className="btn btn-secondary btn-sm" onClick={openOverride}>
+                <ShieldCheck size={14} />
+                Cashier billing override
+                {billingQueue.length > 0 && <span className="chip">{billingQueue.length}</span>}
+              </button>
+            </div>
+          )}
 
           {clearance.length === 0 ? (
             <div className="card">
@@ -583,7 +601,7 @@ export function GatePage() {
                           </h3>
                           <StatusBadge status={job.status} />
                           {job.billingOverrideReason && (
-                            <span className="badge badge-amber">PRO override</span>
+                            <span className="badge badge-amber">Cashier override</span>
                           )}
                         </div>
                         <p>

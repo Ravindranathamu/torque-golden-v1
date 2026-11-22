@@ -2,11 +2,11 @@
  * Client-specific overrides.
  *
  * This folder is the only place where a per-client branch should diverge from
- * the RAVsoft core. Keep changes small, documented and isolated here so core
+ * the RAVBsoft core. Keep changes small, documented and isolated here so core
  * updates can always merge from `main` without touching client code.
  *
  * Branch convention:
- *   main                     RAVsoft core, shared by every installation
+ *   main                     RAVBsoft core, shared by every installation
  *   client/<installation-id> one branch per client customisation
  *
  * The developer portal records the branch, custom-build badge and a short
@@ -20,12 +20,12 @@ export interface ClientCustomisation {
   estimateNote?: string;
   /** Optional customer-facing message shown under the login card. */
   loginMessage?: string;
-  /** Short support summary. Also exposed to the RAVsoft portal. */
+  /** Short support summary. Also exposed to the RAVBsoft portal. */
   summary?: string;
 }
 
 export const CLIENT_BUILD = {
-  /** Must match the Git branch recorded in the RAVsoft portal. */
+  /** Must match the Git branch recorded in the RAVBsoft portal. */
   branch: "main",
   /** Leave blank on a core build; set it on a client branch. */
   summary: "",
