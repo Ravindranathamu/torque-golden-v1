@@ -851,7 +851,7 @@ an offline drive). Do not commit dumps to Git.
 
 ### 3.7 Live golden-master record
 
-Filled in on 2026-11-18 from the live project.
+Filled in on 2026-11-18; snapshot refreshed on 2026-11-22 after migration `0001`–`0007`.
 
 | Item | Value |
 | --- | --- |
@@ -871,7 +871,7 @@ Filled in on 2026-11-18 from the live project.
 | RLS | enabled on every `public` table |
 | Sign-ups | disabled (`disable_signup = true`) |
 | Reference snapshot | `backups/ravsoft-golden-v1-1.4.0-reference.json` |
-| Snapshot SHA-256 | `257b371e444cd2d4a7cb9c4c11a5660a149d7dc0c28b75e2fada0b148b835471` |
+| Snapshot SHA-256 | `943f6241f8f5c63f659a84246dfd72da9ffd414358a71daa3ef7fb7a51f4ada3` |
 
 The project was created from the dashboard as `torque Golden v1` and renamed to
 `ravsoft-golden-v1` through the Management API. The reference snapshot is JSON,
