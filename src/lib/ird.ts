@@ -1907,7 +1907,9 @@ export function printThermalPayslip(
   <div class="center bold" style="font-size:10px">PAYSLIP</div>
   <div class="muted">
     <div style="display:flex;justify-content:space-between"><span>Employee</span><span class="bold">${esc(worker.fullName)}</span></div>
+    <div style="display:flex;justify-content:space-between"><span>Position</span><span>${esc(worker.position?.trim() || "—")}</span></div>
     <div style="display:flex;justify-content:space-between"><span>Worker ID</span><span>${esc(worker.id)}</span></div>
+    <div style="display:flex;justify-content:space-between"><span>ETF No</span><span>${esc(worker.etfNumber?.trim() || "—")}</span></div>
     <div style="display:flex;justify-content:space-between"><span>Period</span><span>${esc(shortDate(payslip.periodStart))} — ${esc(shortDate(payslip.periodEnd))}</span></div>
     <div style="display:flex;justify-content:space-between"><span>Attendance</span><span>${payslip.workedDays}/${payslip.workingDays} days</span></div>
     <div style="display:flex;justify-content:space-between"><span>Paid</span><span>${esc(shortDate(payslip.paidAt))}</span></div>

@@ -526,6 +526,8 @@ function makeWorkers(): WorkerProfile[] {
     {
       id: "wrk_kamal",
       fullName: "Kamal Bandara",
+      position: "Senior technician",
+      etfNumber: "ETF/KN/10482",
       phone: "+94 77 345 1122",
       nic: "198512304567",
       address: "45/2, Kundasale Road, Kandy",
@@ -547,6 +549,8 @@ function makeWorkers(): WorkerProfile[] {
     {
       id: "wrk_nuwan",
       fullName: "Nuwan Rathnayake",
+      position: "Auto electrician",
+      etfNumber: "ETF/KN/10483",
       phone: "+94 71 882 5577",
       nic: "199023401234",
       address: "18, Ampitiya Road, Kandy",
@@ -568,6 +572,8 @@ function makeWorkers(): WorkerProfile[] {
     {
       id: "wrk_sunil",
       fullName: "Sunil Herath",
+      position: "Body & paint technician",
+      etfNumber: "ETF/KN/10484",
       phone: "+94 75 441 8899",
       nic: "199430002211",
       address: "7, Gampola Lane, Kandy",
@@ -589,6 +595,8 @@ function makeWorkers(): WorkerProfile[] {
     {
       id: "wrk_ruwan",
       fullName: "Ruwan Fernando",
+      position: "Workshop supervisor",
+      etfNumber: "ETF/KN/10485",
       phone: "+94 70 771 2233",
       nic: "198710112233",
       address: "112, Peradeniya Road, Kandy",
@@ -611,6 +619,8 @@ function makeWorkers(): WorkerProfile[] {
     {
       id: "wrk_chaminda",
       fullName: "Chaminda Silva",
+      position: "Workshop helper",
+      etfNumber: "",
       phone: "+94 72 118 4466",
       nic: "199845607788",
       address: "23, Lewella Road, Kandy",

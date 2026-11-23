@@ -689,11 +689,13 @@ export function buildPayslipPdf(
   doc.setFontSize(9.5);
   doc.text(worker.fullName, 18, y0 + 6);
   doc.text(`${shortDate(payslip.periodStart)} — ${shortDate(payslip.periodEnd)}`, 120, y0 + 6);
-  doc.text(worker.nic ? `NIC ${worker.nic}` : "", 18, y0 + 11);
+  doc.text(`Position: ${worker.position?.trim() || "—"}`, 18, y0 + 11);
   doc.text(`${payslip.workedDays} of ${payslip.workingDays} working days`, 120, y0 + 11);
-  doc.text(worker.bankName ? `${worker.bankName} · ${worker.accountNumber}` : "", 18, y0 + 16);
+  doc.text(worker.nic ? `NIC ${worker.nic}` : "", 18, y0 + 16);
+  doc.text(`ETF No: ${worker.etfNumber?.trim() || "—"}`, 120, y0 + 16);
+  doc.text(worker.bankName ? `${worker.bankName} · ${worker.accountNumber}` : "", 18, y0 + 21);
 
-  let y = y0 + 28;
+  let y = y0 + 34;
   const row = (label: string, value: string, strong = false) => {
     doc.setFont("helvetica", strong ? "bold" : "normal");
     doc.setFontSize(strong ? 10.5 : 9.5);

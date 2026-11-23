@@ -1977,6 +1977,14 @@ export function AccountingPage() {
         {payslipWorker && payslipRow && (
           <div className="stack">
             <div className="kv">
+              <span>Position</span>
+              <span>{payslipWorker.position?.trim() || "Not set"}</span>
+            </div>
+            <div className="kv">
+              <span>ETF number</span>
+              <span>{payslipWorker.etfNumber?.trim() || "Not set"}</span>
+            </div>
+            <div className="kv">
               <span>Attendance</span>
               <span>
                 {payslipRow.presentDays + payslipRow.paidOffDays} of {payslipRow.workingDays}{" "}

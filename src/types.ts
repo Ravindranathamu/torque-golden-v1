@@ -798,6 +798,8 @@ export interface WorkshopSettings {
 export interface WorkerProfile {
   id: string;
   fullName: string;
+  position?: string;
+  etfNumber?: string;
   phone: string;
   nic: string;
   address: string;

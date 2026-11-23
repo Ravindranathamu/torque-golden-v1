@@ -308,6 +308,9 @@ const PLAN_PRESETS: Record<LicencePlan, string> = {
 /** Annual billing is 10 months for 12 — two months free. */
 const ANNUAL_MONTHS_CHARGED = 10;
 
+/** Lifetime is a one-time licence priced at 60 monthly instalments. */
+const LIFETIME_MONTHS_CHARGED = 60;
+
 function monthlyFeeFor(client: { plan: LicencePlan; monthlyFee?: number }): number {
   const custom = Number(client.monthlyFee);
   if (client.monthlyFee !== undefined && Number.isFinite(custom) && custom >= 0) return custom;
@@ -2056,9 +2059,9 @@ export function DeveloperPortalPage() {
                 <div>
                   <h3>Licence rate card</h3>
                   <p>
-                    Monthly LKR rates. Annual billing is 12 months for the price of{" "}
-                    {ANNUAL_MONTHS_CHARGED} — two months free. Each client can still carry a
-                    typed custom monthly fee on its own record.
+                    Choose monthly, yearly or a one-time lifetime licence. Yearly billing is 12
+                    months for the price of {ANNUAL_MONTHS_CHARGED} — two months free. Each
+                    client can still carry a typed custom fee on its own record.
                   </p>
                 </div>
                 <Wallet size={16} />
@@ -2073,14 +2076,25 @@ export function DeveloperPortalPage() {
                       <div key={plan} className="developer-plan-card">
                         <div className="row-between">
                           <strong>{plan}</strong>
-                          <span className="badge badge-brand">{PLAN_PRICES[plan]}</span>
+                          {plan === "Growth" && (
+                            <span className="badge badge-brand">Most popular</span>
+                          )}
                         </div>
                         <div className="developer-plan-price">
                           {money(PLAN_PRICES[plan])}
                           <span>/month</span>
                         </div>
-                        <div className="tiny muted">
-                          Annual {money(PLAN_PRICES[plan] * ANNUAL_MONTHS_CHARGED)}
+                        <div className="developer-plan-terms">
+                          <div className="developer-plan-term">
+                            <span>Yearly</span>
+                            <strong>{money(PLAN_PRICES[plan] * ANNUAL_MONTHS_CHARGED)}</strong>
+                            <em>2 months free</em>
+                          </div>
+                          <div className="developer-plan-term">
+                            <span>Lifetime</span>
+                            <strong>{money(PLAN_PRICES[plan] * LIFETIME_MONTHS_CHARGED)}</strong>
+                            <em>one-time</em>
+                          </div>
                         </div>
                         <p className="tiny">{PLAN_DESCRIPTIONS[plan]}</p>
                         <div className="tiny muted">

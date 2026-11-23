@@ -59,6 +59,8 @@ const emptyStaffForm = {
 
 const emptyWorkerForm = {
   fullName: "",
+  position: "",
+  etfNumber: "",
   phone: "",
   nic: "",
   address: "",
@@ -315,6 +317,8 @@ export function TeamPage() {
     setEditingWorkerId(worker.id);
     setWorkerForm({
       fullName: worker.fullName,
+      position: worker.position ?? "",
+      etfNumber: worker.etfNumber ?? "",
       phone: worker.phone,
       nic: worker.nic,
       address: worker.address,
@@ -365,6 +369,8 @@ export function TeamPage() {
     }
     const payload = {
       fullName: workerForm.fullName.trim(),
+      position: workerForm.position.trim(),
+      etfNumber: workerForm.etfNumber.trim(),
       phone: workerForm.phone.trim(),
       nic: workerForm.nic.trim(),
       address: workerForm.address.trim(),
@@ -702,6 +708,9 @@ export function TeamPage() {
                           <div>
                             <div className="strong">{worker.fullName}</div>
                             <div className="tiny muted">
+                              {worker.position?.trim() || "Position not set"}
+                            </div>
+                            <div className="tiny muted">
                               {linkedUser ? `Login @${linkedUser.username}` : "No staff login linked"}
                             </div>
                           </div>
@@ -732,6 +741,10 @@ export function TeamPage() {
                       <div className="kv">
                         <span>Bank</span>
                         <span>{worker.bankName || "Not set"}</span>
+                      </div>
+                      <div className="kv">
+                        <span>ETF number</span>
+                        <span>{worker.etfNumber?.trim() || "Not set"}</span>
                       </div>
                       <div className="kv">
                         <span>Emergency contact</span>
@@ -848,7 +861,7 @@ export function TeamPage() {
                   </span>
                 </div>
                 <div className="table-wrap">
-                  <table className="data">
+                  <table className="data payroll-table">
                     <thead>
                       <tr>
                         <th>Worker</th>
@@ -865,25 +878,35 @@ export function TeamPage() {
                         const worker = state.workers.find((entry) => entry.id === row.workerId);
                         return (
                           <tr key={row.workerId}>
-                            <td>
+                            <td data-label="Worker">
                               <div className="cell-main">{row.name}</div>
+                              <div className="cell-sub">
+                                {worker?.position?.trim() || "Position not set"}
+                              </div>
                               <div className="cell-sub">{worker?.phone}</div>
                             </td>
-                            <td>
+                            <td data-label="Bank account">
                               <div className="cell-main" style={{ fontSize: 12 }}>
                                 {worker?.bankName || "Not set"}
                               </div>
                               <div className="cell-sub">{worker?.accountNumber || "—"}</div>
+                              <div className="cell-sub">
+                                ETF {worker?.etfNumber?.trim() || "not set"}
+                              </div>
                             </td>
-                            <td className="num">{money(row.baseSalary)}</td>
-                            <td className="num">{money(row.commission)}</td>
-                            <td className="num strong">
+                            <td className="num" data-label="Base salary">
+                              {money(row.baseSalary)}
+                            </td>
+                            <td className="num" data-label="Commission">
+                              {money(row.commission)}
+                            </td>
+                            <td className="num strong" data-label="Total">
                               {money(row.baseSalary + row.commission)}
                             </td>
-                            <td>
+                            <td data-label="Status">
                               <StatusBadge status={worker?.status ?? "Active"} />
                             </td>
-                            <td>
+                            <td className="payroll-action">
                               {worker && (
                                 <button
                                   className="btn btn-ghost btn-sm"
@@ -1154,6 +1177,16 @@ export function TeamPage() {
                 }
               />
             </Field>
+            <Field label="Position / job title" hint="Shown on the worker profile and payslips.">
+              <input
+                className="input"
+                placeholder="e.g. Senior technician"
+                value={workerForm.position}
+                onChange={(event) =>
+                  setWorkerForm({ ...workerForm, position: event.target.value })
+                }
+              />
+            </Field>
             <Field label="Phone" required>
               <input
                 className="input"
@@ -1168,6 +1201,16 @@ export function TeamPage() {
                 placeholder="198512304567"
                 value={workerForm.nic}
                 onChange={(event) => setWorkerForm({ ...workerForm, nic: event.target.value })}
+              />
+            </Field>
+            <Field label="ETF number" hint="Printed on A4 and thermal payslips.">
+              <input
+                className="input"
+                placeholder="e.g. ETF/123456"
+                value={workerForm.etfNumber}
+                onChange={(event) =>
+                  setWorkerForm({ ...workerForm, etfNumber: event.target.value })
+                }
               />
             </Field>
             <Field label="Joined date">

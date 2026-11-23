@@ -1702,11 +1702,11 @@ export function JobDetailPage() {
                     const assignedWorkers = taskWorkers(task, state.workers);
                     const taskCommissionValue = taskCommission(task, state.workers);
                     return (
-                      <div className="list-row" key={task.id}>
-                        <span className="part-icon" style={{ background: "var(--brand-soft)", color: "var(--brand)" }}>
+                      <div className="list-row job-task-row" key={task.id}>
+                        <span className="part-icon job-row-icon" style={{ background: "var(--brand-soft)", color: "var(--brand)" }}>
                           <Wrench size={15} />
                         </span>
-                        <div className="list-main">
+                        <div className="list-main job-row-main">
                           <strong>{task.name}</strong>
                           <span>
                             {assignedWorkers.length > 0
@@ -1735,14 +1735,14 @@ export function JobDetailPage() {
                               )}
                           </div>
                         </div>
-                        <div style={{ textAlign: "right" }}>
+                        <div className="job-row-amount">
                           <div className="strong small">{money(task.laborCost)}</div>
                           <div className="tiny muted">
                             {money(taskCommissionValue)} commission
                           </div>
                         </div>
                         {canEdit && (
-                          <>
+                          <div className="job-row-actions">
                             <button
                               className="btn btn-ghost btn-sm"
                               onClick={() => openTaskModal(task)}
@@ -1761,7 +1761,7 @@ export function JobDetailPage() {
                             >
                               <Trash2 />
                             </button>
-                          </>
+                          </div>
                         )}
                       </div>
                     );
@@ -1823,11 +1823,11 @@ export function JobDetailPage() {
                           ? part.qtyRequested
                           : 0;
                     return (
-                      <div className="part-row" key={part.id}>
-                        <span className="part-icon">
+                      <div className="part-row job-part-row" key={part.id}>
+                        <span className="part-icon job-row-icon">
                           <Package size={15} />
                         </span>
-                        <div className="list-main">
+                        <div className="list-main job-row-main">
                           <div className="row wrap" style={{ gap: 6 }}>
                             <strong style={{ fontSize: 12.7 }}>{part.itemName}</strong>
                             <StatusBadge status={part.status} />
@@ -1892,7 +1892,7 @@ export function JobDetailPage() {
                             <div className="tiny muted" style={{ marginTop: 2 }}>{part.warrantyNote}</div>
                           )}
                         </div>
-                        <div style={{ textAlign: "right" }}>
+                        <div className="job-row-amount">
                           <div className="strong small">
                             {part.includedInLabor
                               ? "Internal cost"
@@ -1918,6 +1918,7 @@ export function JobDetailPage() {
                             </label>
                           )}
                         </div>
+                        <div className="job-row-actions">
                         {canEdit && (part.status === "Requested" || part.status === "Backordered") && (
                           <button
                             className="btn btn-ghost btn-sm"
@@ -2050,6 +2051,7 @@ export function JobDetailPage() {
                         {part.status === "Return Pending" && (
                           <span className="badge badge-amber">Awaiting return</span>
                         )}
+                        </div>
                       </div>
                     );
                   })
