@@ -2076,6 +2076,34 @@ table.data tbody tr:hover {
   height: 11px;
 }
 
+.job-card-link {
+  display: block;
+  color: inherit;
+}
+
+.job-card-link:hover {
+  color: inherit;
+}
+
+.estimate-history-item {
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fff;
+}
+
+.estimate-line-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  padding: 7px 9px;
+  border: 1px solid #e8eef1;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
 /* ---------- Job detail ---------- */
 .job-hero {
   background:

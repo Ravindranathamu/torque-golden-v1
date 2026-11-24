@@ -6,7 +6,10 @@ import {
   CalendarCheck,
   CalendarClock,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   ClipboardList,
+  FileText,
   Package,
   Phone,
   ReceiptText,
@@ -16,12 +19,28 @@ import {
 } from "lucide-react";
 import { hasDepartment, useApp } from "../state/AppStore";
 import { featureEnabled } from "../lib/features";
-import { isWithinRange, jobTotals, money, timeAgo, waLink } from "../lib/utils";
+import {
+  estimateDisplayNumber,
+  estimateKindLabel,
+  isWithinRange,
+  jobTotals,
+  money,
+  shortDate,
+  timeAgo,
+  waLink,
+} from "../lib/utils";
 import { autoWhatsAppEnabled } from "../lib/whatsapp";
 import { localDateKey } from "../lib/payroll";
-import { PageHeader, StatCard, StatusBadge, Modal, Alert } from "../components/ui";
+import { PageHeader, StatCard, StatusBadge, Modal, Alert, EmptyState } from "../components/ui";
 import { useToast } from "../components/Toast";
-import type { JobCard } from "../types";
+import type { JobCard, JobEstimate } from "../types";
+
+interface VehicleEstimateItem {
+  estimate: JobEstimate;
+  job: JobCard;
+  quotedTotal: number;
+  approvedTotal: number;
+}
 
 interface BoardColumn {
   key: string;
@@ -36,6 +55,11 @@ export function WorkshopPage() {
   const [query, setQuery] = useState("");
   const [sectionFilter, setSectionFilter] = useState("all");
   const [attendanceEditing, setAttendanceEditing] = useState(false);
+  const [estimateHistoryOpen, setEstimateHistoryOpen] = useState(false);
+  const [estimateHistoryVehicle, setEstimateHistoryVehicle] = useState("");
+  const [estimateHistoryJob, setEstimateHistoryJob] = useState("");
+  const [estimateSearch, setEstimateSearch] = useState("");
+  const [expandedEstimates, setExpandedEstimates] = useState<Set<string>>(() => new Set());
   const [reviewOpen, setReviewOpen] = useState(() => {
     const hour = new Date().getHours();
     return hour >= 16 && state.appointments.some(
@@ -43,6 +67,7 @@ export function WorkshopPage() {
     );
   });
   const today = localDateKey();
+  const estimatesEnabled = featureEnabled(state.settings, "enable_estimates_module");
   const sectionsEnabled =
     featureEnabled(state.settings, "enable_multi_sections") && state.sections.length > 0;
   const owner = Boolean(currentUser?.isOwner);
@@ -145,6 +170,90 @@ export function WorkshopPage() {
     },
   ] as BoardColumn[];
 
+  const estimateHistoryByVehicle = useMemo(() => {
+    const grouped = new Map<string, VehicleEstimateItem[]>();
+    const jobsById = new Map(state.jobCards.map((job) => [job.id, job]));
+    state.estimates.forEach((estimate) => {
+      const job = jobsById.get(estimate.jobCardId);
+      if (!job) return;
+      const key = job.vehicleNo.trim().toUpperCase();
+      const quotedTotal = estimate.lines.reduce(
+        (sum, line) => sum + line.qty * line.unitPrice,
+        0,
+      );
+      const approvedTotal = estimate.lines.reduce((sum, line) => {
+        if (line.approvalStatus !== "Approved") return sum;
+        return sum + line.qty * (line.approvedUnitPrice ?? line.unitPrice);
+      }, 0);
+      const list = grouped.get(key) ?? [];
+      list.push({ estimate, job, quotedTotal, approvedTotal });
+      grouped.set(key, list);
+    });
+    return grouped;
+  }, [state.estimates, state.jobCards]);
+
+  const estimateVehicleKeys = useMemo(
+    () => [...estimateHistoryByVehicle.keys()].sort(),
+    [estimateHistoryByVehicle],
+  );
+
+  const estimateGroups = useMemo(() => {
+    const needle = estimateSearch.trim().toLowerCase();
+    return [...estimateHistoryByVehicle.entries()]
+      .filter(([key]) => !estimateHistoryVehicle || key === estimateHistoryVehicle)
+      .map(([key, items]) => ({
+        key,
+        items: items
+          .filter((item) => {
+            if (!needle) return true;
+            const haystack = [
+              key,
+              item.job.make,
+              item.job.model,
+              item.job.customerName,
+              item.job.id,
+              item.job.repairType,
+              estimateDisplayNumber(item.estimate),
+              item.estimate.notes,
+            ]
+              .join(" ")
+              .toLowerCase();
+            return haystack.includes(needle);
+          })
+          .sort((a, b) => {
+            const byEstimate = b.estimate.createdAt.localeCompare(a.estimate.createdAt);
+            return byEstimate || b.job.createdAt.localeCompare(a.job.createdAt);
+          }),
+      }))
+      .filter((group) => group.items.length > 0)
+      .sort((a, b) =>
+        (b.items[0]?.estimate.createdAt ?? "").localeCompare(
+          a.items[0]?.estimate.createdAt ?? "",
+        ),
+      );
+  }, [estimateHistoryByVehicle, estimateSearch, estimateHistoryVehicle]);
+
+  const estimateHistoryLabel = estimateHistoryVehicle
+    ? estimateGroups[0]?.items[0]?.job.vehicleNo ?? estimateHistoryVehicle
+    : "all vehicles";
+
+  function openEstimateHistory(job?: JobCard) {
+    setEstimateHistoryVehicle(job ? job.vehicleNo.trim().toUpperCase() : "");
+    setEstimateHistoryJob(job?.id ?? "");
+    setEstimateSearch("");
+    setExpandedEstimates(new Set());
+    setEstimateHistoryOpen(true);
+  }
+
+  function toggleEstimateLines(id: string) {
+    setExpandedEstimates((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
   return (
     <div className="page">
       <PageHeader
@@ -180,6 +289,16 @@ export function WorkshopPage() {
                 />
               </div>
             </div>
+            {estimatesEnabled && (
+              <button
+                className="btn btn-secondary"
+                onClick={() => openEstimateHistory()}
+                title="Browse quotations by vehicle"
+              >
+                <FileText />
+                Estimate history
+              </button>
+            )}
             <Link className="btn btn-secondary" to="/history">
               <ClipboardList />
               Vehicle history
@@ -471,69 +590,93 @@ export function WorkshopPage() {
                 const waitingParts = jobParts.filter((part) =>
                   ["Requested", "Backordered"].includes(part.status),
                 ).length;
+                const vehicleEstimateCount =
+                  estimateHistoryByVehicle.get(job.vehicleNo.trim().toUpperCase())?.length ?? 0;
                 return (
-                  <Link className="job-card" to={`/jobs/${job.id}`} key={job.id}>
-                    <div className="job-card-top">
-                      <div>
-                        <div className="job-vehicle">{job.vehicleNo}</div>
-                        <div className="job-model">
-                          {job.make} {job.model} · {job.customerName}
+                  <div className="job-card" key={job.id}>
+                    <Link className="job-card-link" to={`/jobs/${job.id}`}>
+                      <div className="job-card-top">
+                        <div>
+                          <div className="job-vehicle">{job.vehicleNo}</div>
+                          <div className="job-model">
+                            {job.make} {job.model} · {job.customerName}
+                          </div>
                         </div>
+                        <StatusBadge status={job.status} />
                       </div>
-                      <StatusBadge status={job.status} />
-                    </div>
 
-                    <div className="row wrap" style={{ gap: 5, marginTop: 9 }}>
-                      <span className="chip">{job.repairType}</span>
-                      <span className="chip">{job.id}</span>
-                      {sectionsEnabled &&
-                        (job.sectionIds ?? []).map((id) => {
-                          const section = state.sections.find((entry) => entry.id === id);
-                          if (!section) return null;
-                          return (
-                            <span
-                              key={id}
-                              className="chip"
-                              style={{
-                                borderColor: section.color,
-                                color: section.color,
-                                background: `${section.color}14`,
-                              }}
-                            >
-                              {section.name}
-                            </span>
-                          );
-                        })}
-                      {waitingParts > 0 && (
-                        <span className="badge badge-red">
-                          <Package size={10} /> {waitingParts} part{waitingParts === 1 ? "" : "s"} waiting
+                      <div className="row wrap" style={{ gap: 5, marginTop: 9 }}>
+                        <span className="chip">{job.repairType}</span>
+                        <span className="chip">{job.id}</span>
+                        {sectionsEnabled &&
+                          (job.sectionIds ?? []).map((id) => {
+                            const section = state.sections.find((entry) => entry.id === id);
+                            if (!section) return null;
+                            return (
+                              <span
+                                key={id}
+                                className="chip"
+                                style={{
+                                  borderColor: section.color,
+                                  color: section.color,
+                                  background: `${section.color}14`,
+                                }}
+                              >
+                                {section.name}
+                              </span>
+                            );
+                          })}
+                        {waitingParts > 0 && (
+                          <span className="badge badge-red">
+                            <Package size={10} /> {waitingParts} part{waitingParts === 1 ? "" : "s"} waiting
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="job-card-meta">
+                        <span>
+                          <Users size={11} /> {totals.activeTasks.length} task{totals.activeTasks.length === 1 ? "" : "s"}
                         </span>
-                      )}
-                    </div>
-
-                    <div className="job-card-meta">
-                      <span>
-                        <Users size={11} /> {totals.activeTasks.length} task{totals.activeTasks.length === 1 ? "" : "s"}
-                      </span>
-                      <span>
-                        <Package size={11} /> {jobParts.length} part{jobParts.length === 1 ? "" : "s"}
-                      </span>
-                      <span>
-                        <Banknote size={11} /> {money(totals.total)}
-                      </span>
-                    </div>
-                    <div className="row-between" style={{ marginTop: 9, paddingTop: 8, borderTop: "1px dashed var(--line)" }}>
+                        <span>
+                          <Package size={11} /> {jobParts.length} part{jobParts.length === 1 ? "" : "s"}
+                        </span>
+                        <span>
+                          <Banknote size={11} /> {money(totals.total)}
+                        </span>
+                      </div>
+                    </Link>
+                    <div className="row-between" style={{ marginTop: 9, paddingTop: 8, borderTop: "1px dashed var(--line)", gap: 6 }}>
                       <span className="tiny muted">
                         {job.status === "Dispatched"
                           ? `Left ${timeAgo(job.dispatchedAt)}`
                           : `In since ${timeAgo(job.acceptedAt)}`}
                       </span>
-                      <span className="btn btn-ghost btn-sm" style={{ padding: "2px 4px", pointerEvents: "none" }}>
-                        Open
-                        <ArrowRight size={11} />
-                      </span>
+                      <div className="row wrap" style={{ gap: 4, justifyContent: "flex-end" }}>
+                        {estimatesEnabled && (
+                          <button
+                            className="btn btn-ghost btn-sm"
+                            style={{ padding: "2px 4px" }}
+                            title={`Estimate history for ${job.vehicleNo}`}
+                            onClick={() => openEstimateHistory(job)}
+                          >
+                            <FileText size={11} />
+                            Estimates
+                            {vehicleEstimateCount > 0 && (
+                              <span className="count">{vehicleEstimateCount}</span>
+                            )}
+                          </button>
+                        )}
+                        <Link
+                          className="btn btn-ghost btn-sm"
+                          style={{ padding: "2px 4px" }}
+                          to={`/jobs/${job.id}`}
+                        >
+                          Open
+                          <ArrowRight size={11} />
+                        </Link>
+                      </div>
                     </div>
-                  </Link>
+                  </div>
                 );
               })
             )}
@@ -651,6 +794,197 @@ export function WorkshopPage() {
             ))}
           </div>
         )}
+      </Modal>
+
+      <Modal
+        open={estimateHistoryOpen}
+        onClose={() => setEstimateHistoryOpen(false)}
+        title="Estimate history"
+        subtitle={`Quotations recorded for ${estimateHistoryLabel}, newest first.`}
+        size="wide"
+        footer={
+          <button className="btn btn-secondary" onClick={() => setEstimateHistoryOpen(false)}>
+            Close
+          </button>
+        }
+      >
+        <div className="stack">
+          <div className="card">
+            <div className="card-body row wrap" style={{ gap: 10 }}>
+              <div className="input-group" style={{ flex: "1 1 260px" }}>
+                <span className="prefix">
+                  <Search size={14} />
+                </span>
+                <input
+                  className="input"
+                  placeholder="Search plate, customer, job or estimate…"
+                  value={estimateSearch}
+                  onChange={(event) => setEstimateSearch(event.target.value)}
+                  autoFocus
+                />
+              </div>
+              <select
+                className="select"
+                value={estimateHistoryVehicle}
+                onChange={(event) => {
+                  const key = event.target.value;
+                  setEstimateHistoryVehicle(key);
+                  const currentJob = state.jobCards.find((job) => job.id === estimateHistoryJob);
+                  if (currentJob?.vehicleNo.trim().toUpperCase() !== key) {
+                    setEstimateHistoryJob("");
+                  }
+                }}
+                style={{ minWidth: 210 }}
+              >
+                <option value="">All vehicles with estimates</option>
+                {estimateVehicleKeys.map((key) => {
+                  const sample = estimateHistoryByVehicle.get(key)?.[0]?.job;
+                  return (
+                    <option key={key} value={key}>
+                      {sample?.vehicleNo ?? key} · {sample?.customerName ?? "Vehicle"}
+                    </option>
+                  );
+                })}
+              </select>
+            </div>
+          </div>
+
+          {estimateGroups.length === 0 ? (
+            <EmptyState
+              icon={<FileText size={22} />}
+              title="No estimates found"
+              message={
+                estimateSearch || estimateHistoryVehicle
+                  ? "No quotations match this vehicle and search. Try a different plate or clear the filters."
+                  : "No estimates have been recorded yet. Create one on a job card to start the history."
+              }
+              action={
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setEstimateSearch("");
+                    setEstimateHistoryVehicle("");
+                    setEstimateHistoryJob("");
+                  }}
+                >
+                  Clear filters
+                </button>
+              }
+            />
+          ) : (
+            estimateGroups.map((group) => {
+              const sample = group.items[0].job;
+              return (
+                <div className="card" key={group.key}>
+                  <div className="card-head">
+                    <div>
+                      <h3>
+                        {sample.vehicleNo} · {sample.make} {sample.model}
+                      </h3>
+                      <p>
+                        {sample.customerName} · {group.items.length} estimate
+                        {group.items.length === 1 ? "" : "s"} on record
+                      </p>
+                    </div>
+                    <span className="badge badge-brand">
+                      <FileText size={11} /> {group.items.length}
+                    </span>
+                  </div>
+                  <div className="card-body stack" style={{ paddingTop: 6, gap: 10 }}>
+                    {group.items.map((item) => {
+                      const linesOpen = expandedEstimates.has(item.estimate.id);
+                      const isCurrentJob = Boolean(estimateHistoryJob) && item.job.id === estimateHistoryJob;
+                      return (
+                        <div className="estimate-history-item" key={item.estimate.id}>
+                          <div className="row-between wrap" style={{ gap: 6 }}>
+                            <div className="row wrap" style={{ gap: 6 }}>
+                              <strong>{estimateDisplayNumber(item.estimate)}</strong>
+                              <span className="chip">{estimateKindLabel(item.estimate)}</span>
+                              <StatusBadge status={item.estimate.status} />
+                              {estimateHistoryJob && (
+                                <span className={isCurrentJob ? "badge badge-brand" : "badge badge-slate"}>
+                                  {isCurrentJob ? "Current job" : "Previous visit"}
+                                </span>
+                              )}
+                            </div>
+                            <div className="row wrap" style={{ gap: 6 }}>
+                              <span className="badge badge-slate">{money(item.quotedTotal)} quoted</span>
+                              {item.approvedTotal > 0 && (
+                                <span className="badge badge-green">
+                                  {money(item.approvedTotal)} approved
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                          <div className="tiny muted" style={{ marginTop: 4 }}>
+                            {shortDate(item.estimate.createdAt)} · {item.job.id} ·{" "}
+                            {item.job.repairType} · {item.estimate.createdBy ?? "Workshop"}
+                          </div>
+                          {item.estimate.notes && (
+                            <div className="tiny muted" style={{ marginTop: 6, fontStyle: "italic" }}>
+                              “{item.estimate.notes}”
+                            </div>
+                          )}
+                          <div className="row wrap" style={{ gap: 6, marginTop: 8 }}>
+                            <button
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => toggleEstimateLines(item.estimate.id)}
+                            >
+                              {linesOpen ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                              {linesOpen
+                                ? "Hide lines"
+                                : `${item.estimate.lines.length} line${item.estimate.lines.length === 1 ? "" : "s"}`}
+                            </button>
+                            <Link className="btn btn-soft btn-sm" to={`/jobs/${item.job.id}`}>
+                              Open job
+                              <ArrowRight size={12} />
+                            </Link>
+                          </div>
+                          {linesOpen && (
+                            <div className="stack" style={{ gap: 6, marginTop: 8 }}>
+                              {item.estimate.lines.length === 0 ? (
+                                <div className="tiny muted">No line items on this estimate.</div>
+                              ) : (
+                                item.estimate.lines.map((line) => {
+                                  const lineTotal = line.qty * line.unitPrice;
+                                  const approvedPrice = line.approvedUnitPrice ?? line.unitPrice;
+                                  return (
+                                    <div className="estimate-line-row" key={line.id}>
+                                      <div style={{ minWidth: 0 }}>
+                                        <div className="cell-main" style={{ fontSize: 12 }}>
+                                          {line.description}
+                                        </div>
+                                        <div className="tiny muted">
+                                          {line.type} · {line.qty} × {money(line.unitPrice)}
+                                        </div>
+                                      </div>
+                                      <div className="row wrap" style={{ gap: 4, justifyContent: "flex-end" }}>
+                                        <span className="badge badge-slate">{money(lineTotal)}</span>
+                                        {line.approvalStatus === "Approved" &&
+                                          approvedPrice !== line.unitPrice && (
+                                            <span className="badge badge-green">
+                                              Approved {money(line.qty * approvedPrice)}
+                                            </span>
+                                          )}
+                                        {line.approvalStatus && (
+                                          <StatusBadge status={line.approvalStatus} />
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
       </Modal>
     </div>
   );
