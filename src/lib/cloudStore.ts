@@ -1,6 +1,7 @@
 import type { Session } from "@supabase/supabase-js";
 import type {
   AppState,
+  AttendanceRecord,
   Department,
   FeatureFlags,
   WorkshopSettings,
@@ -390,6 +391,33 @@ export function recordsToState(records: AppRecordRow[], fallback: AppState): App
   return next;
 }
 
+/**
+ * ScanPlan and the ERP both write attendance rows. Reject malformed payloads
+ * instead of letting a bad external write break the register or payroll.
+ */
+function normaliseAttendancePayload(payload: unknown): AttendanceRecord | null {
+  if (!payload || typeof payload !== "object") return null;
+  const raw = payload as Record<string, unknown>;
+  if (typeof raw.id !== "string" || !raw.id.trim()) return null;
+  const workerId = typeof raw.workerId === "string" && raw.workerId.trim() ? raw.workerId : undefined;
+  const userId = typeof raw.userId === "string" && raw.userId.trim() ? raw.userId : undefined;
+  if (Boolean(workerId) === Boolean(userId)) return null;
+  if (typeof raw.date !== "string" || !/^\d{4}-\d{2}-\d{2}$/.test(raw.date)) return null;
+  const status = raw.status;
+  if (status !== "Present" && status !== "Absent" && status !== "Off Day") return null;
+  return {
+    id: raw.id,
+    workerId,
+    userId,
+    sectionId: typeof raw.sectionId === "string" ? raw.sectionId : undefined,
+    date: raw.date,
+    status,
+    markedAt: typeof raw.markedAt === "string" ? raw.markedAt : new Date().toISOString(),
+    markedBy: typeof raw.markedBy === "string" ? raw.markedBy : undefined,
+    source: raw.source === "ScanPlan" ? "ScanPlan" : "ERP",
+  };
+}
+
 export function applyCloudRow(state: AppState, row: AppRecordRow): AppState {
   if (row.collection === CLOUD_SETTINGS_COLLECTION) {
     if (row.deleted || !row.payload || typeof row.payload !== "object") return state;
@@ -407,15 +435,20 @@ export function applyCloudRow(state: AppState, row: AppRecordRow): AppState {
   const collection = row.collection as SyncCollection;
   const items = [...collectionItems(state, collection)];
   const index = items.findIndex((item) => item.id === row.record_id);
+  const payload =
+    collection === "attendance" && !row.deleted
+      ? normaliseAttendancePayload(row.payload)
+      : (row.payload as { id: string });
+  if (!row.deleted && !payload) return state;
 
   if (row.deleted) {
     if (index < 0) return state;
     items.splice(index, 1);
   } else if (index >= 0) {
-    items[index] = row.payload as { id: string };
+    items[index] = payload as { id: string };
   } else {
     const at = Math.max(0, Math.min(row.sort_order, items.length));
-    items.splice(at, 0, row.payload as { id: string });
+    items.splice(at, 0, payload as { id: string });
   }
 
   return {

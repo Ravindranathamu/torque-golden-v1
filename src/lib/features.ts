@@ -152,6 +152,12 @@ export const MODULE_PRESETS: {
     ],
   },
   {
+    id: "scanplan",
+    name: "ScanPlan attendance",
+    caption: "QR check-in, GPS geofence, department shifts, approvals and Excel reports.",
+    flags: FEATURE_FLAGS.map((flag) => flag.key),
+  },
+  {
     id: "full-workshop",
     name: "Full multi-section workshop",
     caption: "Sections, paint, insurance, payroll and complete accounts.",

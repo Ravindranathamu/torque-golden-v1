@@ -419,11 +419,16 @@ export interface AdvancePayment {
 export interface AttendanceRecord {
   id: string;
   date: string;
-  workerId: string;
+  /** Set for worker attendance. Staff-account rows use userId instead. */
+  workerId?: string;
+  /** Set for staff-account attendance recorded by ScanPlan or the ERP. */
+  userId?: string;
   sectionId?: string;
   status: "Present" | "Absent" | "Off Day";
   markedAt: string;
   markedBy?: string;
+  /** Which app recorded the mark. Defaults to ERP on older records. */
+  source?: "ERP" | "ScanPlan";
 }
 
 export type AppointmentStatus =

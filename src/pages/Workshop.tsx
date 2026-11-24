@@ -92,9 +92,15 @@ export function WorkshopPage() {
   );
   const attendanceToday = new Map(
     state.attendance
-      .filter((record) => record.date === today)
-      .map((record) => [record.workerId, record] as const),
+      .filter((record) => record.date === today && record.workerId)
+      .map((record) => [record.workerId!, record] as const),
   );
+  const staffAttendanceToday = new Map(
+    state.attendance
+      .filter((record) => record.date === today && record.userId)
+      .map((record) => [record.userId!, record] as const),
+  );
+  const activeStaff = state.users.filter((user) => user.active);
   const presentCount = activeWorkers.filter(
     (worker) => attendanceToday.get(worker.id)?.status === "Present",
   ).length;
@@ -495,6 +501,9 @@ export function WorkshopPage() {
                         {status}
                       </span>
                       {record?.markedBy && <div className="cell-sub">{record.markedBy}</div>}
+                      {record?.source === "ScanPlan" && (
+                        <div className="tiny muted">ScanPlan</div>
+                      )}
                     </td>
                     <td data-label="Mark today">
                       {canMarkAttendance ? (
@@ -523,6 +532,76 @@ export function WorkshopPage() {
         </div>
       </div>
       )}
+
+      <div className="card" style={{ marginTop: 18 }}>
+        <div className="card-head">
+          <div>
+            <h3><CalendarCheck size={16} style={{ verticalAlign: -3, marginRight: 6 }} />Staff attendance today</h3>
+            <p>
+              ScanPlan can mark staff accounts here. This register is separate from the worker
+              payroll register.
+            </p>
+          </div>
+          <span className="badge badge-slate">
+            {activeStaff.filter((user) => staffAttendanceToday.get(user.id)?.status === "Present").length}/
+            {activeStaff.length} present
+          </span>
+        </div>
+        {activeStaff.length > 0 ? (
+          <div className="table-wrap table-cards">
+            <table className="data attendance-table">
+              <thead>
+                <tr>
+                  <th>Staff member</th>
+                  <th>Departments</th>
+                  <th>Status</th>
+                  <th>Recorded by</th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeStaff.map((user) => {
+                  const record = staffAttendanceToday.get(user.id);
+                  const status = record?.status ?? "Not marked";
+                  return (
+                    <tr key={user.id}>
+                      <td data-label="Staff member">
+                        <div className="cell-main">{user.name}</div>
+                        <div className="cell-sub">@{user.username}</div>
+                      </td>
+                      <td className="tiny" data-label="Departments">
+                        {user.departments.join(" · ") || (user.isOwner ? "Owner" : "No department")}
+                      </td>
+                      <td data-label="Status">
+                        <span
+                          className={`badge ${
+                            status === "Present"
+                              ? "badge-green"
+                              : status === "Absent"
+                                ? "badge-red"
+                                : status === "Off Day"
+                                  ? "badge-amber"
+                                  : "badge-slate"
+                          }`}
+                        >
+                          {status}
+                        </span>
+                      </td>
+                      <td data-label="Recorded by">
+                        <div className="cell-main">{record?.markedBy || "—"}</div>
+                        {record?.source === "ScanPlan" && (
+                          <div className="tiny muted">ScanPlan</div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="card-body tiny muted">No active staff accounts.</div>
+        )}
+      </div>
 
       {tomorrowPending.length > 0 && (
         <div className="alert alert-warn" style={{ marginTop: 18 }}>

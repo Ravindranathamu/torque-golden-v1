@@ -380,6 +380,15 @@ interface AppStoreValue {
     status: AttendanceRecord["status"],
     sectionId?: string,
   ) => void;
+  markAttendanceEntry: (entry: {
+    workerId?: string;
+    userId?: string;
+    date: string;
+    status: AttendanceRecord["status"];
+    sectionId?: string;
+    markedBy?: string;
+    source?: AttendanceRecord["source"];
+  }) => ActionResult;
   markManyPresent: (workerIds: string[], date: string, sectionId?: string) => void;
   submitAppointmentBooking: (input: AppointmentBookingInput) => ActionResult;
   createStaffAppointment: (input: {
@@ -3759,6 +3768,66 @@ export function AppProvider({ children }: { children: ReactNode }) {
       });
     },
     [state.users, state.currentUserId, state.workers],
+  );
+
+  const markAttendanceEntry = useCallback(
+    (entry: {
+      workerId?: string;
+      userId?: string;
+      date: string;
+      status: AttendanceRecord["status"];
+      sectionId?: string;
+      markedBy?: string;
+      source?: AttendanceRecord["source"];
+    }): ActionResult => {
+      const workerId = entry.workerId?.trim() || undefined;
+      const userId = entry.userId?.trim() || undefined;
+      if (!workerId && !userId) {
+        return { ok: false, message: "Choose a worker or staff member to record attendance." };
+      }
+      if (workerId && userId) {
+        return { ok: false, message: "Attendance must be for either a worker or a staff account." };
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(entry.date)) {
+        return { ok: false, message: "Attendance date must be YYYY-MM-DD." };
+      }
+      if (workerId && !state.workers.some((worker) => worker.id === workerId)) {
+        return { ok: false, message: "Worker not found in this workshop." };
+      }
+      if (userId && !state.users.some((user) => user.id === userId)) {
+        return { ok: false, message: "Staff account not found in this workshop." };
+      }
+      const worker = state.workers.find((item) => item.id === workerId);
+      const user = state.users.find((item) => item.id === userId);
+      const sectionId =
+        entry.sectionId || (workerId ? worker?.sectionIds?.[0] : user?.sectionIds?.[0]);
+      setState((prev) => {
+        const existing = prev.attendance.find(
+          (record) =>
+            record.date === entry.date &&
+            (workerId ? record.workerId === workerId : record.userId === userId),
+        );
+        const record: AttendanceRecord = {
+          id: existing?.id ?? uid("att"),
+          workerId,
+          userId,
+          sectionId: sectionId || existing?.sectionId,
+          date: entry.date,
+          status: entry.status,
+          markedAt: new Date().toISOString(),
+          markedBy: entry.markedBy || user?.name || "ScanPlan",
+          source: entry.source ?? "ScanPlan",
+        };
+        return {
+          ...prev,
+          attendance: existing
+            ? prev.attendance.map((item) => (item.id === existing.id ? record : item))
+            : [record, ...prev.attendance],
+        };
+      });
+      return { ok: true };
+    },
+    [state.workers, state.users],
   );
 
   const markManyPresent = useCallback(
@@ -7613,6 +7682,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateInsuranceClaim,
       recordInsuranceCheque,
       markAttendance,
+      markAttendanceEntry,
       markManyPresent,
       submitAppointmentBooking,
       createStaffAppointment,
@@ -7733,6 +7803,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       updateInsuranceClaim,
       recordInsuranceCheque,
       markAttendance,
+      markAttendanceEntry,
       markManyPresent,
       submitAppointmentBooking,
       createStaffAppointment,

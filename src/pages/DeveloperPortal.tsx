@@ -52,7 +52,8 @@ import { cloudConfigured, masterSupabase, portalConfigured } from "../lib/supaba
 
 const PORTAL_KEY = "ravsoft_master_portal_v1";
 const LEGACY_PORTAL_KEY = "torque_master_portal_v1";
-const SOFTWARE_OPTIONS = ["Torque ERP", "RAVBsoft"];
+const SOFTWARE_OPTIONS = ["Torque ERP", "ScanPlan", "RAVBsoft"];
+const SCANPLAN_LABEL = "ScanPlan";
 const LATEST_APP_VERSION = "1.4.0";
 const RELEASES = [
   {
@@ -166,7 +167,39 @@ interface PortalPaymentRow {
   note?: string | null;
 }
 
-const INSTALLATION_ID_PATTERN = /^WS-LK-[A-Z0-9]{6,16}$/;
+// Torque ERP installations use WS-LK-*, ScanPlan attendance installations use
+// SP-LK-*. Both are accepted so one developer portal can licence every app.
+const INSTALLATION_ID_PATTERN = /^(WS|SP)-LK-[A-Z0-9]{6,16}$/;
+
+function isScanPlanClient(softwareName: string): boolean {
+  return softwareName.trim().toLowerCase() === SCANPLAN_LABEL.toLowerCase();
+}
+
+function installationPrefix(softwareName: string): string {
+  return isScanPlanClient(softwareName) ? "SP-LK" : "WS-LK";
+}
+
+function installationIdHint(softwareName: string): string {
+  return `${installationPrefix(softwareName)}-XXXXXXXX (6–16 letters or digits)`;
+}
+
+function validInstallationId(id: string, softwareName: string): boolean {
+  if (!INSTALLATION_ID_PATTERN.test(id)) return false;
+  return id.startsWith(`${installationPrefix(softwareName)}-`);
+}
+
+function defaultPresetForSoftware(softwareName: string): string {
+  return isScanPlanClient(softwareName) ? "scanplan" : "quick-lube";
+}
+
+function productOptions(clients: PortalClient[]): string[] {
+  const names = new Set(SOFTWARE_OPTIONS);
+  clients.forEach((entry) => {
+    const name = entry.softwareName.trim();
+    if (name) names.add(name);
+  });
+  return [...names].sort((a, b) => a.localeCompare(b));
+}
 
 function planFromValue(value: unknown): LicencePlan {
   const raw = typeof value === "string" ? value.trim() : "";
@@ -286,6 +319,13 @@ const PLAN_PRICES: Record<LicencePlan, number> = {
   Enterprise: 29900,
 };
 
+/** ScanPlan is priced per client; it has no fixed public rate card yet. */
+const PRODUCT_RATE_CARDS: Record<string, Partial<Record<LicencePlan, number>>> = {
+  "Torque ERP": PLAN_PRICES,
+  RAVBsoft: PLAN_PRICES,
+  ScanPlan: {},
+};
+
 const PLAN_ORDER: LicencePlan[] = ["Lite", "Starter", "Growth", "Pro", "Enterprise"];
 
 const PLAN_DESCRIPTIONS: Record<LicencePlan, string> = {
@@ -295,6 +335,30 @@ const PLAN_DESCRIPTIONS: Record<LicencePlan, string> = {
   Pro: "Busy operation — payroll, banking, cheques, marketing and full reporting.",
   Enterprise: "Multi-branch groups — every module, attendance, API access and priority support.",
 };
+
+const SCANPLAN_PLAN_DESCRIPTIONS: Record<LicencePlan, string> = {
+  Lite: "Single company — QR check-in, GPS geofence and daily attendance.",
+  Starter: "Growing team — department shifts, pending approvals and Excel reports.",
+  Growth: "Multi-department — NB/OT rules, company branding and full reports.",
+  Pro: "Busy sites — priority support and custom attendance rules.",
+  Enterprise: "Multi-site groups — every ScanPlan feature and dedicated support.",
+};
+
+function planDescription(softwareName: string, plan: LicencePlan): string {
+  return isScanPlanClient(softwareName) ? SCANPLAN_PLAN_DESCRIPTIONS[plan] : PLAN_DESCRIPTIONS[plan];
+}
+
+/** Fixed monthly rate for a product and plan. Undefined means "set a client fee". */
+function rateFor(softwareName: string, plan: LicencePlan): number | undefined {
+  return PRODUCT_RATE_CARDS[softwareName.trim()]?.[plan];
+}
+
+function feePlaceholder(softwareName: string, plan: LicencePlan): string {
+  return rateFor(softwareName, plan) === undefined
+    ? "Enter the agreed monthly fee"
+    : String(rateFor(softwareName, plan));
+}
+
 
 /** Default module preset applied to each plan. */
 const PLAN_PRESETS: Record<LicencePlan, string> = {
@@ -324,10 +388,14 @@ function isLifetimeLicence(client: { expiresAt: string }): boolean {
   return daysUntil(client.expiresAt) > LIFETIME_DAYS_THRESHOLD;
 }
 
-function monthlyFeeFor(client: { plan: LicencePlan; monthlyFee?: number }): number {
+function monthlyFeeFor(client: {
+  plan: LicencePlan;
+  monthlyFee?: number;
+  softwareName?: string;
+}): number {
   const custom = Number(client.monthlyFee);
   if (client.monthlyFee !== undefined && Number.isFinite(custom) && custom >= 0) return custom;
-  return PLAN_PRICES[client.plan];
+  return rateFor(client.softwareName ?? "Torque ERP", client.plan) ?? 0;
 }
 
 function isoDays(days: number): string {
@@ -451,6 +519,28 @@ function seedPortal(): PortalData {
         notes: "Suspended after two unpaid renewal reminders.",
         createdAt: isoDays(-310),
       },
+      {
+        id: "SP-LK-DEMO0001",
+        workshopName: "Mr Paint Srilanka — Peradeniya",
+        softwareName: "ScanPlan",
+        serverAddress: "https://mrpperaatten-repo.netlify.app",
+        appVersion: "1.0.0",
+        latestVersion: "1.0.0",
+        gitBranch: "client/scanplan-demo",
+        customBuild: false,
+        ownerName: "Ravindu Jayasinghe",
+        phone: "+94 77 557 5680",
+        email: "ravindranath@hotmail.co.uk",
+        district: "Kandy",
+        address: "Peradeniya, Kandy",
+        plan: "Growth",
+        status: "Trial",
+        expiresAt: isoDays(14),
+        lastSeenAt: isoDays(-1),
+        featureFlags: allFlags(true),
+        notes: "ScanPlan attendance demo installation.",
+        createdAt: isoDays(-14),
+      },
     ],
     payments: [
       {
@@ -484,6 +574,17 @@ function seedPortal(): PortalData {
         method: "Cash",
         months: 3,
         note: "Quarterly renewal collected on site.",
+      },
+      {
+        id: "pay_demo_04",
+        clientId: "SP-LK-DEMO0001",
+        workshopName: "Mr Paint Srilanka — Peradeniya",
+        date: isoDays(-14),
+        amount: 89000,
+        method: "Online",
+        reference: "SCAN-TRIAL-01",
+        months: 1,
+        note: "ScanPlan trial setup.",
       },
     ],
   };
@@ -736,6 +837,7 @@ export function DeveloperPortalPage() {
   const [data, setData] = useState<PortalData>(() => loadPortal());
   const [tab, setTab] = useState<"fleet" | "payments" | "releases" | "plans" | "offline">("fleet");
   const [query, setQuery] = useState("");
+  const [softwareFilter, setSoftwareFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | LicenceStatus>("all");
   const [notice, setNotice] = useState<{ tone: "ok" | "warn" | "error"; text: string } | null>(
     null,
@@ -788,11 +890,22 @@ export function DeveloperPortalPage() {
       return;
     }
     let mounted = true;
-    void masterSupabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setPortalSession(data.session ?? null);
-      setPortalAuthReady(true);
-    });
+    // A slow or unreachable auth endpoint must never leave the portal stuck on
+    // "Checking portal session". Show the sign-in form after a short wait.
+    const authTimeout = window.setTimeout(() => {
+      if (mounted) setPortalAuthReady(true);
+    }, 8000);
+    void masterSupabase.auth
+      .getSession()
+      .then(({ data }) => {
+        if (!mounted) return;
+        setPortalSession(data.session ?? null);
+        setPortalAuthReady(true);
+      })
+      .catch(() => {
+        if (mounted) setPortalAuthReady(true);
+      })
+      .finally(() => window.clearTimeout(authTimeout));
     const { data: listener } = masterSupabase.auth.onAuthStateChange((_event, session) => {
       if (!mounted) return;
       setPortalSession(session ?? null);
@@ -800,6 +913,7 @@ export function DeveloperPortalPage() {
     });
     return () => {
       mounted = false;
+      window.clearTimeout(authTimeout);
       listener.subscription.unsubscribe();
     };
   }, []);
@@ -877,10 +991,27 @@ export function DeveloperPortalPage() {
 
   const client = data.clients.find((entry) => entry.id === manageId) ?? null;
   const clientIsLifetime = client ? isLifetimeLicence(client) : false;
+  const softwareChoices = useMemo(() => productOptions(data.clients), [data.clients]);
+  const rateCardProduct = softwareFilter === "all" ? SOFTWARE_OPTIONS[0] : softwareFilter;
+  const productClients = useMemo(
+    () =>
+      softwareFilter === "all"
+        ? data.clients
+        : data.clients.filter((entry) => entry.softwareName === softwareFilter),
+    [data.clients, softwareFilter],
+  );
+  const productClientIds = useMemo(
+    () => new Set(productClients.map((entry) => entry.id)),
+    [productClients],
+  );
+  const productPayments = useMemo(
+    () => data.payments.filter((payment) => productClientIds.has(payment.clientId)),
+    [data.payments, productClientIds],
+  );
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    return data.clients
+    return productClients
       .filter((entry) => (statusFilter === "all" ? true : entry.status === statusFilter))
       .filter((entry) => {
         if (!needle) return true;
@@ -889,23 +1020,23 @@ export function DeveloperPortalPage() {
           .includes(needle);
       })
       .sort((a, b) => a.expiresAt.localeCompare(b.expiresAt));
-  }, [data.clients, query, statusFilter]);
+  }, [productClients, query, statusFilter]);
 
-  const activeClients = data.clients.filter((entry) => entry.status === "Active");
+  const activeClients = productClients.filter((entry) => entry.status === "Active");
   const expiring = activeClients.filter((entry) => {
     const days = daysUntil(entry.expiresAt);
     return days >= 0 && days <= 30;
   });
-  const suspended = data.clients.filter((entry) => entry.status === "Suspended");
+  const suspended = productClients.filter((entry) => entry.status === "Suspended");
   const monthKey = new Date().toISOString().slice(0, 7);
-  const collectedThisMonth = data.payments
+  const collectedThisMonth = productPayments
     .filter((payment) => payment.date.slice(0, 7) === monthKey)
     .reduce((sum, payment) => sum + payment.amount, 0);
   const lifetimeCount = activeClients.filter(isLifetimeLicence).length;
   const annualValue = activeClients
     .filter((entry) => !isLifetimeLicence(entry))
     .reduce((sum, entry) => sum + monthlyFeeFor(entry) * ANNUAL_MONTHS_CHARGED, 0);
-  const onlineCount = data.clients.filter(
+  const onlineCount = productClients.filter(
     (entry) => entry.lastSeenAt && daysUntil(entry.lastSeenAt) >= -2,
   ).length;
 
@@ -978,9 +1109,11 @@ export function DeveloperPortalPage() {
   }
 
   function openRegister() {
+    const softwareName =
+      softwareFilter === "all" ? SOFTWARE_OPTIONS[0] : softwareFilter;
     setEditor({
       workshopName: "",
-      softwareName: "Torque ERP",
+      softwareName,
       serverAddress: "",
       ownerName: "",
       phone: "",
@@ -988,9 +1121,12 @@ export function DeveloperPortalPage() {
       district: "",
       address: "",
       plan: "Starter",
-      monthlyFee: String(PLAN_PRICES.Starter),
+      monthlyFee:
+        rateFor(softwareName, "Starter") === undefined
+          ? ""
+          : String(rateFor(softwareName, "Starter")),
       months: 12,
-      preset: "quick-lube",
+      preset: defaultPresetForSoftware(softwareName),
       notes: "",
       gitBranch: "",
       customBuild: false,
@@ -1008,6 +1144,18 @@ export function DeveloperPortalPage() {
       : undefined;
   }
 
+  function changeEditorSoftware(softwareName: string) {
+    setEditor((prev) => ({
+      ...prev,
+      softwareName,
+      preset: defaultPresetForSoftware(softwareName),
+      monthlyFee:
+        rateFor(softwareName, prev.plan) === undefined
+          ? ""
+          : String(rateFor(softwareName, prev.plan)),
+    }));
+  }
+
   async function submitRegister() {
     if (!editor.workshopName.trim() || !editor.ownerName.trim() || !editor.phone.trim()) {
       setNotice({ tone: "error", text: "Client name, owner and phone are required." });
@@ -1017,11 +1165,19 @@ export function DeveloperPortalPage() {
       setNotice({ tone: "error", text: "Enter the software name this client is licensed for." });
       return;
     }
-    const requestedId = editor.installationId.trim().toUpperCase();
-    if (requestedId && !INSTALLATION_ID_PATTERN.test(requestedId)) {
+    const softwareName = editor.softwareName.trim();
+    if (rateFor(softwareName, editor.plan) === undefined && editorMonthly() === undefined) {
       setNotice({
         tone: "error",
-        text: "Installation ID must look like WS-LK-XXXXXXXX (6–16 letters or digits).",
+        text: `${softwareName} has no fixed rate card. Enter the agreed monthly fee.`,
+      });
+      return;
+    }
+    const requestedId = editor.installationId.trim().toUpperCase();
+    if (requestedId && !validInstallationId(requestedId, softwareName)) {
+      setNotice({
+        tone: "error",
+        text: `A ${softwareName} installation ID must look like ${installationIdHint(softwareName)}.`,
       });
       return;
     }
@@ -1029,12 +1185,13 @@ export function DeveloperPortalPage() {
       setNotice({ tone: "error", text: `Installation ID ${requestedId} is already registered.` });
       return;
     }
+    const prefix = installationPrefix(softwareName);
     const id =
-      requestedId || `WS-LK-${Math.random().toString(16).slice(2, 10).toUpperCase()}`;
+      requestedId || `${prefix}-${Math.random().toString(16).slice(2, 10).toUpperCase()}`;
     const clientRecord: PortalClient = {
       id,
       workshopName: editor.workshopName.trim(),
-      softwareName: editor.softwareName.trim(),
+      softwareName,
       serverAddress: editor.serverAddress.trim() || undefined,
       ownerName: editor.ownerName.trim(),
       phone: editor.phone.trim(),
@@ -1097,14 +1254,29 @@ export function DeveloperPortalPage() {
       setNotice({ tone: "error", text: "Client name, owner and phone are required." });
       return;
     }
-    if (!editor.softwareName.trim()) {
+    const softwareName = editor.softwareName.trim();
+    if (!softwareName) {
       setNotice({ tone: "error", text: "Software name is required." });
+      return;
+    }
+    if (!validInstallationId(client.id, softwareName)) {
+      setNotice({
+        tone: "error",
+        text: `Repoint the installation ID to ${installationIdHint(softwareName)} before changing the product.`,
+      });
+      return;
+    }
+    if (rateFor(softwareName, editor.plan) === undefined && editorMonthly() === undefined) {
+      setNotice({
+        tone: "error",
+        text: `${softwareName} has no fixed rate card. Enter the agreed monthly fee.`,
+      });
       return;
     }
     const saved = await updateClient({
       ...client,
       workshopName: editor.workshopName.trim(),
-      softwareName: editor.softwareName.trim(),
+      softwareName,
       serverAddress: editor.serverAddress.trim() || undefined,
       ownerName: editor.ownerName.trim(),
       phone: editor.phone.trim(),
@@ -1271,7 +1443,7 @@ export function DeveloperPortalPage() {
       plan: client.plan,
       monthlyFee: String(client.monthlyFee ?? PLAN_PRICES[client.plan]),
       months: 12,
-      preset: "full-workshop",
+      preset: defaultPresetForSoftware(client.softwareName),
       notes: client.notes ?? "",
       gitBranch: client.gitBranch ?? "",
       customBuild: client.customBuild ?? false,
@@ -1297,6 +1469,13 @@ export function DeveloperPortalPage() {
       return;
     }
     const amount = monthlyFeeFor(client) * LIFETIME_MONTHS_CHARGED;
+    if (amount <= 0) {
+      setNotice({
+        tone: "error",
+        text: `Set a monthly fee for ${client.softwareName} before selling a lifetime licence.`,
+      });
+      return;
+    }
     const expiresAt = addMonths(new Date().toISOString(), LIFETIME_TERM_MONTHS);
     const payment: PortalPayment = {
       id: uid("pay"),
@@ -1345,6 +1524,13 @@ export function DeveloperPortalPage() {
     const expiresAt = addMonths(startFrom, months);
     const billedMonths = months === 12 ? ANNUAL_MONTHS_CHARGED : months;
     const amount = monthlyFeeFor(client) * billedMonths;
+    if (amount <= 0) {
+      setNotice({
+        tone: "error",
+        text: `Set a monthly fee for ${client.softwareName} before recording a payment.`,
+      });
+      return;
+    }
     const payment: PortalPayment = {
       id: uid("pay"),
       clientId: client.id,
@@ -1383,17 +1569,24 @@ export function DeveloperPortalPage() {
   async function setStatus(status: LicenceStatus) {
     if (!client) return;
     const expiresAt =
-      status === "Active" && daysUntil(client.expiresAt) < 0
+      status === "Trial" || (status === "Active" && daysUntil(client.expiresAt) < 0)
         ? addMonths(new Date().toISOString(), 1)
-        : client.expiresAt;
+        : status === "Expired"
+          ? new Date().toISOString()
+          : client.expiresAt;
     const saved = await updateClient({ ...client, status, expiresAt });
     if (!saved) return;
+    const locking = status === "Suspended" || status === "Expired";
     setNotice({
-      tone: status === "Suspended" ? "warn" : "ok",
+      tone: locking ? "warn" : "ok",
       text:
-        status === "Suspended"
-          ? `${client.workshopName} suspended. The client will lock on its next licence check.`
-          : `${client.workshopName} is now ${status.toLowerCase()}.`,
+        status === "Trial"
+          ? `${client.workshopName} restarted on a 30-day ${client.softwareName} trial.`
+          : status === "Suspended"
+            ? `${client.workshopName} suspended. The ${client.softwareName} app will lock on its next licence check.`
+            : status === "Expired"
+              ? `${client.workshopName} marked expired. The ${client.softwareName} app will lock on its next licence check.`
+              : `${client.workshopName} is now active.`,
     });
   }
 
@@ -1452,7 +1645,7 @@ export function DeveloperPortalPage() {
       return;
     }
     const link = `https://wa.me/${whatsappNumber(clientRecord.phone)}?text=${encodeURIComponent(
-      `Hello ${clientRecord.ownerName}, this is RAVBsoft. The ${clientRecord.softwareName} ${clientRecord.plan} licence for ${clientRecord.workshopName} (${clientRecord.id}) expires on ${shortDate(clientRecord.expiresAt)}. Please renew to keep modules and cloud sync active.`,
+      `Hello ${clientRecord.ownerName}, this is RAVBsoft. The ${clientRecord.softwareName} ${clientRecord.plan} licence for ${clientRecord.workshopName} (${clientRecord.id}) expires on ${shortDate(clientRecord.expiresAt)}. Please renew to keep the licence active.`,
     )}`;
     window.open(link, "_blank", "noopener,noreferrer");
   }
@@ -1527,10 +1720,10 @@ export function DeveloperPortalPage() {
     if (!client) return;
     const previousId = client.id;
     const next = newInstallationId.trim().toUpperCase();
-    if (!INSTALLATION_ID_PATTERN.test(next)) {
+    if (!validInstallationId(next, client.softwareName)) {
       setNotice({
         tone: "error",
-        text: "Installation ID must look like WS-LK-XXXXXXXX (6–16 letters or digits).",
+        text: `A ${client.softwareName} installation ID must look like ${installationIdHint(client.softwareName)}.`,
       });
       return;
     }
@@ -1571,11 +1764,6 @@ export function DeveloperPortalPage() {
 
   return (
     <div className="developer-portal">
-      <datalist id="ravsoft-software-options">
-        {SOFTWARE_OPTIONS.map((software) => (
-          <option key={software} value={software} />
-        ))}
-      </datalist>
       <header className="developer-topbar">
         <div className="row" style={{ gap: 10 }}>
           <img
@@ -1658,16 +1846,37 @@ export function DeveloperPortalPage() {
             <span className="developer-eyebrow">APP FLEET</span>
             <h1>Every client, every app, one console</h1>
             <p>
-              Register client installations for any RAVBsoft app, renew LKR licences, switch
-              modules remotely and issue signed offline activation tokens for disconnected sites.
+              Register Torque ERP and ScanPlan installations, renew LKR licences, suspend or
+              expire access remotely, and manage every client from one console.
             </p>
           </div>
           <div className="developer-hero-side">
-            <div className="developer-product-badge">
-              <img src="/brand/torque-erp-logo.png" alt="Torque ERP — workshop management solution" />
-              <div>
-                <strong>Torque ERP</strong>
-                <span>Workshop management solution · powered by RAVBsoft</span>
+            <div className="row wrap" style={{ gap: 8 }}>
+              <div className="developer-product-badge">
+                <img src="/brand/torque-erp-logo.png" alt="Torque ERP — workshop management solution" />
+                <div>
+                  <strong>Torque ERP</strong>
+                  <span>Workshop management · powered by RAVBsoft</span>
+                </div>
+              </div>
+              <div className="developer-product-badge">
+                <div
+                  style={{
+                    width: 40,
+                    height: 40,
+                    display: "grid",
+                    placeItems: "center",
+                    borderRadius: 10,
+                    background: "var(--brand-soft, #eef4ff)",
+                    color: "var(--brand, #2563eb)",
+                  }}
+                >
+                  <ShieldCheck size={22} />
+                </div>
+                <div>
+                  <strong>ScanPlan</strong>
+                  <span>Attendance app · powered by RAVBsoft</span>
+                </div>
               </div>
             </div>
             <div className="row wrap" style={{ gap: 8 }}>
@@ -1693,7 +1902,7 @@ export function DeveloperPortalPage() {
             <div className="developer-kpi-icon"><Users size={17} /></div>
             <div>
               <span>Installations</span>
-              <strong>{data.clients.length}</strong>
+              <strong>{productClients.length}</strong>
               <em>{activeClients.length} active · {suspended.length} suspended</em>
             </div>
           </div>
@@ -1710,7 +1919,7 @@ export function DeveloperPortalPage() {
             <div>
               <span>Collected this month</span>
               <strong>{money(collectedThisMonth)}</strong>
-              <em>{data.payments.length} payments logged</em>
+              <em>{productPayments.length} payments logged</em>
             </div>
           </div>
           <div className="developer-kpi">
@@ -1753,6 +1962,19 @@ export function DeveloperPortalPage() {
                   <p>Each row is one isolated client server, identified by its installation ID.</p>
                 </div>
                 <div className="row wrap" style={{ gap: 8 }}>
+                  <select
+                    className="select"
+                    value={softwareFilter}
+                    onChange={(event) => setSoftwareFilter(event.target.value)}
+                    title="Filter by product"
+                  >
+                    <option value="all">All products</option>
+                    {softwareChoices.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
                   <div className="input-group" style={{ minWidth: 230 }}>
                     <span className="prefix"><Search size={14} /></span>
                     <input
@@ -1975,9 +2197,9 @@ export function DeveloperPortalPage() {
                     the next online sync. Clock rollback also forces a re-check.
                   </div>
                   <div className="developer-checklist">
-                    <span><ShieldCheck size={13} /> Signed offline tokens (TRQ2)</span>
+                    <span><ShieldCheck size={13} /> Live polling for Torque ERP and ScanPlan</span>
                     <span><ShieldCheck size={13} /> Installation-bound licences</span>
-                    <span><ShieldCheck size={13} /> Remote module switches</span>
+                    <span><ShieldCheck size={13} /> Torque ERP offline tokens (TRQ2)</span>
                     <span><ShieldCheck size={13} /> WhatsApp renewal reminders</span>
                   </div>
                 </div>
@@ -1992,13 +2214,14 @@ export function DeveloperPortalPage() {
               <div>
                 <h3>Licence payments</h3>
                 <p>
-                  Every subscription renewal and lifetime sale collected in LKR, with method and
-                  reference for reconciliation.
+                  Subscription renewals and lifetime sales for{" "}
+                  {softwareFilter === "all" ? "every RAVBsoft product" : softwareFilter}, with
+                  method and reference for reconciliation.
                 </p>
               </div>
               <span className="badge badge-green">
                 <Banknote size={12} />
-                {money(data.payments.reduce((sum, payment) => sum + payment.amount, 0))} all time
+                {money(productPayments.reduce((sum, payment) => sum + payment.amount, 0))} all time
               </span>
             </div>
             <div className="table-wrap">
@@ -2015,7 +2238,7 @@ export function DeveloperPortalPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {[...data.payments]
+                  {[...productPayments]
                     .sort((a, b) => b.date.localeCompare(a.date))
                     .map((payment) => (
                       <tr key={payment.id}>
@@ -2035,7 +2258,7 @@ export function DeveloperPortalPage() {
                         <td className="num">{money(payment.amount)}</td>
                       </tr>
                     ))}
-                  {data.payments.length === 0 && (
+                  {productPayments.length === 0 && (
                     <tr>
                       <td colSpan={7}>
                         <div className="tiny muted" style={{ padding: 18, textAlign: "center" }}>
@@ -2088,11 +2311,11 @@ export function DeveloperPortalPage() {
                         </td>
                         <td className="num">
                           {
-                            data.clients.filter(
+                            productClients.filter(
                               (entry) => entry.appVersion === release.version,
                             ).length
                           }
-                          /{data.clients.length}
+                          /{productClients.length}
                         </td>
                       </tr>
                     ))}
@@ -2113,18 +2336,18 @@ export function DeveloperPortalPage() {
                   <div>
                     <span>On latest</span>
                     <strong>
-                      {data.clients.filter((entry) => entry.appVersion === LATEST_APP_VERSION).length}
-                      /{data.clients.length}
+                      {productClients.filter((entry) => entry.appVersion === LATEST_APP_VERSION).length}
+                      /{productClients.length}
                     </strong>
                   </div>
                   <div>
                     <span>Custom builds</span>
-                    <strong>{data.clients.filter((entry) => entry.customBuild).length}</strong>
+                    <strong>{productClients.filter((entry) => entry.customBuild).length}</strong>
                   </div>
                   <div>
                     <span>Deploy webhooks</span>
                     <strong>
-                      {data.clients.filter((entry) => entry.deployWebhookUrl).length}
+                      {productClients.filter((entry) => entry.deployWebhookUrl).length}
                     </strong>
                   </div>
                   <div>
@@ -2132,7 +2355,7 @@ export function DeveloperPortalPage() {
                     <strong>
                       {
                         new Set(
-                          data.clients
+                          productClients
                             .map((entry) => entry.gitBranch)
                             .filter((branch): branch is string => Boolean(branch)),
                         ).size
@@ -2154,15 +2377,29 @@ export function DeveloperPortalPage() {
             <div className="card">
               <div className="card-head">
                 <div>
-                  <h3>Licence rate card</h3>
+                  <h3>Licence rate card · {rateCardProduct}</h3>
                   <p>
-                    Choose a monthly or yearly subscription, or sell the app outright with a
-                    one-time lifetime licence. Yearly billing is 12 months for the price of{" "}
-                    {ANNUAL_MONTHS_CHARGED} — two months free. Each client can still carry a
-                    typed custom fee on its own record.
+                    {isScanPlanClient(rateCardProduct)
+                      ? "ScanPlan has no fixed rate card yet — type the agreed fee on each client. Yearly is 10 × that fee for 12 months and lifetime is a one-off 60 × fee."
+                      : `Rates for ${rateCardProduct} subscriptions and lifetime sales. Yearly billing is 12 months for the price of ${ANNUAL_MONTHS_CHARGED} — two months free. Each client can still carry a typed custom fee.`}{" "}
+                    Choose the product to switch rate-card copy.
                   </p>
                 </div>
-                <Wallet size={16} />
+                <div className="row wrap" style={{ gap: 8 }}>
+                  <select
+                    className="select"
+                    value={softwareFilter === "all" ? SOFTWARE_OPTIONS[0] : softwareFilter}
+                    onChange={(event) => setSoftwareFilter(event.target.value)}
+                    title="Rate card product"
+                  >
+                    {softwareChoices.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                  <Wallet size={16} />
+                </div>
               </div>
               <div className="card-body">
                 <div className="developer-plan-grid">
@@ -2170,6 +2407,7 @@ export function DeveloperPortalPage() {
                     const preset = MODULE_PRESETS.find(
                       (entry) => entry.id === PLAN_PRESETS[plan],
                     );
+                    const fixedRate = rateFor(rateCardProduct, plan);
                     return (
                       <div key={plan} className="developer-plan-card">
                         <div className="row-between">
@@ -2179,19 +2417,31 @@ export function DeveloperPortalPage() {
                           )}
                         </div>
                         <div className="developer-plan-price">
-                          {money(PLAN_PRICES[plan])}
+                          {fixedRate === undefined ? "Custom fee" : money(fixedRate)}
                           <span>/month</span>
                         </div>
-                        <div className="developer-plan-billing">Monthly subscription</div>
+                        <div className="developer-plan-billing">
+                          {fixedRate === undefined
+                            ? "Set the agreed fee on each client"
+                            : "Monthly subscription"}
+                        </div>
                         <div className="developer-plan-terms">
                           <div className="developer-plan-term">
                             <span>Yearly</span>
-                            <strong>{money(PLAN_PRICES[plan] * ANNUAL_MONTHS_CHARGED)}</strong>
+                            <strong>
+                              {fixedRate === undefined
+                                ? "10 × client fee"
+                                : money(fixedRate * ANNUAL_MONTHS_CHARGED)}
+                            </strong>
                             <em>12 months</em>
                           </div>
                           <div className="developer-plan-term">
                             <span>Lifetime</span>
-                            <strong>{money(PLAN_PRICES[plan] * LIFETIME_MONTHS_CHARGED)}</strong>
+                            <strong>
+                              {fixedRate === undefined
+                                ? "60 × client fee"
+                                : money(fixedRate * LIFETIME_MONTHS_CHARGED)}
+                            </strong>
                             <em>one-time</em>
                           </div>
                         </div>
@@ -2199,9 +2449,11 @@ export function DeveloperPortalPage() {
                           <BadgeCheck size={11} /> Lifetime is an outright purchase — no
                           subscription
                         </div>
-                        <p className="tiny">{PLAN_DESCRIPTIONS[plan]}</p>
+                        <p className="tiny">{planDescription(rateCardProduct, plan)}</p>
                         <div className="tiny muted">
-                          Default preset: {preset?.name ?? "Full workshop"}
+                          {isScanPlanClient(rateCardProduct)
+                            ? "All attendance features included"
+                            : `Default preset: ${preset?.name ?? "Full workshop"}`}
                         </div>
                       </div>
                     );
@@ -2233,9 +2485,16 @@ export function DeveloperPortalPage() {
               <div className="card-head">
                 <div>
                   <h3>Offline activation token</h3>
-                  <p>Issue a signed key for a client with no internet access.</p>
+                  <p>Issue a signed key for a Torque ERP client with no internet access.</p>
                 </div>
                 <KeyRound size={16} />
+              </div>
+              <div className="alert alert-info" style={{ marginBottom: 12 }}>
+                <CircleAlert />
+                <span>
+                  TRQ2 tokens unlock Torque ERP only. ScanPlan attendance installations unlock
+                  through live portal polling using their `SP-LK-*` ID.
+                </span>
               </div>
               <div className="card-body stack" style={{ gap: 12 }}>
                 <label className="field">
@@ -2406,7 +2665,7 @@ export function DeveloperPortalPage() {
             <div className="developer-modal-head">
               <div>
                 <h3>Register a client</h3>
-                <p>A new client installation starts on trial with the selected modules.</p>
+                <p>A new {editor.softwareName} installation starts on a 30-day trial.</p>
               </div>
               <button className="btn btn-ghost btn-sm" onClick={() => setRegisterOpen(false)}>
                 Close
@@ -2426,15 +2685,17 @@ export function DeveloperPortalPage() {
                 </label>
                 <label className="field">
                   <span className="label">Software name *</span>
-                  <input
-                    className="input"
-                    list="ravsoft-software-options"
+                  <select
+                    className="select"
                     value={editor.softwareName}
-                    onChange={(event) =>
-                      setEditor((prev) => ({ ...prev, softwareName: event.target.value }))
-                    }
-                    placeholder="Torque ERP"
-                  />
+                    onChange={(event) => changeEditorSoftware(event.target.value)}
+                  >
+                    {softwareChoices.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
                 </label>
                 <label className="field" style={{ gridColumn: "1 / -1" }}>
                   <span className="label">Server address</span>
@@ -2444,7 +2705,11 @@ export function DeveloperPortalPage() {
                     onChange={(event) =>
                       setEditor((prev) => ({ ...prev, serverAddress: event.target.value }))
                     }
-                    placeholder="https://erp.client.lk"
+                    placeholder={
+                      isScanPlanClient(editor.softwareName)
+                        ? "https://company.netlify.app"
+                        : "https://erp.client.lk"
+                    }
                   />
                 </label>
                 <label className="field">
@@ -2508,13 +2773,19 @@ export function DeveloperPortalPage() {
                       setEditor((prev) => ({
                         ...prev,
                         plan,
-                        monthlyFee: String(PLAN_PRICES[plan]),
+                        monthlyFee:
+                          rateFor(editor.softwareName, plan) === undefined
+                            ? ""
+                            : String(rateFor(editor.softwareName, plan)),
                       }));
                     }}
                   >
                     {PLAN_ORDER.map((plan) => (
                       <option key={plan} value={plan}>
-                        {plan} · {money(PLAN_PRICES[plan])}/month
+                        {plan} ·{" "}
+                        {rateFor(editor.softwareName, plan) === undefined
+                          ? "custom fee"
+                          : `${money(rateFor(editor.softwareName, plan)!)}/month`}
                       </option>
                     ))}
                   </select>
@@ -2530,10 +2801,12 @@ export function DeveloperPortalPage() {
                     onChange={(event) =>
                       setEditor((prev) => ({ ...prev, monthlyFee: event.target.value }))
                     }
-                    placeholder={String(PLAN_PRICES[editor.plan])}
+                    placeholder={feePlaceholder(editor.softwareName, editor.plan)}
                   />
                   <span className="hint">
-                    Type the agreed fee. Leave blank to use the {editor.plan} rate card.
+                    {rateFor(editor.softwareName, editor.plan) === undefined
+                      ? "ScanPlan uses a client-specific fee. Enter the agreed monthly amount."
+                      : `Type the agreed fee. Leave blank to use the ${editor.plan} rate card.`}
                   </span>
                 </label>
                 <label className="field">
@@ -2557,29 +2830,41 @@ export function DeveloperPortalPage() {
                     onChange={(event) =>
                       setEditor((prev) => ({ ...prev, installationId: event.target.value }))
                     }
-                    placeholder="WS-LK-XXXXXXXX — leave blank to generate"
+                    placeholder={`${installationPrefix(editor.softwareName)}-XXXXXXXX — leave blank to generate`}
                   />
                 </label>
-                <label className="field" style={{ gridColumn: "1 / -1" }}>
-                  <span className="label">Module preset</span>
-                  <select
-                    className="select"
-                    value={editor.preset}
-                    onChange={(event) =>
-                      setEditor((prev) => ({ ...prev, preset: event.target.value }))
-                    }
-                  >
-                    {MODULE_PRESETS.map((preset) => (
-                      <option key={preset.id} value={preset.id}>
-                        {preset.name} — {preset.caption}
-                      </option>
-                    ))}
-                  </select>
-                </label>
+                {!isScanPlanClient(editor.softwareName) && (
+                  <label className="field" style={{ gridColumn: "1 / -1" }}>
+                    <span className="label">Module preset</span>
+                    <select
+                      className="select"
+                      value={editor.preset}
+                      onChange={(event) =>
+                        setEditor((prev) => ({ ...prev, preset: event.target.value }))
+                      }
+                    >
+                      {MODULE_PRESETS.map((preset) => (
+                        <option key={preset.id} value={preset.id}>
+                          {preset.name} — {preset.caption}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                )}
               </div>
               <div className="tiny muted" style={{ marginTop: 8 }}>
-                Paste the ID shown in the client app under Settings → Licence, or leave it
-                blank to generate one. The ID must match before the client can poll its licence.
+                {isScanPlanClient(editor.softwareName) ? (
+                  <>
+                    Paste the `SP-LK-*` ID shown on the ScanPlan setup or lock screen, or leave
+                    it blank to generate one. The ID must match before the attendance app can
+                    poll its licence.
+                  </>
+                ) : (
+                  <>
+                    Paste the ID shown in the client app under Settings → Licence, or leave it
+                    blank to generate one. The ID must match before the client can poll its licence.
+                  </>
+                )}
               </div>
             </div>
             <div className="developer-modal-foot">
@@ -2654,8 +2939,12 @@ export function DeveloperPortalPage() {
                       <strong>{client.lastSeenAt ? shortDate(client.lastSeenAt) : "Never"}</strong>
                     </div>
                     <div>
-                      <span>Modules</span>
-                      <strong>{moduleCount(client.featureFlags)}/{FEATURE_FLAGS.length}</strong>
+                      <span>{isScanPlanClient(client.softwareName) ? "Features" : "Modules"}</span>
+                      <strong>
+                        {isScanPlanClient(client.softwareName)
+                          ? "Full attendance included"
+                          : `${moduleCount(client.featureFlags)}/${FEATURE_FLAGS.length}`}
+                      </strong>
                     </div>
                   </div>
                   <div className="row wrap" style={{ gap: 8, marginTop: 12 }}>
@@ -2688,10 +2977,20 @@ export function DeveloperPortalPage() {
                         Copy server address
                       </button>
                     )}
-                    {client.status === "Suspended" ? (
+                    {client.status !== "Trial" && (
+                      <button
+                        className="btn btn-soft btn-sm"
+                        onClick={() => void setStatus("Trial")}
+                        title="Restart a 30-day trial"
+                      >
+                        <RefreshCw size={12} />
+                        Trial
+                      </button>
+                    )}
+                    {client.status === "Suspended" || client.status === "Expired" ? (
                       <button
                         className="btn btn-primary btn-sm"
-                        onClick={() => setStatus("Active")}
+                        onClick={() => void setStatus("Active")}
                       >
                         <PlayCircle size={12} />
                         Activate
@@ -2699,10 +2998,20 @@ export function DeveloperPortalPage() {
                     ) : (
                       <button
                         className="btn btn-secondary btn-sm"
-                        onClick={() => setStatus("Suspended")}
+                        onClick={() => void setStatus("Suspended")}
                       >
                         <PauseCircle size={12} />
                         Suspend
+                      </button>
+                    )}
+                    {client.status !== "Expired" && (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => void setStatus("Expired")}
+                        title="Mark the licence expired — the app locks on its next check"
+                      >
+                        <CircleAlert size={12} />
+                        Expire
                       </button>
                     )}
                   </div>
@@ -2732,13 +3041,16 @@ export function DeveloperPortalPage() {
                       onClick={() => void deployClient(client)}
                     >
                       <Cloud size={12} />
-                      Deploy latest · v{LATEST_APP_VERSION}
+                      {isScanPlanClient(client.softwareName) ? "Queue update" : "Deploy latest"} · v
+                      {LATEST_APP_VERSION}
                     </button>
                     {client.deployWebhookUrl ? (
                       <span className="tiny muted">Webhook configured</span>
                     ) : (
                       <span className="tiny muted">
-                        Add a deploy webhook in Edit details for one-click rollout.
+                        {isScanPlanClient(client.softwareName)
+                          ? "Add a webhook if you want the update run posted automatically."
+                          : "Add a deploy webhook in Edit details for one-click rollout."}
                       </span>
                     )}
                   </div>
@@ -2746,7 +3058,9 @@ export function DeveloperPortalPage() {
                     {client.lastDeployedAt
                       ? `Last deployed ${shortDate(client.lastDeployedAt)} by ${client.lastDeployedBy ?? "RAVBsoft"}.`
                       : "No deployment recorded yet."}{" "}
-                    Updates apply additive migrations only; client data is never rewritten.
+                    {isScanPlanClient(client.softwareName)
+                      ? "The Netlify site itself is deployed separately; this records the update request."
+                      : "Updates apply additive migrations only; client data is never rewritten."}
                   </div>
 
                   <div className="divider" />
@@ -2770,48 +3084,63 @@ export function DeveloperPortalPage() {
                     </button>
                   </div>
                   <div className="tiny muted" style={{ marginTop: 6 }}>
-                    Use this when the client app shows a different WS-LK ID. Payments and
-                    update runs are moved with the installation, then the old row is removed.
+                    Use this when the client app shows a different {installationPrefix(client.softwareName)} ID.
+                    Payments and update runs are moved with the installation, then the old row is
+                    removed.
                   </div>
 
-                  <div className="divider" />
-                  <h4 className="developer-section-title">Remote module switches</h4>
-                  <div className="row wrap" style={{ gap: 6, marginBottom: 10 }}>
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => applyPlanPreset("full-workshop")}
-                    >
-                      <ToggleRight size={12} /> Full workshop
-                    </button>
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => applyPlanPreset("insurance-bay")}
-                    >
-                      <ToggleRight size={12} /> Insurance & body
-                    </button>
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => applyPlanPreset("quick-lube")}
-                    >
-                      <ToggleRight size={12} /> Service bay
-                    </button>
-                  </div>
-                  <div className="developer-flag-grid">
-                    {FEATURE_FLAGS.map((flag) => (
-                      <label key={flag.key} className="developer-flag">
-                        <input
-                          type="checkbox"
-                          checked={client.featureFlags[flag.key]}
-                          onChange={() => toggleClientFlag(flag.key)}
-                        />
-                        <span>{flag.label}</span>
-                      </label>
-                    ))}
-                  </div>
-                  <div className="tiny muted" style={{ marginTop: 6 }}>
-                    Changes reach the client on its next licence poll. Until then it keeps the
-                    cached flags for up to 7 days.
-                  </div>
+                  {isScanPlanClient(client.softwareName) ? (
+                    <>
+                      <div className="divider" />
+                      <h4 className="developer-section-title">ScanPlan features</h4>
+                      <div className="tiny muted">
+                        QR check-in, GPS geofence, department shifts, NB/OT rules, pending approvals,
+                        reports and Excel export are included on every plan. Torque module switches
+                        do not apply to this installation.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="divider" />
+                      <h4 className="developer-section-title">Remote module switches</h4>
+                      <div className="row wrap" style={{ gap: 6, marginBottom: 10 }}>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => applyPlanPreset("full-workshop")}
+                        >
+                          <ToggleRight size={12} /> Full workshop
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => applyPlanPreset("insurance-bay")}
+                        >
+                          <ToggleRight size={12} /> Insurance & body
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => applyPlanPreset("quick-lube")}
+                        >
+                          <ToggleRight size={12} /> Service bay
+                        </button>
+                      </div>
+                      <div className="developer-flag-grid">
+                        {FEATURE_FLAGS.map((flag) => (
+                          <label key={flag.key} className="developer-flag">
+                            <input
+                              type="checkbox"
+                              checked={client.featureFlags[flag.key]}
+                              onChange={() => toggleClientFlag(flag.key)}
+                            />
+                            <span>{flag.label}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <div className="tiny muted" style={{ marginTop: 6 }}>
+                        Changes reach the client on its next licence poll. Until then it keeps the
+                        cached flags for up to 7 days.
+                      </div>
+                    </>
+                  )}
 
                   <div className="divider" />
                   <h4 className="developer-section-title">Licence term &amp; payments</h4>
@@ -2891,78 +3220,93 @@ export function DeveloperPortalPage() {
                     </>
                   )}
 
-                  <div className="divider" />
-                  <h4 className="developer-section-title">Offline activation token</h4>
-                  <div className="row wrap" style={{ gap: 8, marginBottom: 8 }}>
-                    <button
-                      className="btn btn-soft btn-sm"
-                      onClick={() => {
-                        setTokenInstallation(client.id);
-                        setTokenHolder(client.workshopName);
-                        setTokenPlan(client.plan);
-                        setTokenMonths(renewMonths);
-                        setTokenLifetime(clientIsLifetime);
-                        setTokenFlags({ ...client.featureFlags });
-                        setTokenText("");
-                      }}
-                    >
-                      <KeyRound size={12} />
-                      Load into generator
-                    </button>
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => {
-                        setTokenInstallation(client.id);
-                        setTokenHolder(client.workshopName);
-                        setTokenPlan(client.plan);
-                        setTokenMonths(renewMonths);
-                        setTokenLifetime(clientIsLifetime);
-                        setTokenFlags({ ...client.featureFlags });
-                        const token = generateOfflineToken({
-                          installationId: client.id,
-                          holder: client.workshopName,
-                          plan: client.plan,
-                          status: "Active",
-                          expiresAt: clientIsLifetime
-                            ? addMonths(new Date().toISOString(), LIFETIME_TERM_MONTHS)
-                            : addMonths(
-                                daysUntil(client.expiresAt) > 0
-                                  ? client.expiresAt
-                                  : new Date().toISOString(),
-                                Math.max(1, renewMonths),
-                              ),
-                          issuedAt: new Date().toISOString(),
-                          featureFlags: client.featureFlags,
-                        });
-                        setTokenText(token);
-                      }}
-                    >
-                      <KeyRound size={12} />
-                      Issue {clientIsLifetime ? "lifetime" : `${renewMonths}-month`} token
-                    </button>
-                  </div>
-                  {tokenText ? (
+                  {isScanPlanClient(client.softwareName) ? (
                     <>
-                      <textarea
-                        className="input developer-token"
-                        readOnly
-                        rows={4}
-                        value={tokenText}
-                      />
-                      <button
-                        className="btn btn-soft btn-sm"
-                        style={{ marginTop: 8 }}
-                        onClick={() => copyText(tokenText, "Activation token")}
-                      >
-                        <Copy size={12} />
-                        Copy token
-                      </button>
+                      <div className="divider" />
+                      <h4 className="developer-section-title">Licence delivery</h4>
+                      <div className="tiny muted">
+                        ScanPlan reads this registry through live polling with installation ID{" "}
+                        <strong>{client.id}</strong>. Make sure the attendance server has
+                        LICENCE_PORTAL_URL and LICENCE_PORTAL_ANON_KEY configured. TRQ2 offline
+                        tokens are for Torque ERP and do not unlock ScanPlan.
+                      </div>
                     </>
                   ) : (
-                    <div className="tiny muted">
-                      Tokens are signed and bound to {client.id}. The owner pastes one in Settings →
-                      Licence while offline.
-                    </div>
+                    <>
+                      <div className="divider" />
+                      <h4 className="developer-section-title">Offline activation token</h4>
+                      <div className="row wrap" style={{ gap: 8, marginBottom: 8 }}>
+                        <button
+                          className="btn btn-soft btn-sm"
+                          onClick={() => {
+                            setTokenInstallation(client.id);
+                            setTokenHolder(client.workshopName);
+                            setTokenPlan(client.plan);
+                            setTokenMonths(renewMonths);
+                            setTokenLifetime(clientIsLifetime);
+                            setTokenFlags({ ...client.featureFlags });
+                            setTokenText("");
+                          }}
+                        >
+                          <KeyRound size={12} />
+                          Load into generator
+                        </button>
+                        <button
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => {
+                            setTokenInstallation(client.id);
+                            setTokenHolder(client.workshopName);
+                            setTokenPlan(client.plan);
+                            setTokenMonths(renewMonths);
+                            setTokenLifetime(clientIsLifetime);
+                            setTokenFlags({ ...client.featureFlags });
+                            const token = generateOfflineToken({
+                              installationId: client.id,
+                              holder: client.workshopName,
+                              plan: client.plan,
+                              status: "Active",
+                              expiresAt: clientIsLifetime
+                                ? addMonths(new Date().toISOString(), LIFETIME_TERM_MONTHS)
+                                : addMonths(
+                                    daysUntil(client.expiresAt) > 0
+                                      ? client.expiresAt
+                                      : new Date().toISOString(),
+                                    Math.max(1, renewMonths),
+                                  ),
+                              issuedAt: new Date().toISOString(),
+                              featureFlags: client.featureFlags,
+                            });
+                            setTokenText(token);
+                          }}
+                        >
+                          <KeyRound size={12} />
+                          Issue {clientIsLifetime ? "lifetime" : `${renewMonths}-month`} token
+                        </button>
+                      </div>
+                      {tokenText ? (
+                        <>
+                          <textarea
+                            className="input developer-token"
+                            readOnly
+                            rows={4}
+                            value={tokenText}
+                          />
+                          <button
+                            className="btn btn-soft btn-sm"
+                            style={{ marginTop: 8 }}
+                            onClick={() => copyText(tokenText, "Activation token")}
+                          >
+                            <Copy size={12} />
+                            Copy token
+                          </button>
+                        </>
+                      ) : (
+                        <div className="tiny muted">
+                          Tokens are signed and bound to {client.id}. The owner pastes one in Settings
+                          → Licence while offline.
+                        </div>
+                      )}
+                    </>
                   )}
                 </>
               ) : (
@@ -2980,15 +3324,17 @@ export function DeveloperPortalPage() {
                     </label>
                     <label className="field">
                       <span className="label">Software name *</span>
-                      <input
-                        className="input"
-                        list="ravsoft-software-options"
+                      <select
+                        className="select"
                         value={editor.softwareName}
-                        onChange={(event) =>
-                          setEditor((prev) => ({ ...prev, softwareName: event.target.value }))
-                        }
-                        placeholder="Torque ERP"
-                      />
+                        onChange={(event) => changeEditorSoftware(event.target.value)}
+                      >
+                        {softwareChoices.map((name) => (
+                          <option key={name} value={name}>
+                            {name}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                     <label className="field" style={{ gridColumn: "1 / -1" }}>
                       <span className="label">Server address</span>
@@ -2998,7 +3344,11 @@ export function DeveloperPortalPage() {
                         onChange={(event) =>
                           setEditor((prev) => ({ ...prev, serverAddress: event.target.value }))
                         }
-                        placeholder="https://erp.client.lk"
+                        placeholder={
+                          isScanPlanClient(editor.softwareName)
+                            ? "https://company.netlify.app"
+                            : "https://erp.client.lk"
+                        }
                       />
                     </label>
                     <label className="field">
@@ -3061,7 +3411,10 @@ export function DeveloperPortalPage() {
                           setEditor((prev) => ({
                             ...prev,
                             plan,
-                            monthlyFee: String(PLAN_PRICES[plan]),
+                            monthlyFee:
+                          rateFor(editor.softwareName, plan) === undefined
+                            ? ""
+                            : String(rateFor(editor.softwareName, plan)),
                           }));
                         }}
                       >
@@ -3081,10 +3434,12 @@ export function DeveloperPortalPage() {
                         onChange={(event) =>
                           setEditor((prev) => ({ ...prev, monthlyFee: event.target.value }))
                         }
-                        placeholder={String(PLAN_PRICES[editor.plan])}
+                        placeholder={feePlaceholder(editor.softwareName, editor.plan)}
                       />
                       <span className="hint">
-                        Typed per client. Blank uses the plan rate card.
+                        {rateFor(editor.softwareName, editor.plan) === undefined
+                          ? "ScanPlan uses a client-specific fee. Enter the agreed monthly amount."
+                          : "Typed per client. Blank uses the plan rate card."}
                       </span>
                     </label>
                     <label className="field">
