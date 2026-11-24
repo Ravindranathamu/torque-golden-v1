@@ -23,6 +23,22 @@ reference lists the UI needs, and **no client data of any kind**.
 Verification results and the snapshot hash are recorded in
 [`docs/DEPLOYMENT_PLAN.md` §3.7](DEPLOYMENT_PLAN.md#37-live-golden-master-record).
 
+## GitHub copy
+
+The clean snapshot is stored in GitHub so it can be cloned without touching the
+live template project.
+
+| Item | Value |
+| --- | --- |
+| Repository | `https://github.com/Ravindranathamu/torque-golden-v1.git` |
+| Golden branch | `golden/gm-v1.4.0` |
+| Annotated tag | `golden-gm-v1.4.0` |
+| Snapshot commit | `282b83ce669522bd7de8827e32d29e2d72c4bd77` |
+| Latest working code | `main` |
+
+The branch and tag point at the verified clean snapshot. Use that ref for a new
+client copy; `main` contains newer application work and may move independently.
+
 ---
 
 ## What is included
