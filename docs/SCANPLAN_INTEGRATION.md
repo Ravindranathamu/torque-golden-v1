@@ -52,7 +52,8 @@ assignment guard read `app_records`.
 
 If a staff account has `payload.workerId`, that person is linked to a worker
 profile. Record their attendance under `workerId` for payroll; use `userId` only
-for staff who do not have a worker profile.
+for staff who do not have a worker profile. Torque ERP creates this worker link
+automatically when a staff account is saved with “Include in payroll” enabled.
 
 ## 4. Attendance payload
 
@@ -107,8 +108,11 @@ second.
 ## 5. What Torque ERP shows
 
 - Worker attendance appears on **Workshop floor → Morning attendance** and feeds
-  labour assignment and payroll. Rows recorded by ScanPlan are labelled
-  `ScanPlan`.
-- Staff attendance appears on **Workshop floor → Staff attendance today**.
+  labour assignment. Rows recorded by ScanPlan are labelled `ScanPlan`.
+- All HR attendance is managed on **Team & HR → Attendance**. Payroll-linked
+  staff are shown under their worker profile; sign-ins without a worker link are
+  marked as attendance-only. Manual marks there are labelled `ERP`.
+- Attendance under `workerId` feeds monthly payroll, EPF/ETF and net pay. Payslips
+  are issued on **Accounts → Payroll** as immutable A4 and thermal records.
 - The portal registry shows ScanPlan clients separately in the product filter,
   with their own fee, payments and licence status.

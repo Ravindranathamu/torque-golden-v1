@@ -3340,8 +3340,9 @@ export function DeveloperPortalPage() {
                       <h4 className="developer-section-title">ScanPlan features</h4>
                       <div className="tiny muted">
                         QR check-in, GPS geofence, department shifts, NB/OT rules, pending approvals,
-                        reports and Excel export are included on every plan. Torque module switches
-                        do not apply to this installation.
+                        reports and Excel export are included on every plan. Marks sync into Torque
+                        HR attendance and payroll-linked staff receive payslips. Torque module
+                        switches do not apply to this installation.
                       </div>
                     </>
                   ) : (

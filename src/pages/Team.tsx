@@ -1,8 +1,11 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import {
   AlertTriangle,
   Briefcase,
+  CalendarCheck,
   CheckCircle2,
+  FileText,
   KeyRound,
   Landmark,
   Link2,
@@ -22,7 +25,7 @@ import { useApp } from "../state/AppStore";
 import { supabase } from "../lib/supabase";
 import { createCloudStaffAccount } from "../lib/cloudStaff";
 import { featureEnabled } from "../lib/features";
-import { commissionsByWorker } from "../lib/analytics";
+import { monthlyPayrollRow } from "../lib/payroll";
 import { dateOnly, money, shortDate, waLink } from "../lib/utils";
 import {
   Alert,
@@ -39,7 +42,7 @@ import {
 import { useToast } from "../components/Toast";
 import type { Department, WorkerProfile, WorkshopUser } from "../types";
 
-type TeamTab = "staff" | "workers" | "payroll";
+type TeamTab = "staff" | "workers" | "attendance" | "payroll";
 
 const departments: Department[] = ["PRO", "Supervisor", "Cashier", "Accounting", "Stores"];
 
@@ -56,8 +59,47 @@ const emptyStaffForm = {
   commissionRate: "0",
   workerId: "",
   sectionIds: [] as string[],
+  payroll: true,
   active: true,
 };
+
+/**
+ * Payroll staff are represented as worker profiles so ScanPlan attendance,
+ * salary calculation, EPF/ETF and payslips all use the existing worker path.
+ */
+function payrollWorkerFromStaff(input: {
+  fullName: string;
+  phone: string;
+  departments: Department[];
+  baseSalary: number;
+  commissionRate: number;
+  sectionIds: string[];
+  userId?: string;
+}): Omit<WorkerProfile, "id"> {
+  return {
+    fullName: input.fullName,
+    position: input.departments[0] ?? "Staff",
+    phone: input.phone,
+    nic: "",
+    address: "",
+    emergencyName: "",
+    emergencyPhone: "",
+    baseSalary: input.baseSalary,
+    commissionRate: input.commissionRate,
+    joined: dateOnly(new Date().toISOString()),
+    status: "Active",
+    bankName: "",
+    accountNumber: "",
+    userId: input.userId,
+    sectionIds: [...input.sectionIds],
+    payType: "Monthly",
+    dailyRate: 0,
+    epfEnabled: true,
+    etfEnabled: true,
+    commissionEnabled: true,
+    allowedOffDaysPerMonth: 2,
+  };
+}
 
 function generateStaffPassword(): string {
   const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
@@ -108,8 +150,19 @@ const emptyWorkerForm = {
 };
 
 export function TeamPage() {
-  const { state, currentUser, cloudStatus, addUser, updateUser, removeUser, addWorker, updateWorker } = useApp();
+  const {
+    state,
+    currentUser,
+    cloudStatus,
+    addUser,
+    updateUser,
+    removeUser,
+    addWorker,
+    updateWorker,
+    markAttendanceEntry,
+  } = useApp();
   const { push } = useToast();
+  const navigate = useNavigate();
   const [tab, setTab] = useState<TeamTab>("staff");
   const [unlockedLocal, setUnlockedLocal] = useState(false);
   const cloudMode = cloudStatus !== "disabled";
@@ -126,16 +179,30 @@ export function TeamPage() {
   const [editingWorkerId, setEditingWorkerId] = useState<string | null>(null);
   const [workerForm, setWorkerForm] = useState({ ...emptyWorkerForm });
 
-  const payroll = useMemo(() => commissionsByWorker(state, "month"), [state]);
+  const today = dateOnly(new Date().toISOString());
+  const payroll = useMemo(
+    () =>
+      state.workers
+        .filter((worker) => worker.status === "Active")
+        .map((worker) => monthlyPayrollRow(state, worker)),
+    [state],
+  );
   const payrollEnabled =
     featureEnabled(state.settings, "enable_payroll_epf_etf") ||
     featureEnabled(state.settings, "enable_daily_wages");
   const epfEtfEnabled = featureEnabled(state.settings, "enable_payroll_epf_etf");
   const dailyWagesEnabled = featureEnabled(state.settings, "enable_daily_wages");
-  const monthlyBase = state.workers
-    .filter((worker) => worker.status === "Active")
-    .reduce((sum, worker) => sum + worker.baseSalary, 0);
+  const monthlyBase = payroll.reduce((sum, row) => sum + row.basic, 0);
   const monthlyCommission = payroll.reduce((sum, row) => sum + row.commission, 0);
+  const monthlyNet = payroll.reduce((sum, row) => sum + row.net, 0);
+  const activeWorkers = state.workers.filter((worker) => worker.status === "Active");
+  const activeStaff = state.users.filter((user) => user.active);
+  const staffWithoutPayroll = activeStaff.filter(
+    (user) => !user.workerId || !state.workers.some((worker) => worker.id === user.workerId),
+  );
+  const scanPlanMarksToday = state.attendance.filter(
+    (record) => record.date === today && record.source === "ScanPlan",
+  ).length;
   const coveredDepartments = departments.filter((department) =>
     state.users.some((user) => !user.isOwner && user.active && user.departments.includes(department)),
   );
@@ -185,6 +252,7 @@ export function TeamPage() {
       commissionRate: String(user.commissionRate),
       workerId: user.workerId ?? "",
       sectionIds: [...(user.sectionIds ?? [])],
+      payroll: Boolean(user.workerId),
       active: user.active,
     });
     setStaffOpen(true);
@@ -245,6 +313,35 @@ export function TeamPage() {
       return;
     }
     if (editingUser) {
+      let linkedWorkerId = staffForm.workerId || undefined;
+      if (staffForm.payroll && !linkedWorkerId) {
+        linkedWorkerId = addWorker(
+          payrollWorkerFromStaff({
+            fullName: staffForm.name.trim(),
+            phone: staffForm.phone.trim(),
+            departments: staffForm.departments,
+            baseSalary,
+            commissionRate,
+            sectionIds: staffForm.sectionIds,
+            userId: editingUser.id,
+          }),
+        );
+      }
+      if (staffForm.payroll && linkedWorkerId) {
+        const linkedWorker = state.workers.find((worker) => worker.id === linkedWorkerId);
+        if (linkedWorker) {
+          updateWorker({
+            ...linkedWorker,
+            fullName: staffForm.name.trim(),
+            position: staffForm.departments[0] ?? linkedWorker.position ?? "Staff",
+            phone: staffForm.phone.trim(),
+            baseSalary,
+            commissionRate,
+            sectionIds: staffForm.sectionIds,
+            userId: editingUser.id,
+          });
+        }
+      }
       const nextUser = {
         ...editingUser,
         name: staffForm.name.trim(),
@@ -257,7 +354,7 @@ export function TeamPage() {
         sectionIds: editingUser.isOwner ? [] : staffForm.sectionIds,
         baseSalary,
         commissionRate,
-        workerId: staffForm.workerId || undefined,
+        workerId: staffForm.payroll ? linkedWorkerId : undefined,
         active: editingUser.isOwner ? true : staffForm.active,
       };
       if (cloudMode && supabase) {
@@ -282,9 +379,11 @@ export function TeamPage() {
       }
       updateUser(nextUser);
       push(
-        cloudMode
-          ? "Staff departments saved to the workshop server. Changes apply at their next sign-in."
-          : "Staff account updated.",
+        staffForm.payroll
+          ? "Staff saved. Attendance, payroll and payslips are linked to their worker profile."
+          : cloudMode
+            ? "Staff departments saved to the workshop server. Changes apply at their next sign-in."
+            : "Staff account updated.",
       );
     } else {
       const user = {
@@ -322,15 +421,46 @@ export function TeamPage() {
           push(result.message, "error");
           return;
         }
-        addUser({ ...user, id: result.id });
+        let linkedWorkerId = staffForm.workerId || undefined;
+        if (staffForm.payroll && !linkedWorkerId) {
+          linkedWorkerId = addWorker(
+            payrollWorkerFromStaff({
+              fullName: user.name,
+              phone: user.phone,
+              departments: user.departments,
+              baseSalary,
+              commissionRate,
+              sectionIds: user.sectionIds,
+              userId: result.id,
+            }),
+          );
+        }
+        addUser({ ...user, id: result.id, workerId: staffForm.payroll ? linkedWorkerId : undefined });
         push(
           result.needsEmailConfirmation
-            ? "Staff account created. They must confirm their email before the first sign-in."
-            : `Staff account created. Sign-in: ${user.email} with the password you set.`,
+            ? `Staff account created. Payroll link ${staffForm.payroll ? "ready" : "skipped"}. They must confirm their email before the first sign-in.`
+            : `Staff account created. Sign-in: ${user.email}${staffForm.payroll ? " · payroll and payslips are linked" : ""}.`,
         );
       } else {
-        addUser(user);
-        push("Staff account created. Share the PIN securely.");
+        let linkedWorkerId = staffForm.workerId || undefined;
+        if (staffForm.payroll && !linkedWorkerId) {
+          linkedWorkerId = addWorker(
+            payrollWorkerFromStaff({
+              fullName: user.name,
+              phone: user.phone,
+              departments: user.departments,
+              baseSalary,
+              commissionRate,
+              sectionIds: user.sectionIds,
+            }),
+          );
+        }
+        addUser({ ...user, workerId: staffForm.payroll ? linkedWorkerId : undefined });
+        push(
+          staffForm.payroll
+            ? "Staff account created with a payroll worker. Share the PIN securely."
+            : "Staff account created. Share the PIN securely.",
+        );
       }
     }
     setStaffOpen(false);
@@ -464,8 +594,30 @@ export function TeamPage() {
   function sendPayslip(worker: WorkerProfile) {
     const row = payroll.find((entry) => entry.workerId === worker.id);
     if (!row) return;
-    const message = `Hello ${worker.fullName}, your salary statement from ${state.settings.companyName} for ${new Date().toLocaleDateString("en-GB", { month: "long", year: "numeric" })}:\n\nBase salary: ${money(row.baseSalary)}\nCommission: ${money(row.commission)}\nTotal payable: ${money(row.baseSalary + row.commission)}\n\nThank you for your hard work.`;
+    const message = `Hello ${worker.fullName}, your salary statement from ${state.settings.companyName} for ${new Date().toLocaleDateString("en-GB", { month: "long", year: "numeric" })}:\n\nAttendance: ${row.presentDays + row.paidOffDays}/${row.workingDays} payable days\nBasic: ${money(row.basic)}\nCommission: ${money(row.commission)}\nNet pay: ${money(row.net)}\n\nThe signed A4 and thermal payslips are available in Accounts → Payroll. Thank you for your hard work.`;
     window.open(waLink(worker.phone, message), "_blank", "noopener,noreferrer");
+  }
+
+  function attendanceBadge(status: string) {
+    const tone =
+      status === "Present"
+        ? "badge-green"
+        : status === "Absent"
+          ? "badge-red"
+          : status === "Off Day"
+            ? "badge-amber"
+            : "badge-slate";
+    return <span className={`badge ${tone}`}>{status}</span>;
+  }
+
+  function markAttendance(subject: { workerId?: string; userId?: string }, status: "Present" | "Absent" | "Off Day") {
+    const result = markAttendanceEntry({
+      ...subject,
+      date: today,
+      status,
+      source: "ERP",
+    });
+    if (!result.ok) push(result.message ?? "Could not save attendance.", "error");
   }
 
   const lockPanel = !unlocked ? (
@@ -548,6 +700,7 @@ export function TeamPage() {
               tabs={[
                 { id: "staff", label: "Staff access", count: state.users.length },
                 { id: "workers", label: "Workers & HR", count: state.workers.length },
+                { id: "attendance", label: "Attendance", count: scanPlanMarksToday },
                 ...(payrollEnabled
                   ? [{ id: "payroll" as TeamTab, label: "Payroll" }]
                   : []),
@@ -839,6 +992,240 @@ export function TeamPage() {
         </div>
       )}
 
+      {tab === "attendance" && (
+        <div className="stack">
+          <Alert tone="info" icon={<CalendarCheck />} title="ScanPlan attendance">
+            ScanPlan writes attendance into this workshop's shared record. Marks appear here within
+            about a second and are labelled <strong>ScanPlan</strong>. Staff linked to a worker
+            profile are paid from the worker register below and receive payslips in{" "}
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => navigate("/accounting?tab=payroll")}
+            >
+              Accounts → Payroll
+            </button>
+            .
+          </Alert>
+
+          <div className="grid cols-4">
+            <StatCard
+              label="Present today"
+              value={`${activeWorkers.filter((worker) =>
+                state.attendance.some(
+                  (record) =>
+                    record.date === today &&
+                    record.workerId === worker.id &&
+                    record.status === "Present",
+                ),
+              ).length}/${activeWorkers.length}`}
+              meta="Worker payroll register"
+              icon={<CalendarCheck />}
+            />
+            <StatCard
+              label="ScanPlan marks"
+              value={scanPlanMarksToday}
+              meta="Recorded today"
+              icon={<ShieldCheck />}
+              tone="blue"
+            />
+            <StatCard
+              label="Staff on payroll"
+              value={
+                activeStaff.filter(
+                  (user) =>
+                    user.workerId &&
+                    state.workers.some((worker) => worker.id === user.workerId),
+                ).length
+              }
+              meta="Linked worker profiles"
+              icon={<Link2 />}
+              tone="purple"
+            />
+            <StatCard
+              label="Attendance only"
+              value={staffWithoutPayroll.length}
+              meta="No payroll link yet"
+              icon={<Users />}
+              tone="amber"
+            />
+          </div>
+
+          <div className="card">
+            <div className="card-head">
+              <div>
+                <h3>
+                  <CalendarCheck size={16} style={{ verticalAlign: -3, marginRight: 6 }} />
+                  Payroll attendance · today
+                </h3>
+                <p>
+                  These marks calculate salary, EPF/ETF and payslips. Linked staff appear under
+                  their worker profile.
+                </p>
+              </div>
+              <span className="badge badge-amber">{today}</span>
+            </div>
+            {activeWorkers.length === 0 ? (
+              <div className="card-body tiny muted">
+                No active workers. Add staff with “Include in payroll” to create their worker
+                profile automatically.
+              </div>
+            ) : (
+              <div className="table-wrap table-cards">
+                <table className="data attendance-table">
+                  <thead>
+                    <tr>
+                      <th>Worker / payroll person</th>
+                      <th>Staff login</th>
+                      <th>Status</th>
+                      <th>Payable this month</th>
+                      <th>Recorded by</th>
+                      <th>Mark today</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {activeWorkers.map((worker) => {
+                      const record = state.attendance.find(
+                        (item) => item.date === today && item.workerId === worker.id,
+                      );
+                      const linkedUser = state.users.find((user) => user.workerId === worker.id);
+                      const row = payroll.find((entry) => entry.workerId === worker.id);
+                      const status = record?.status ?? "Not marked";
+                      return (
+                        <tr key={worker.id}>
+                          <td data-label="Worker / payroll person">
+                            <div className="cell-main">{worker.fullName}</div>
+                            <div className="cell-sub">{worker.position || "Position not set"}</div>
+                          </td>
+                          <td data-label="Staff login">
+                            {linkedUser ? (
+                              <>
+                                <div className="cell-main">@{linkedUser.username}</div>
+                                <div className="cell-sub">{linkedUser.name}</div>
+                              </>
+                            ) : (
+                              <span className="tiny muted">No linked sign-in</span>
+                            )}
+                          </td>
+                          <td data-label="Status">
+                            {attendanceBadge(status)}
+                            {record?.source === "ScanPlan" && (
+                              <div className="tiny muted">ScanPlan</div>
+                            )}
+                          </td>
+                          <td data-label="Payable this month">
+                            <div className="cell-main">
+                              {row?.presentDays ?? 0} present
+                            </div>
+                            <div className="cell-sub">{row?.paidOffDays ?? 0} paid off days</div>
+                          </td>
+                          <td data-label="Recorded by">
+                            <div className="cell-main">{record?.markedBy || "—"}</div>
+                          </td>
+                          <td data-label="Mark today">
+                            {unlocked ? (
+                              <div className="row wrap" style={{ gap: 4 }}>
+                                {(["Present", "Absent", "Off Day"] as const).map((option) => (
+                                  <button
+                                    key={option}
+                                    className={`btn btn-sm ${status === option ? "btn-primary" : "btn-secondary"}`}
+                                    onClick={() => markAttendance({ workerId: worker.id }, option)}
+                                  >
+                                    {option}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="tiny muted">Unlock owner controls</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <div className="card-head">
+              <div>
+                <h3>Staff attendance · no payroll link</h3>
+                <p>
+                  These marks are attendance-only. Link a worker profile in Staff access to add
+                  salary and payslips.
+                </p>
+              </div>
+              <span className="badge badge-slate">{staffWithoutPayroll.length} sign-ins</span>
+            </div>
+            {staffWithoutPayroll.length === 0 ? (
+              <div className="card-body tiny muted">
+                Every active staff account is linked to a payroll worker.
+              </div>
+            ) : (
+              <div className="table-wrap table-cards">
+                <table className="data attendance-table">
+                  <thead>
+                    <tr>
+                      <th>Staff member</th>
+                      <th>Departments</th>
+                      <th>Status</th>
+                      <th>Recorded by</th>
+                      <th>Mark today</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {staffWithoutPayroll.map((user) => {
+                      const record = state.attendance.find(
+                        (item) => item.date === today && item.userId === user.id,
+                      );
+                      const status = record?.status ?? "Not marked";
+                      return (
+                        <tr key={user.id}>
+                          <td data-label="Staff member">
+                            <div className="cell-main">{user.name}</div>
+                            <div className="cell-sub">@{user.username}</div>
+                          </td>
+                          <td className="tiny" data-label="Departments">
+                            {user.departments.join(" · ") || (user.isOwner ? "Owner" : "None")}
+                          </td>
+                          <td data-label="Status">
+                            {attendanceBadge(status)}
+                            {record?.source === "ScanPlan" && (
+                              <div className="tiny muted">ScanPlan</div>
+                            )}
+                          </td>
+                          <td data-label="Recorded by">
+                            <div className="cell-main">{record?.markedBy || "—"}</div>
+                          </td>
+                          <td data-label="Mark today">
+                            {unlocked ? (
+                              <div className="row wrap" style={{ gap: 4 }}>
+                                {(["Present", "Absent", "Off Day"] as const).map((option) => (
+                                  <button
+                                    key={option}
+                                    className={`btn btn-sm ${status === option ? "btn-primary" : "btn-secondary"}`}
+                                    onClick={() => markAttendance({ userId: user.id }, option)}
+                                  >
+                                    {option}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <span className="tiny muted">Unlock owner controls</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {tab === "payroll" && payrollEnabled && (
         <div className="stack">
           {!unlocked ? (
@@ -853,7 +1240,7 @@ export function TeamPage() {
             <>
               <div className="grid cols-4">
                 <StatCard
-                  label="Monthly base payroll"
+                  label="Attendance-based basic"
                   value={money(monthlyBase)}
                   meta="Active workers"
                   icon={<Wallet />}
@@ -866,9 +1253,9 @@ export function TeamPage() {
                   tone="amber"
                 />
                 <StatCard
-                  label="Total payable"
-                  value={money(monthlyBase + monthlyCommission)}
-                  meta="Base plus commission"
+                  label="Net payable"
+                  value={money(monthlyNet)}
+                  meta="After EPF/ETF and loans"
                   icon={<Landmark />}
                   tone="blue"
                 />
@@ -879,7 +1266,7 @@ export function TeamPage() {
                       ? Math.min(
                           100,
                           Math.round(
-                            ((monthlyBase + monthlyCommission) /
+                            (monthlyNet /
                               Math.max(
                                 1,
                                 state.ledger
@@ -911,8 +1298,11 @@ export function TeamPage() {
               <div className="card">
                 <div className="card-head">
                   <div>
-                    <h3>Monthly payroll & commission statement</h3>
-                    <p>Bank details and this month's commission accrual.</p>
+                    <h3>Monthly payroll & payslip statement</h3>
+                    <p>
+                      Basic pay follows this month's attendance. A4 and thermal payslips are issued
+                      in Accounts → Payroll.
+                    </p>
                   </div>
                   <span className="badge badge-amber">
                     {new Date().toLocaleDateString("en-GB", { month: "long", year: "numeric" })}
@@ -924,11 +1314,12 @@ export function TeamPage() {
                       <tr>
                         <th>Worker</th>
                         <th>Bank account</th>
-                        <th className="num">Base salary</th>
+                        <th className="num">Payable days</th>
+                        <th className="num">Basic</th>
                         <th className="num">Commission</th>
-                        <th className="num">Total</th>
+                        <th className="num">Net</th>
                         <th>Status</th>
-                        <th />
+                        <th className="payroll-action" />
                       </tr>
                     </thead>
                     <tbody>
@@ -952,27 +1343,39 @@ export function TeamPage() {
                                 ETF {worker?.etfNumber?.trim() || "not set"}
                               </div>
                             </td>
-                            <td className="num" data-label="Base salary">
-                              {money(row.baseSalary)}
+                            <td className="num" data-label="Payable days">
+                              {row.presentDays + row.paidOffDays}/{row.workingDays}
+                            </td>
+                            <td className="num" data-label="Basic">
+                              {money(row.basic)}
                             </td>
                             <td className="num" data-label="Commission">
                               {money(row.commission)}
                             </td>
-                            <td className="num strong" data-label="Total">
-                              {money(row.baseSalary + row.commission)}
+                            <td className="num strong" data-label="Net">
+                              {money(row.net)}
                             </td>
                             <td data-label="Status">
                               <StatusBadge status={worker?.status ?? "Active"} />
                             </td>
                             <td className="payroll-action">
                               {worker && (
-                                <button
-                                  className="btn btn-ghost btn-sm"
-                                  onClick={() => sendPayslip(worker)}
-                                >
-                                  <MessageCircle />
-                                  Payslip
-                                </button>
+                                <div className="row wrap" style={{ gap: 4 }}>
+                                  <button
+                                    className="btn btn-secondary btn-sm"
+                                    onClick={() => navigate("/accounting?tab=payroll")}
+                                  >
+                                    <FileText />
+                                    Payslips
+                                  </button>
+                                  <button
+                                    className="btn btn-ghost btn-sm"
+                                    onClick={() => sendPayslip(worker)}
+                                  >
+                                    <MessageCircle />
+                                    Share
+                                  </button>
+                                </div>
                               )}
                             </td>
                           </tr>
@@ -983,10 +1386,10 @@ export function TeamPage() {
                 </div>
               </div>
 
-              <Alert tone="info" icon={<CheckCircle2 />} title="How commission is earned">
-                Commission is calculated from the labour value of each task and the worker's rate
-                at the moment the job is billed. Parts revenue is not commissioned. Payroll here is
-                an accrual view — payouts are made through your normal bank process.
+              <Alert tone="info" icon={<CheckCircle2 />} title="How payroll is calculated">
+                Attendance from the workshop or ScanPlan sets payable days and basic pay. Commission
+                comes from the labour value of each billed task. Net pay deducts EPF, loans and other
+                deductions. Issue immutable A4 and thermal payslips in Accounts → Payroll.
               </Alert>
             </>
           )}
@@ -1189,6 +1592,25 @@ export function TeamPage() {
           )}
 
           <div className="form-grid">
+            <Field
+              label="Payroll & payslips"
+              hint="Creates a linked worker profile so ScanPlan attendance calculates salary and payslips."
+            >
+              <select
+                className="select"
+                value={staffForm.payroll ? "yes" : "no"}
+                onChange={(event) =>
+                  setStaffForm({
+                    ...staffForm,
+                    payroll: event.target.value === "yes",
+                    workerId: event.target.value === "yes" ? staffForm.workerId : "",
+                  })
+                }
+              >
+                <option value="yes">Yes — include in payroll</option>
+                <option value="no">No — attendance only</option>
+              </select>
+            </Field>
             <Field label="Base salary (LKR)" hint="Owner-only payroll data.">
               <input
                 className="input"
@@ -1200,7 +1622,7 @@ export function TeamPage() {
                 }
               />
             </Field>
-            <Field label="Commission rate %" hint="Informational; worker rates drive payroll.">
+            <Field label="Commission rate %" hint="Stored on the linked worker profile when payroll is enabled.">
               <input
                 className="input"
                 type="number"
@@ -1211,7 +1633,10 @@ export function TeamPage() {
                 }
               />
             </Field>
-            <Field label="Linked worker profile" hint="Join this login to a payroll worker.">
+            <Field
+              label="Linked worker profile"
+              hint="Join this login to an existing payroll worker. Leave blank to create one automatically."
+            >
               <select
                 className="select"
                 value={staffForm.workerId}

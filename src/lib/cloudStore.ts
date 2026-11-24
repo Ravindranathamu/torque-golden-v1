@@ -580,6 +580,13 @@ export async function ensureCloudState(context: CloudContext): Promise<CloudStat
   }
 
   const state = recordsToState(context.records, fallback);
+  // The auth profile table has no worker link. Derive it from the worker record
+  // when an older app_records user payload is missing one.
+  state.users = state.users.map((user) => {
+    if (user.workerId) return user;
+    const linkedWorker = state.workers.find((worker) => worker.userId === user.id);
+    return linkedWorker ? { ...user, workerId: linkedWorker.id } : user;
+  });
   const canonicalInstallationId = text(context.workshop.installation_id).trim().toUpperCase();
   if (canonicalInstallationId) {
     state.settings.installationId = canonicalInstallationId;

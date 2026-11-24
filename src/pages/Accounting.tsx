@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import {
   AlertTriangle,
   Banknote,
@@ -118,7 +118,27 @@ export function AccountingPage() {
     recordInsuranceCheque,
   } = useApp();
   const { push } = useToast();
-  const [tab, setTab] = useState<AccountingTab>("overview");
+  const [searchParams] = useSearchParams();
+  const requestedTab = searchParams.get("tab");
+  const accountingTabs: AccountingTab[] = [
+    "overview",
+    "reports",
+    "sections",
+    "expenses",
+    "payables",
+    "credits",
+    "petty-cash",
+    "bank",
+    "cheques",
+    "supplier-cheques",
+    "payroll",
+    "insurance",
+  ];
+  const [tab, setTab] = useState<AccountingTab>(
+    requestedTab && accountingTabs.includes(requestedTab as AccountingTab)
+      ? (requestedTab as AccountingTab)
+      : "overview",
+  );
   const [period, setPeriod] = useState<Period>("month");
   const [expenseOpen, setExpenseOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<string | null>(null);
