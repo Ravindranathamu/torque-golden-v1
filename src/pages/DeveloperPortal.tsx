@@ -26,6 +26,7 @@ import {
   Search,
   ShieldCheck,
   ToggleRight,
+  Truck,
   Users,
   Wallet,
   Wrench,
@@ -52,11 +53,37 @@ import { cloudConfigured, masterSupabase, portalConfigured } from "../lib/supaba
 
 const PORTAL_KEY = "ravsoft_master_portal_v1";
 const LEGACY_PORTAL_KEY = "torque_master_portal_v1";
-const SOFTWARE_OPTIONS = ["Torque ERP", "ScanPlan", "RAVBsoft"];
+const SOFTWARE_OPTIONS = ["Torque ERP", "ScanPlan", "TAW", "RAVBsoft"];
 const SCANPLAN_LABEL = "ScanPlan";
-const LATEST_APP_VERSION = "1.4.0";
-const RELEASES = [
+const TAW_LABEL = "TAW";
+
+/** Each product has its own release train; a deploy never crosses products. */
+const LATEST_VERSIONS: Record<string, string> = {
+  "Torque ERP": "1.4.0",
+  ScanPlan: "1.0.0",
+  TAW: "0.1.0",
+  RAVBsoft: "1.4.0",
+};
+
+function latestVersionFor(softwareName: string): string {
+  return LATEST_VERSIONS[softwareName.trim()] ?? LATEST_VERSIONS["Torque ERP"];
+}
+
+/** Kept as a default for generic copy; product screens use latestVersionFor(). */
+const LATEST_APP_VERSION = LATEST_VERSIONS["Torque ERP"];
+
+interface ReleaseEntry {
+  product: string;
+  version: string;
+  date: string;
+  title: string;
+  changes: string;
+  migrations: string;
+}
+
+const RELEASES: ReleaseEntry[] = [
   {
+    product: "Torque ERP",
     version: "1.4.0",
     date: "2026-11-10",
     title: "Reservations, demo routing and thermal vouchers",
@@ -64,6 +91,7 @@ const RELEASES = [
     migrations: "Additive only · no data rewrite",
   },
   {
+    product: "Torque ERP",
     version: "1.3.1",
     date: "2026-10-22",
     title: "Estimate editing and gate override",
@@ -71,11 +99,28 @@ const RELEASES = [
     migrations: "Additive only · no data rewrite",
   },
   {
+    product: "Torque ERP",
     version: "1.2.3",
     date: "2026-09-18",
     title: "Payroll and attendance",
     changes: "Staff payroll, employer EPF/ETF in P&L, attendance locking.",
     migrations: "Additive only · no data rewrite",
+  },
+  {
+    product: "ScanPlan",
+    version: "1.0.0",
+    date: "2026-11-18",
+    title: "Attendance golden master",
+    changes: "QR check-in, GPS geofence, department shifts, approvals and Excel reports.",
+    migrations: "Additive only · no data rewrite",
+  },
+  {
+    product: TAW_LABEL,
+    version: "0.1.0",
+    date: "2026-11-24",
+    title: "TAW vehicle carrier golden master",
+    changes: "Login-based owner/driver roles, map pinning, WAHA, automatic GPS, partner fallback and IRD billing.",
+    migrations: "Additive only · no client data",
   },
 ];
 
@@ -167,16 +212,22 @@ interface PortalPaymentRow {
   note?: string | null;
 }
 
-// Torque ERP installations use WS-LK-*, ScanPlan attendance installations use
-// SP-LK-*. Both are accepted so one developer portal can licence every app.
-const INSTALLATION_ID_PATTERN = /^(WS|SP)-LK-[A-Z0-9]{6,16}$/;
+// Torque ERP installations use WS-LK-*, ScanPlan uses SP-LK-*, and TAW carrier
+// installations use TAW-LK-*. One developer portal licenses every app.
+const INSTALLATION_ID_PATTERN = /^(WS|SP|TAW)-LK-[A-Z0-9]{6,16}$/;
 
 function isScanPlanClient(softwareName: string): boolean {
   return softwareName.trim().toLowerCase() === SCANPLAN_LABEL.toLowerCase();
 }
 
+function isTawClient(softwareName: string): boolean {
+  return softwareName.trim().toLowerCase() === TAW_LABEL.toLowerCase();
+}
+
 function installationPrefix(softwareName: string): string {
-  return isScanPlanClient(softwareName) ? "SP-LK" : "WS-LK";
+  if (isScanPlanClient(softwareName)) return "SP-LK";
+  if (isTawClient(softwareName)) return "TAW-LK";
+  return "WS-LK";
 }
 
 function installationIdHint(softwareName: string): string {
@@ -189,7 +240,9 @@ function validInstallationId(id: string, softwareName: string): boolean {
 }
 
 function defaultPresetForSoftware(softwareName: string): string {
-  return isScanPlanClient(softwareName) ? "scanplan" : "quick-lube";
+  if (isScanPlanClient(softwareName)) return "scanplan";
+  if (isTawClient(softwareName)) return "taw-fleet";
+  return "quick-lube";
 }
 
 function productOptions(clients: PortalClient[]): string[] {
@@ -220,13 +273,14 @@ function paymentMethodFromValue(value: unknown): PaymentMethod {
 }
 
 function clientFromRow(row: PortalClientRow): PortalClient {
+  const softwareName = row.software_name?.trim() || "Torque ERP";
   return {
     id: row.id,
     workshopName: row.workshop_name ?? "Unnamed client",
-    softwareName: row.software_name?.trim() || "Torque ERP",
+    softwareName,
     serverAddress: row.server_address ?? undefined,
-    appVersion: row.app_version?.trim() || "1.0.0",
-    latestVersion: row.latest_version ?? LATEST_APP_VERSION,
+    appVersion: row.app_version?.trim() || latestVersionFor(softwareName),
+    latestVersion: row.latest_version ?? latestVersionFor(softwareName),
     gitBranch: row.git_branch ?? undefined,
     customBuild: row.custom_build === true,
     customisationSummary: row.customisation_summary ?? undefined,
@@ -261,7 +315,7 @@ function clientToRow(clientRecord: PortalClient): PortalClientRow {
     software_name: clientRecord.softwareName,
     server_address: clientRecord.serverAddress ?? null,
     app_version: clientRecord.appVersion,
-    latest_version: clientRecord.latestVersion ?? LATEST_APP_VERSION,
+    latest_version: clientRecord.latestVersion ?? latestVersionFor(clientRecord.softwareName),
     git_branch: clientRecord.gitBranch ?? null,
     custom_build: clientRecord.customBuild ?? false,
     customisation_summary: clientRecord.customisationSummary ?? null,
@@ -323,6 +377,7 @@ const PLAN_PRICES: Record<LicencePlan, number> = {
 const PRODUCT_RATE_CARDS: Record<string, Partial<Record<LicencePlan, number>>> = {
   "Torque ERP": PLAN_PRICES,
   RAVBsoft: PLAN_PRICES,
+  TAW: PLAN_PRICES,
   ScanPlan: {},
 };
 
@@ -344,8 +399,18 @@ const SCANPLAN_PLAN_DESCRIPTIONS: Record<LicencePlan, string> = {
   Enterprise: "Multi-site groups — every ScanPlan feature and dedicated support.",
 };
 
+const TAW_PLAN_DESCRIPTIONS: Record<LicencePlan, string> = {
+  Lite: "Single operator — owner login, dispatch, one truck and customer tracking links.",
+  Starter: "Small carrier — driver login, automatic GPS, map pins, WAHA and IRD invoices.",
+  Growth: "Growing fleet — carrier matching, partner handover, fuel and compliance alerts.",
+  Pro: "Full carrier — maintenance, warranties, payroll, P&L and live fleet map.",
+  Enterprise: "Multi-branch carrier groups — every TAW module and dedicated support.",
+};
+
 function planDescription(softwareName: string, plan: LicencePlan): string {
-  return isScanPlanClient(softwareName) ? SCANPLAN_PLAN_DESCRIPTIONS[plan] : PLAN_DESCRIPTIONS[plan];
+  if (isScanPlanClient(softwareName)) return SCANPLAN_PLAN_DESCRIPTIONS[plan];
+  if (isTawClient(softwareName)) return TAW_PLAN_DESCRIPTIONS[plan];
+  return PLAN_DESCRIPTIONS[plan];
 }
 
 /** Fixed monthly rate for a product and plan. Undefined means "set a client fee". */
@@ -541,6 +606,28 @@ function seedPortal(): PortalData {
         notes: "ScanPlan attendance demo installation.",
         createdAt: isoDays(-14),
       },
+      {
+        id: "TAW-LK-DEMO001",
+        workshopName: "TAW Carrier Demo",
+        softwareName: TAW_LABEL,
+        serverAddress: "https://taw-demo.ravsoft.lk",
+        appVersion: latestVersionFor(TAW_LABEL),
+        latestVersion: latestVersionFor(TAW_LABEL),
+        gitBranch: "main",
+        customBuild: false,
+        ownerName: "Ravindu Jayasinghe",
+        phone: "+94 75 575 6803",
+        email: "ravindranath@hotmail.co.uk",
+        district: "Colombo",
+        address: "Colombo, Sri Lanka",
+        plan: "Growth",
+        status: "Trial",
+        expiresAt: isoDays(30),
+        lastSeenAt: isoDays(-1),
+        featureFlags: flagsFromPreset("taw-fleet"),
+        notes: "TAW vehicle-carrier golden-master demo installation.",
+        createdAt: isoDays(-7),
+      },
     ],
     payments: [
       {
@@ -606,7 +693,9 @@ function loadPortal(): PortalData {
               client.serverAddress?.trim() || seedById.get(client.id)?.serverAddress,
             appVersion:
               client.appVersion?.trim() || seedById.get(client.id)?.appVersion || "1.0.0",
-            latestVersion: LATEST_APP_VERSION,
+            latestVersion: latestVersionFor(
+              client.softwareName?.trim() || seedById.get(client.id)?.softwareName || "Torque ERP",
+            ),
             gitBranch:
               client.gitBranch?.trim() ||
               seedById.get(client.id)?.gitBranch ||
@@ -875,6 +964,11 @@ export function DeveloperPortalPage() {
   const [tokenMonths, setTokenMonths] = useState(12);
   const [tokenLifetime, setTokenLifetime] = useState(false);
   const [tokenFlags, setTokenFlags] = useState<FeatureFlags>(() => allFlags(true));
+  const [licenceKeyHolder, setLicenceKeyHolder] = useState("");
+  const [licenceKeyPlan, setLicenceKeyPlan] = useState<LicencePlan>("Growth");
+  const [licenceKeyMonths, setLicenceKeyMonths] = useState(12);
+  const [licenceKeyText, setLicenceKeyText] = useState("");
+  const [licenceKeyBusy, setLicenceKeyBusy] = useState(false);
   const [verifyText, setVerifyText] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [portalSession, setPortalSession] = useState<Session | null>(null);
@@ -993,6 +1087,13 @@ export function DeveloperPortalPage() {
   const clientIsLifetime = client ? isLifetimeLicence(client) : false;
   const softwareChoices = useMemo(() => productOptions(data.clients), [data.clients]);
   const rateCardProduct = softwareFilter === "all" ? SOFTWARE_OPTIONS[0] : softwareFilter;
+  const releaseProduct = softwareFilter === "all" ? "" : softwareFilter;
+  const visibleReleases = RELEASES.filter(
+    (release) => !releaseProduct || release.product === releaseProduct,
+  );
+  const releaseLatestVersion = releaseProduct
+    ? latestVersionFor(releaseProduct)
+    : LATEST_APP_VERSION;
   const productClients = useMemo(
     () =>
       softwareFilter === "all"
@@ -1201,8 +1302,8 @@ export function DeveloperPortalPage() {
       plan: editor.plan,
       monthlyFee: editorMonthly(),
       status: "Trial",
-      appVersion: LATEST_APP_VERSION,
-      latestVersion: LATEST_APP_VERSION,
+      appVersion: latestVersionFor(softwareName),
+      latestVersion: latestVersionFor(softwareName),
       gitBranch:
         editor.gitBranch.trim() ||
         `client/${editor.workshopName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
@@ -1300,12 +1401,13 @@ export function DeveloperPortalPage() {
   }
 
   async function deployClient(clientRecord: PortalClient) {
+    const version = latestVersionFor(clientRecord.softwareName);
     if (masterSupabase && portalSession) {
       const { data: runId, error: queueError } = await masterSupabase.rpc(
         "portal_request_client_update",
         {
           p_client_id: clientRecord.id,
-          p_to_version: LATEST_APP_VERSION,
+          p_to_version: version,
         },
       );
       if (queueError) {
@@ -1319,16 +1421,14 @@ export function DeveloperPortalPage() {
       setData((prev) => ({
         ...prev,
         clients: prev.clients.map((entry) =>
-          entry.id === clientRecord.id
-            ? { ...entry, latestVersion: LATEST_APP_VERSION }
-            : entry,
+          entry.id === clientRecord.id ? { ...entry, latestVersion: version } : entry,
         ),
       }));
 
       if (!clientRecord.deployWebhookUrl) {
         setNotice({
           tone: "warn",
-          text: `v${LATEST_APP_VERSION} queued for ${clientRecord.workshopName}, but no deploy webhook is configured. Add one to run the update automatically.`,
+          text: `v${version} queued for ${clientRecord.workshopName}, but no deploy webhook is configured. Add one to run the update automatically.`,
         });
         return;
       }
@@ -1345,7 +1445,7 @@ export function DeveloperPortalPage() {
             software: clientRecord.softwareName,
             branch: clientRecord.gitBranch,
             fromVersion: clientRecord.appVersion,
-            toVersion: LATEST_APP_VERSION,
+            toVersion: version,
             strategy: "additive-migrations",
             preserveClientData: true,
             requestedAt: new Date().toISOString(),
@@ -1384,16 +1484,16 @@ export function DeveloperPortalPage() {
       setNotice({
         tone: resultError ? "warn" : "ok",
         text: resultError
-          ? `${clientRecord.workshopName} deployed to v${LATEST_APP_VERSION}, but the run result could not be saved: ${resultError.message}`
-          : `${clientRecord.workshopName} deployed to v${LATEST_APP_VERSION}. ${detail} Client data is preserved by additive migrations.`,
+          ? `${clientRecord.workshopName} deployed to v${version}, but the run result could not be saved: ${resultError.message}`
+          : `${clientRecord.workshopName} deployed to v${version}. ${detail} Client data is preserved by additive migrations.`,
       });
       return;
     }
 
     const updated: PortalClient = {
       ...clientRecord,
-      appVersion: LATEST_APP_VERSION,
-      latestVersion: LATEST_APP_VERSION,
+      appVersion: version,
+      latestVersion: version,
       lastDeployedAt: new Date().toISOString(),
       lastDeployedBy: "RAVBsoft portal",
     };
@@ -1409,7 +1509,7 @@ export function DeveloperPortalPage() {
             software: clientRecord.softwareName,
             branch: clientRecord.gitBranch,
             fromVersion: clientRecord.appVersion,
-            toVersion: LATEST_APP_VERSION,
+            toVersion: version,
             strategy: "additive-migrations",
             preserveClientData: true,
             requestedAt: new Date().toISOString(),
@@ -1425,7 +1525,7 @@ export function DeveloperPortalPage() {
     }
     setNotice({
       tone: "ok",
-      text: `${clientRecord.workshopName} updated to v${LATEST_APP_VERSION}. ${webhookNote} Client data is preserved by additive migrations.`,
+      text: `${clientRecord.workshopName} updated to v${version}. ${webhookNote} Client data is preserved by additive migrations.`,
     });
   }
 
@@ -1627,6 +1727,51 @@ export function DeveloperPortalPage() {
         ? "Signed lifetime token generated. The client owns the app with no renewal or expiry."
         : "Signed offline activation token generated. Send it to the client owner.",
     });
+  }
+
+  async function issueTawLicenceKey() {
+    if (!licenceKeyHolder.trim()) {
+      setNotice({ tone: "error", text: "Enter the TAW owner or company name first." });
+      return;
+    }
+    setLicenceKeyBusy(true);
+    try {
+      if (masterSupabase && portalSession) {
+        const { data, error } = await masterSupabase.rpc("portal_issue_license_key", {
+          p_product: TAW_LABEL,
+          p_holder: licenceKeyHolder.trim(),
+          p_plan: licenceKeyPlan,
+          p_months: licenceKeyMonths,
+        });
+        if (error) throw error;
+        setLicenceKeyText(String(data));
+        setNotice({
+          tone: "ok",
+          text: `TAW ${licenceKeyPlan} key issued to ${licenceKeyHolder.trim()} and stored in the master licence registry.`,
+        });
+      } else {
+        const bytes = new Uint8Array(6);
+        crypto.getRandomValues(bytes);
+        const suffix = Array.from(bytes, (value) => value.toString(16).padStart(2, "0"))
+          .join("")
+          .toUpperCase();
+        const expiry = addMonths(new Date().toISOString(), licenceKeyMonths)
+          .slice(0, 10)
+          .replace(/-/g, "");
+        setLicenceKeyText(`TAW-${expiry}-${suffix}`);
+        setNotice({
+          tone: "warn",
+          text: "Offline demo key generated. Configure the master registry to make it verifiable from TAW Settings.",
+        });
+      }
+    } catch (error) {
+      setNotice({
+        tone: "error",
+        text: `Could not issue the TAW key: ${error instanceof Error ? error.message : "the master registry rejected the request."}`,
+      });
+    } finally {
+      setLicenceKeyBusy(false);
+    }
   }
 
   function copyText(value: string, label: string) {
@@ -1846,8 +1991,8 @@ export function DeveloperPortalPage() {
             <span className="developer-eyebrow">APP FLEET</span>
             <h1>Every client, every app, one console</h1>
             <p>
-              Register Torque ERP and ScanPlan installations, renew LKR licences, suspend or
-              expire access remotely, and manage every client from one console.
+              Register Torque ERP, ScanPlan and TAW installations, renew LKR licences, suspend
+              or expire access remotely, and manage every client from one console.
             </p>
           </div>
           <div className="developer-hero-side">
@@ -1876,6 +2021,25 @@ export function DeveloperPortalPage() {
                 <div>
                   <strong>ScanPlan</strong>
                   <span>Attendance app · powered by RAVBsoft</span>
+                </div>
+              </div>
+              <div className="developer-product-badge">
+                <div
+                  style={{
+                    width: 40,
+                    height: 40,
+                    display: "grid",
+                    placeItems: "center",
+                    borderRadius: 10,
+                    background: "var(--brand-soft, #eef4ff)",
+                    color: "var(--brand, #2563eb)",
+                  }}
+                >
+                  <Truck size={22} />
+                </div>
+                <div>
+                  <strong>TAW</strong>
+                  <span>Vehicle carrier · powered by RAVBsoft</span>
                 </div>
               </div>
             </div>
@@ -2065,7 +2229,7 @@ export function DeveloperPortalPage() {
                                 : `${entry.plan} · ${money(monthlyFeeFor(entry))}/mo`}
                             </div>
                             <div className="row wrap" style={{ gap: 5, marginTop: 2 }}>
-                              <span className={`badge ${entry.appVersion === LATEST_APP_VERSION ? "badge-green" : "badge-amber"}`}>
+                              <span className={`badge ${entry.appVersion === latestVersionFor(entry.softwareName) ? "badge-green" : "badge-amber"}`}>
                                 v{entry.appVersion}
                               </span>
                               {entry.customBuild && (
@@ -2191,17 +2355,94 @@ export function DeveloperPortalPage() {
                 <div className="card-body stack" style={{ gap: 10 }}>
                   <div className="developer-code">
                     POST {remoteConfigured ? `${masterUrl}/rest/v1/rpc/poll_workshop_license` : "{VITE_MASTER_LICENSE_URL}/rest/v1/rpc/poll_workshop_license"}
+                    <br />
+                    POST {remoteConfigured ? `${masterUrl}/rest/v1/rpc/poll_taw_license` : "{VITE_MASTER_LICENSE_URL}/rest/v1/rpc/poll_taw_license"}
                   </div>
                   <div className="tiny muted">
-                    Clients keep working for 7 days without a successful check, then lock until
-                    the next online sync. Clock rollback also forces a re-check.
+                    Torque ERP and ScanPlan poll by installation ID. TAW polls by product-scoped
+                    licence key, so a Torque key can never unlock TAW. Clients keep working for 7
+                    days without a successful check, then lock until the next online sync.
                   </div>
                   <div className="developer-checklist">
-                    <span><ShieldCheck size={13} /> Live polling for Torque ERP and ScanPlan</span>
-                    <span><ShieldCheck size={13} /> Installation-bound licences</span>
-                    <span><ShieldCheck size={13} /> Torque ERP offline tokens (TRQ2)</span>
+                    <span><ShieldCheck size={13} /> Live polling for Torque ERP, ScanPlan and TAW</span>
+                    <span><ShieldCheck size={13} /> Product-scoped licence keys</span>
+                    <span><ShieldCheck size={13} /> Product-scoped release trains</span>
                     <span><ShieldCheck size={13} /> WhatsApp renewal reminders</span>
                   </div>
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-head">
+                  <div>
+                    <h3>TAW licence keys</h3>
+                    <p>
+                      Issue a product-scoped key for TAW-Carrier. The key is stored on the master
+                      project and validated through <code>poll_taw_license</code>.
+                    </p>
+                  </div>
+                  <span className="badge badge-brand">{TAW_LABEL}</span>
+                </div>
+                <div className="card-body stack" style={{ gap: 10 }}>
+                  <div className="grid cols-3" style={{ gap: 10 }}>
+                    <label className="field">
+                      <span className="label">Holder / company</span>
+                      <input
+                        className="input"
+                        value={licenceKeyHolder}
+                        onChange={(event) => setLicenceKeyHolder(event.target.value)}
+                        placeholder="Carrier owner name"
+                      />
+                    </label>
+                    <label className="field">
+                      <span className="label">Plan</span>
+                      <select
+                        className="select"
+                        value={licenceKeyPlan}
+                        onChange={(event) =>
+                          setLicenceKeyPlan(event.target.value as LicencePlan)
+                        }
+                      >
+                        {PLAN_ORDER.map((plan) => (
+                          <option key={plan} value={plan}>
+                            {plan}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label className="field">
+                      <span className="label">Months</span>
+                      <input
+                        className="input"
+                        type="number"
+                        min={1}
+                        max={120}
+                        value={licenceKeyMonths}
+                        onChange={(event) =>
+                          setLicenceKeyMonths(Math.max(1, Number(event.target.value) || 1))
+                        }
+                      />
+                    </label>
+                  </div>
+                  <button
+                    className="btn btn-primary"
+                    disabled={licenceKeyBusy || !licenceKeyHolder.trim()}
+                    onClick={() => void issueTawLicenceKey()}
+                  >
+                    {licenceKeyBusy ? <Loader2 className="spin" size={14} /> : <KeyRound size={14} />}
+                    Issue TAW key
+                  </button>
+                  {licenceKeyText && (
+                    <div className="stack" style={{ gap: 6 }}>
+                      <div className="developer-code">{licenceKeyText}</div>
+                      <button
+                        className="btn btn-soft btn-sm"
+                        onClick={() => copyText(licenceKeyText, "TAW licence key")}
+                      >
+                        <Copy size={12} /> Copy key
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2284,7 +2525,7 @@ export function DeveloperPortalPage() {
                     client's database untouched.
                   </p>
                 </div>
-                <span className="badge badge-green">Latest v{LATEST_APP_VERSION}</span>
+                <span className="badge badge-green">Latest v{releaseLatestVersion}</span>
               </div>
               <div className="table-wrap">
                 <table className="data">
@@ -2298,11 +2539,13 @@ export function DeveloperPortalPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {RELEASES.map((release) => (
-                      <tr key={release.version}>
+                    {visibleReleases.map((release) => (
+                      <tr key={`${release.product}-${release.version}`}>
                         <td>
                           <div className="cell-main">v{release.version}</div>
-                          <div className="cell-sub">{shortDate(release.date)}</div>
+                          <div className="cell-sub">
+                            {release.product} · {shortDate(release.date)}
+                          </div>
                         </td>
                         <td className="cell-main">{release.title}</td>
                         <td className="tiny">{release.changes}</td>
@@ -2336,7 +2579,7 @@ export function DeveloperPortalPage() {
                   <div>
                     <span>On latest</span>
                     <strong>
-                      {productClients.filter((entry) => entry.appVersion === LATEST_APP_VERSION).length}
+                      {productClients.filter((entry) => entry.appVersion === releaseLatestVersion).length}
                       /{productClients.length}
                     </strong>
                   </div>
@@ -3019,10 +3262,12 @@ export function DeveloperPortalPage() {
                   <div className="divider" />
                   <h4 className="developer-section-title">Release &amp; custom build</h4>
                   <div className="row wrap" style={{ gap: 8, marginBottom: 10 }}>
-                    <span className={`badge ${client.appVersion === LATEST_APP_VERSION ? "badge-green" : "badge-amber"}`}>
+                    <span className={`badge ${client.appVersion === latestVersionFor(client.softwareName) ? "badge-green" : "badge-amber"}`}>
                       Installed v{client.appVersion}
                     </span>
-                    <span className="badge badge-slate">Latest v{LATEST_APP_VERSION}</span>
+                    <span className="badge badge-slate">
+                      Latest v{latestVersionFor(client.softwareName)}
+                    </span>
                     {client.customBuild ? (
                       <span className="badge badge-purple">Custom build</span>
                     ) : (
@@ -3042,7 +3287,7 @@ export function DeveloperPortalPage() {
                     >
                       <Cloud size={12} />
                       {isScanPlanClient(client.softwareName) ? "Queue update" : "Deploy latest"} · v
-                      {LATEST_APP_VERSION}
+                      {latestVersionFor(client.softwareName)}
                     </button>
                     {client.deployWebhookUrl ? (
                       <span className="tiny muted">Webhook configured</span>

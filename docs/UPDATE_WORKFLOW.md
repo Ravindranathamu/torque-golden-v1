@@ -54,24 +54,25 @@ npm run build
 
 | Object | Purpose |
 | --- | --- |
-| `developer_releases` | One row per version: date, title, changes, migration files, channel and `is_latest`. |
-| `developer_update_runs` | One row per requested deployment: client, from/to version, status, webhook status, requester, data-preserved flag and timestamps. |
-| `v_latest_release` | The single `is_latest` release. |
+| `developer_releases` | One row per `(product, version)`: date, title, changes, migration files, channel and `is_latest`. |
+| `developer_update_runs` | One row per requested deployment: product, client, from/to version, status, webhook status, requester, data-preserved flag and timestamps. |
+| `v_latest_release` | The single `is_latest` release for each product. |
 | `v_client_update_status` | Fleet view joining each installation to its latest update run. |
 | `request_client_update(client_id, to_version)` | Queues a deployment and stamps `latest_version` on the client. |
 | `record_client_update_result(run_id, status, detail)` | Records the webhook/deploy result and promotes `app_version` on success. |
 
-Latest stable release in this repository: **1.4.0**. The hardcoded `RELEASES`
-list in `src/pages/DeveloperPortal.tsx` mirrors the registry so the portal still
-works offline.
+Latest stable releases in this repository: Torque ERP **1.4.0**, ScanPlan **1.0.0**,
+TAW **0.1.0**. The product-scoped `LATEST_VERSIONS` map and `RELEASES` list in
+`src/pages/DeveloperPortal.tsx` mirror the registry so the portal still works offline.
+A deploy always uses the release train of the client's `software_name`.
 
 Publishing a release:
 
 1. Merge and test on `main`.
 2. Add the next numbered migration under `supabase/migrations/`.
-3. Insert the version into `developer_releases` with its migration files and set
-   `is_latest = true`; clear `is_latest` on the previous version.
-4. Update `LATEST_APP_VERSION` and `RELEASES` in the portal.
+3. Insert the version into `developer_releases` with its `product` and migration files and set
+   `is_latest = true`; clear `is_latest` on the previous version **for that product only**.
+4. Update `LATEST_VERSIONS` and `RELEASES` in the portal.
 5. Update `golden_master_manifest` and take a fresh snapshot
    ([`docs/GOLDEN_MASTER.md`](GOLDEN_MASTER.md)).
 
@@ -196,7 +197,7 @@ select public.trim_audit_log(365);
 
 - [ ] `main` builds: `npx tsc -b`, `npm run lint`, `npm run build`.
 - [ ] Migration numbers are sequential and additive.
-- [ ] `developer_releases` has one `is_latest = true` row.
+- [ ] `developer_releases` has one `is_latest = true` row per product.
 - [ ] `LATEST_APP_VERSION` and `RELEASES` match the registry.
 - [ ] Client branch merged from `main`, conflicts limited to `src/custom`.
 - [ ] Portal shows the correct branch, custom-build badge and summary.

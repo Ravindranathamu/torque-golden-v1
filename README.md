@@ -59,7 +59,9 @@ development and <https://ravsoft-portal.pages.dev/developer> in production. It
 sits outside the staff shell and signs in through Supabase Auth against the
 separate master database (`ravsoft-portal-prod`); use it to register client
 installations for any RAVBsoft app, renew or suspend licences, switch modules
-remotely and generate signed offline tokens.
+remotely and generate signed offline tokens. Products are now scoped: Torque ERP
+(`WS-LK-*`), ScanPlan (`SP-LK-*`) and TAW vehicle carrier (`TAW-LK-*`) each have
+their own release train and licence keys.
 
 > Demo data lives in `localStorage`. Use **Settings → Data & backup** to export a
 > JSON snapshot before clearing your browser, or reset the demo at any time.
@@ -449,7 +451,11 @@ recorded attendance.
 │  ├─ 20261114000100_schema.sql             Production schema, RLS, views, storage
 │  ├─ 20261114000200_golden_master.sql      Reference seeds and clean-template checks
 │  ├─ 20261114000300_security_hardening.sql Audit, private PDFs, licence enforcement
-│  └─ 20261114000400_portal_releases.sql    Release registry and update runs
+│  ├─ 20261114000400_portal_releases.sql    Release registry and update runs
+│  ├─ 20261114000500_app_records.sql        Portal app records
+│  ├─ 20261114000600_portal_security.sql    Admin-only portal RPCs
+│  ├─ 20261120000100_licence_pricing.sql    LKR rate cards and lifetime licences
+│  └─ 20261124000200_taw_product.sql        TAW products, keys and release train
 ├─ supabase/golden-master/
 │  └─ verify.sql                  Fails if the template contains client rows
 ├─ server/whatsapp-gateway/       WhatsApp Cloud API service
@@ -514,10 +520,11 @@ In short:
    then activate it on the workshop. A new key with a later expiry renews the
    licence; the demo workshop stays available for evaluation.
 7. **Master portal** — create a separate Supabase project for the developer
-   portal and run all seven migrations. They include
+   portal and run all eight migrations. They include
    `developer_client_installations`, `developer_license_payments`,
-   `poll_workshop_license`, the release registry, the update-run RPCs and the
-   admin-only RLS from `20261114000600_portal_security.sql`. Create the admin Auth
+   `poll_workshop_license`, `poll_taw_license`, product-scoped releases and
+   update runs, the admin-only RLS from `20261114000600_portal_security.sql`,
+   and TAW product support from `20261124000200_taw_product.sql`. Create the admin Auth
    user with `app_metadata.role = "ravsoft_admin"`, set
    `VITE_MASTER_LICENSE_URL` and `VITE_MASTER_LICENSE_ANON_KEY` in `.env.portal`,
    then run `npm run deploy:portal`. Each client polls outbound only and keeps
@@ -534,7 +541,8 @@ In short:
 - The **golden master** is the clean template: full schema, global reference
   seeds and no client rows. The live template is `ravsoft-golden-v1`
   (`nydlpgucdwaifgvgrlib`, `ap-south-1`): 0 tenant rows, 0 auth users, 0 storage
-  objects, release `1.4.0`, all seven migrations applied. Verify any copy with
+  objects, release `1.4.0`, all eight migrations applied, and TAW release train
+   `0.1.0` available. Verify any copy with
   `supabase/golden-master/verify.sql` before every snapshot. See
   [docs/GOLDEN_MASTER.md](docs/GOLDEN_MASTER.md) and
   [docs/DEPLOYMENT_PLAN.md §3.7](docs/DEPLOYMENT_PLAN.md#37-live-golden-master-record).
@@ -545,6 +553,7 @@ In short:
   summary, publishes the latest release and requests one-click updates through
   `request_client_update(...)`. Every deploy uses additive migrations and keeps
   client data. See [docs/UPDATE_WORKFLOW.md](docs/UPDATE_WORKFLOW.md).
+- TAW-Carrier is registered with software `TAW` and a `TAW-LK-*` installation ID. Its licence keys are issued from **Fleet → TAW licence keys** and verified by `poll_taw_license`; its deploys use the TAW release train independently of Torque ERP. See the TAW-Carrier repository for its golden-master schema and deployment guide.
 - The deploy webhook payload is
   `{ clientId, software, branch, fromVersion, toVersion, strategy: "additive-migrations", preserveClientData: true, requestedAt }`.
 

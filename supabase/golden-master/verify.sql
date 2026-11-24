@@ -144,24 +144,32 @@ select key,
  order by category, key;
 
 -- ---------------------------------------------------------------------------
--- 5. Exactly one latest release is published
+-- 5. Exactly one latest release is published per product
 -- ---------------------------------------------------------------------------
 do $$
 declare
-  v_latest integer;
+  v_bad record;
 begin
-  select count(*) into v_latest
-    from public.developer_releases
-   where is_latest;
+  for v_bad in
+    select product, count(*) as latest_count
+      from public.developer_releases
+     where is_latest
+     group by product
+    having count(*) <> 1
+  loop
+    raise exception 'Expected exactly one latest release for %, found %.',
+      v_bad.product, v_bad.latest_count;
+  end loop;
 
-  if v_latest <> 1 then
-    raise exception 'Expected exactly one latest release, found %.', v_latest;
+  if not exists (select 1 from public.developer_releases where product = 'TAW' and is_latest) then
+    raise exception 'TAW release train has no latest release.';
   end if;
 end;
 $$;
 
-select version, released_at, title, migration_files
-  from public.v_latest_release;
+select product, version, released_at, title, migration_files
+  from public.v_latest_release
+ order by product;
 
 -- ---------------------------------------------------------------------------
 -- 6. Portal tables are advisory: a dedicated portal project should also be

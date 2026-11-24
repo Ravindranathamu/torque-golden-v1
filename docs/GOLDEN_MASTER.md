@@ -47,7 +47,7 @@ client copy; `main` contains newer application work and may move independently.
 | --- | --- |
 | Schema | All tables, views, functions, triggers, RLS policies and storage buckets from migrations `0001`–`0007`. |
 | Reference data | Expense and petty-cash categories, payment methods, service types, suggested vehicle makes, the Sri Lankan insurance directory, licence plans and release channels (`system_reference_data`). |
-| Release registry | `developer_releases` with the current stable release and `developer_update_runs` for the portal. |
+| Release registry | `developer_releases` with one current stable release per product and `developer_update_runs` for the portal. |
 | Manifest | One `golden_master_manifest` row (`RAVSOFT-GM-V1`) recording schema, reference and app versions. |
 | Verification | `golden_master_status()` and `assert_golden_master_clean()`. |
 
@@ -180,13 +180,16 @@ by the service role. They are not exposed to `anon` or `authenticated`.
     where id = 'RAVSOFT-GM-V1';
 
    insert into public.developer_releases (
-     version, released_at, title, changes, migration_files, channel, is_latest, notes
+     product, version, released_at, title, changes, migration_files, channel, is_latest, notes
    ) values (
-     '1.5.0', current_date, 'Release title', 'What changed.',
+     'Torque ERP', '1.5.0', current_date, 'Release title', 'What changed.',
      array['20261201000100_new_migration.sql'], 'Stable', true, 'Golden master updated.'
    );
 
-   update public.developer_releases set is_latest = false where version <> '1.5.0';
+   update public.developer_releases
+      set is_latest = false
+    where product = 'Torque ERP'
+      and version <> '1.5.0';
    ```
 
 5. Re-run `verify.sql`, take a fresh snapshot and deploy it to the portal's
@@ -205,7 +208,7 @@ by the service role. They are not exposed to `anon` or `authenticated`.
       `petty_cash_categories`, `payment_methods`, `service_types`,
       `vehicle_makes`, `insurance_companies_lk`, `licence_plans`,
       `release_channels`).
-- [ ] One `developer_releases` row has `is_latest = true`.
+- [ ] One `developer_releases` row per product has `is_latest = true` (Torque ERP, ScanPlan, TAW).
 - [ ] No auth users, storage objects or client PDFs exist.
 - [ ] A fresh snapshot has been taken after the last migration.
-- [ ] The manifest app version matches `LATEST_APP_VERSION` in the portal.
+- [ ] The manifest app version matches `LATEST_VERSIONS["Torque ERP"]` in the portal.

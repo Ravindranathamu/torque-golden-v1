@@ -21,9 +21,9 @@ below are the remaining cutover work.
 | --- | --- | --- | --- |
 | **G1 — Supabase app data adapter** | Closed in code | `app_records` bridge (`20261114000500_app_records.sql`), `src/lib/cloudStore.ts`, `src/state/useCloudSync.ts`, cloud sign-in on `/login`, provisioning guard on `/setup`. Demo mode still uses `localStorage` when `VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` are blank. | Sign in on two devices; create a job on one and confirm it appears on the other. Go offline, edit, reconnect, confirm the queue flushes. |
 | **G2 — Portal admin security** | Closed in code | `20261114000600_portal_security.sql` removes anon access, adds `is_portal_admin()` policies and admin wrappers. The portal signs in with Supabase Auth and writes with the session JWT. | With the anon key, `select * from developer_client_installations` must fail or return nothing. A non-admin Auth user must be rejected. An admin must read and write. |
-| **G3 — Installation ID match** | Closed in code | The registration form accepts the app's ID; `portal_change_installation_id` repoints payments and update runs. | Copy the ID from the client **Settings → Licence**, register it, then confirm `poll_workshop_license` returns the plan and expiry. |
+| **G3 — Installation ID match** | Closed in code | The registration form accepts `WS-LK-*`, `SP-LK-*` and `TAW-LK-*` IDs; `portal_change_installation_id` repoints payments, update runs and licence keys. | Copy the ID from the client **Settings → Licence**, register it, then confirm `poll_workshop_license` (or `poll_taw_license` for TAW) returns the plan and expiry. |
 | **G4 — Update audit wiring** | Closed in code | **Deploy latest** calls `portal_request_client_update` first, fires the webhook with the run ID, then calls `portal_record_client_update_result`; only `Deployed` promotes `app_version`. | Deploy a test client and confirm one `developer_update_runs` row, then confirm `app_version` changes only after `Deployed`. |
-| **G5 — CLI migration names** | Closed | All seven migrations use `<14-digit timestamp>_name.sql`; `supabase db push` is now a first-class option (§2.2). | `supabase_migrations.schema_migrations` shows seven rows ending in `20261120000100`. |
+| **G5 — CLI migration names** | Closed | All eight migrations use `<14-digit timestamp>_name.sql`; `supabase db push` is now a first-class option (§2.2). | `supabase_migrations.schema_migrations` shows eight rows ending in `20261124000200`. |
 | **G6 — Git remote** | Closed locally | The workspace is a Git repository with an initial commit. | Add the private remote and push `main`: `git remote add origin <url>` then `git push -u origin main`. |
 | **G7 — PWA shortcut** | Closed | `public/manifest.webmanifest` opens `/check-in`, which resolves the signed-in or configured workshop slug. | Install the PWA and confirm the shortcut lands on the client's check-in form. |
 
@@ -225,7 +225,7 @@ release `1.4.0` published and the licence RPC reachable by clients.
 
 ### 2.2 Apply the migrations
 
-Apply all seven files **in order**. They are additive and idempotent.
+Apply all eight files **in order**. They are additive and idempotent.
 
 | Order | File |
 | --- | --- |
@@ -280,7 +280,7 @@ select version, name
  order by version;
 ```
 
-Expect seven rows ending in `20261120000100`. Never rename a migration that has
+Expect eight rows ending in `20261124000200`. Never rename a migration that has
 already been applied: the CLI matches history by filename. If a database was
 built from the old `0001_…` names, treat it as already migrated and stamp the
 timestamped versions before using `db push` again, or keep using Option A/B for
@@ -333,10 +333,10 @@ use Option A/B/C for any database that must stay CLI-compatible.
 Run in the SQL editor:
 
 ```sql
--- Exactly one latest release, expected 1.4.0
-select version, released_at, is_latest
+-- Exactly one latest release per product: Torque ERP 1.4.0, ScanPlan 1.0.0, TAW 0.1.0
+select product, version, released_at, is_latest
   from public.developer_releases
- order by released_at desc;
+ order by product, released_at desc;
 
 select *
   from public.v_latest_release;
@@ -354,8 +354,8 @@ select count(*) as update_runs
 
 Expected:
 
-- `1.4.0` exists and `is_latest = true`.
-- `v_latest_release` returns exactly one row.
+- Torque ERP `1.4.0`, ScanPlan `1.0.0` and TAW `0.1.0` exist with `is_latest = true`.
+- `v_latest_release` returns exactly one row per product.
 - `installations = 0`, `payments = 0`, `update_runs = 0`.
 
 ### 2.4 Configure Auth
@@ -489,41 +489,58 @@ Filled in on 2026-11-18. Keep this table current when the project or host moves.
 
 Portal prerequisites for a fresh environment:
 
-1. All seven migrations applied in order (§2.2).
+1. All eight migrations applied in order (§2.2).
 2. An Auth user with `app_metadata.role = "ravsoft_admin"`. Without it the portal
    shows *Admin role required* and RLS rejects every read and write.
 3. `.env.portal` populated from the project URL and publishable key.
 4. `npm run build:portal`, then `wrangler pages deploy`.
 
-### 2.6 Publish release 1.4.0
+### 2.6 Publish product releases
 
-`20261114000400_portal_releases.sql` already seeds release `1.4.0` as the latest release.
-Confirm it:
+`20261114000400_portal_releases.sql` seeds Torque ERP `1.4.0`, and
+`20261124000200_taw_product.sql` seeds ScanPlan `1.0.0` and TAW `0.1.0` as the latest releases
+for their product lines. Confirm them:
 
 ```sql
 select *
   from public.v_latest_release;
 ```
 
-If it is missing, apply `20261114000400_portal_releases.sql` again. To promote `1.4.0`
-manually without creating a duplicate:
+If a product is missing, reapply its seed migration. To promote a version manually without
+creating a duplicate, scope the update to that product:
 
 ```sql
 begin;
 update public.developer_releases
    set is_latest = false
- where is_latest
+ where product = 'Torque ERP'
+   and is_latest
    and version <> '1.4.0';
 
 update public.developer_releases
    set is_latest = true
- where version = '1.4.0';
+ where product = 'Torque ERP'
+   and version = '1.4.0';
 commit;
 ```
 
-The portal's hardcoded `LATEST_APP_VERSION` and `RELEASES` list in
-`src/pages/DeveloperPortal.tsx` already match `1.4.0`. If you publish a new
+The portal's `LATEST_VERSIONS` map and product-scoped `RELEASES` list in
+`src/pages/DeveloperPortal.tsx` already match the seeded versions. If you publish a new
 version, update both the database and that file, then rebuild the portal.
+
+#### TAW product line
+
+Register TAW installations with a `TAW-LK-XXXXXXXX` ID and software name `TAW`. Issue a key from
+**Fleet → TAW licence keys**; `portal_issue_license_key('TAW', ...)` stores a
+`TAW-YYYYMMDD-XXXXXXXX` key in `developer_license_keys`. TAW-Carrier verifies it through
+`poll_taw_license(p_license_key text)`, which rejects Torque ERP and ScanPlan keys because it
+filters on `product = 'TAW'`.
+
+TAW deploys are product-scoped: `request_client_update` resolves the latest release for the
+client's own `software_name`, records a `product` on `developer_update_runs`, and posts the release
+payload to the installation's deploy webhook. A Torque ERP release can never retarget a TAW
+installation. Client data stays in each carrier's own Supabase project; the golden master is only
+the clean template.
 
 ### 2.7 Clear the demo registry before real clients
 
@@ -570,7 +587,7 @@ Target design:
 1. The developer signs in with Supabase Auth.
 2. The developer's `app_metadata.role` is `ravsoft_admin`.
 3. The portal sends the **user access token**, not the anon key, on writes.
-4. Anonymous clients can still call only `poll_workshop_license`.
+4. Anonymous clients can still call only `poll_workshop_license` and `poll_taw_license`.
 
 Set the role with the Admin API (service role, trusted machine only):
 
@@ -655,8 +672,9 @@ For strict isolation, also replace the `developer_update_runs_read` policy with
 `using (public.is_portal_admin())`, and expose `v_client_update_status` only to
 the service role or recreate it with `security_invoker = true`.
 
-`poll_workshop_license(text)` must remain executable by `anon`; it is the only
-RPC a client calls.
+`poll_workshop_license(text)` must remain executable by `anon` for Torque ERP/ScanPlan
+clients; TAW-Carrier calls `poll_taw_license(text)`. No other portal RPC may be
+executable by `anon`.
 
 ### 2.10 Back up the portal
 
@@ -701,7 +719,7 @@ storage objects.
 
 ### 3.2 Apply the migrations
 
-Apply all seven files in order, using §2.2 Option A, B or C, against
+Apply all eight files in order, using §2.2 Option A, B or C, against
 `<GOLDEN_REF>`.
 
 ### 3.3 Run the clean-template verification
@@ -726,7 +744,8 @@ Expected result:
 - `has_client_data = false`
 - Every tenant count is `0`.
 - All eight reference categories exist.
-- Exactly one `developer_releases` row has `is_latest = true` (`1.4.0`).
+- Exactly one `developer_releases` row per product has `is_latest = true`
+  (Torque ERP `1.4.0`, ScanPlan `1.0.0`, TAW `0.1.0`).
 
 ### 3.4 Manual assertions
 
@@ -737,9 +756,9 @@ select *
 select *
   from public.golden_master_manifest;
 
-select version, released_at, is_latest
+select product, version, released_at, is_latest
   from public.developer_releases
- order by released_at desc;
+ order by product, released_at desc;
 
 select key, category
   from public.system_reference_data
@@ -777,7 +796,7 @@ Expected:
 | `developer_license_payments` | `0` |
 | `developer_update_runs` | `0` |
 | Buckets | `job-photos`, `branding`, `invoice-pdfs`, `payroll-pdfs` |
-| `developer_releases` latest | Exactly one, `1.4.0` |
+| `developer_releases` latest | One per product: `1.4.0`, `1.0.0`, `0.1.0` |
 | Manifest | `RAVSOFT-GM-V1`, `client_data_allowed = false`, `app_version = 1.4.0` |
 
 Reference categories:
@@ -860,9 +879,9 @@ Filled in on 2026-11-18; snapshot refreshed on 2026-11-22 after migration `0001`
 | Region | `ap-south-1` |
 | Status | `ACTIVE_HEALTHY`, Postgres 17 |
 | API URL | `https://nydlpgucdwaifgvgrlib.supabase.co` |
-| Migrations | all seven applied in order via Management API |
+| Migrations | all eight applied in order via Management API |
 | `schema_migrations` | empty — Option D does not write CLI bookkeeping |
-| Latest release | `1.4.0` (3 release rows, exactly one latest) |
+| Latest releases | Torque ERP `1.4.0`, ScanPlan `1.0.0`, TAW `0.1.0` (one latest per product) |
 | Tenant rows | `0` in every table (`has_client_data = false`) |
 | Auth users | `0` |
 | Storage objects | `0` |
@@ -886,10 +905,10 @@ To take the full physical dump later, install the PostgreSQL client
 ### Phase 2 checklist
 
 - [x] Golden project created separately from the portal.
-- [x] All seven migrations applied in order.
+- [x] All eight migrations applied in order.
 - [x] `verify.sql` passes.
 - [x] Zero tenant rows and zero auth users.
-- [x] Exactly one latest release (`1.4.0`).
+- [x] One latest release per product (`1.4.0`, `1.0.0`, `0.1.0`).
 - [x] Reference snapshot and SHA-256 recorded (full `pg_dump` pending).
 - [ ] `golden-gm-v1.4.0` tag pushed (no Git remote configured).
 - [x] Template locked; no client data allowed.
@@ -1759,7 +1778,7 @@ Run this after Phase 3 and before handover.
 - [ ] Zero auth users.
 - [ ] Zero storage objects.
 - [ ] Four buckets exist.
-- [ ] Exactly one latest release.
+- [ ] Exactly one latest release per product.
 - [ ] Snapshot hash recorded.
 
 ### 6.3 Client
@@ -1851,15 +1870,16 @@ update public.golden_master_manifest
 begin;
 update public.developer_releases
    set is_latest = false
- where is_latest;
+ where product = 'Torque ERP'
+   and is_latest;
 
 insert into public.developer_releases (
-  version, released_at, title, changes, migration_files, channel, is_latest, notes
+  product, version, released_at, title, changes, migration_files, channel, is_latest, notes
 ) values (
-  '1.5.0', current_date, 'Release title', 'What changed.',
+  'Torque ERP', '1.5.0', current_date, 'Release title', 'What changed.',
   array['20261201000100_next_change.sql'], 'Stable', true, 'Golden master updated.'
 )
-on conflict (version) do update
+on conflict (product, version) do update
   set released_at = excluded.released_at,
       title = excluded.title,
       changes = excluded.changes,
@@ -1870,7 +1890,7 @@ on conflict (version) do update
 commit;
 ```
 
-8. Update `LATEST_APP_VERSION` and `RELEASES` in
+8. Update `LATEST_VERSIONS` and `RELEASES` in
    `src/pages/DeveloperPortal.tsx`.
 9. Rebuild and redeploy the portal.
 10. Take a fresh golden snapshot and tag it.

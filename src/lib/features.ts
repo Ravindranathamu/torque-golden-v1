@@ -158,6 +158,19 @@ export const MODULE_PRESETS: {
     flags: FEATURE_FLAGS.map((flag) => flag.key),
   },
   {
+    id: "taw-fleet",
+    name: "TAW vehicle carrier",
+    caption: "Owner/driver logins, dispatch, automatic GPS, WAHA, partner handover and IRD billing.",
+    flags: [
+      "enable_vat_invoicing",
+      "enable_advanced_accounting",
+      "enable_payroll_epf_etf",
+      "enable_driver_commissions",
+      "enable_petty_cash",
+      "enable_voice_notifications",
+    ],
+  },
+  {
     id: "full-workshop",
     name: "Full multi-section workshop",
     caption: "Sections, paint, insurance, payroll and complete accounts.",

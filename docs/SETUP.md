@@ -104,7 +104,7 @@ To retry from a clean seed, sign in as Owner and use **Settings → Reset demo d
 
 ### 2.2 Apply the schema
 
-Apply all seven migrations **in order**. They are additive and idempotent, so
+Apply all eight migrations **in order**. They are additive and idempotent, so
 they can be re-run safely on an existing installation.
 
 | Order | File | Purpose |
@@ -116,6 +116,7 @@ they can be re-run safely on an existing installation.
 | 5 | [`20261114000500_app_records.sql`](../supabase/migrations/20261114000500_app_records.sql) | Workshop-scoped application-state bridge, RLS, trigger and realtime publication. |
 | 6 | [`20261114000600_portal_security.sql`](../supabase/migrations/20261114000600_portal_security.sql) | Admin-only portal policies, authenticated update wrappers and installation-ID repointing. |
 | 7 | [`20261120000100_licence_pricing.sql`](../supabase/migrations/20261120000100_licence_pricing.sql) | Lite/Starter/Growth/Pro/Enterprise plans, typed per-client monthly fees and the RAVBsoft pricing reference. |
+| 8 | [`20261124000200_taw_product.sql`](../supabase/migrations/20261124000200_taw_product.sql) | TAW product line, product-scoped releases/update runs, product-scoped licence keys, `poll_taw_license` and `TAW-LK` installation IDs. |
 
 Option A — SQL editor:
 
@@ -449,7 +450,8 @@ not change any page's action signatures.
 The developer portal uses a separate client (`VITE_MASTER_LICENSE_URL`) and a
 Supabase Auth account with `app_metadata.role = "ravsoft_admin"`.
 `20261114000600_portal_security.sql` removes anon access and installs the admin
-policies. The only anonymous portal RPC is `poll_workshop_license(text)`.
+policies. The only anonymous portal RPCs are `poll_workshop_license(text)` for
+Torque ERP/ScanPlan installation IDs and `poll_taw_license(text)` for TAW licence keys.
 
 ### 3.2 Extended workflow data model
 
@@ -836,6 +838,9 @@ port. When `VITE_MASTER_LICENSE_URL` is configured:
 
 - The client calls `POST /rest/v1/rpc/poll_workshop_license` with
   `{ p_installation_id }` on start-up and from **Sync licence now**.
+- TAW-Carrier instead calls `POST /rest/v1/rpc/poll_taw_license` with
+  `{ p_license_key }`. Only `product = 'TAW'` keys are accepted, so a Torque ERP
+  or ScanPlan key can never unlock TAW.
 - The response carries `status`, `plan`, `expires_at`, `feature_flags`,
   `holder` and `server_time`; the client caches it locally.
 - The workshop keeps operating for up to **7 days** after the last successful
@@ -846,15 +851,17 @@ port. When `VITE_MASTER_LICENSE_URL` is configured:
 
 Portal tables and the RPC are included at the end of
 `supabase/migrations/20261114000100_schema.sql`; `20261114000400_portal_releases.sql` adds the
-release registry and update ledger:
+release registry and update ledger, and `20261124000200_taw_product.sql` scopes both by product:
 
 | Table / function | Purpose |
 | --- | --- |
 | `developer_client_installations` | One row per isolated client server: client name, software name, server address, plan, status, expiry, feature flags, last seen, branch, custom-build flag and deploy webhook. |
 | `developer_license_payments` | LKR renewal log with method, reference and months. |
 | `poll_workshop_license(text)` | Outbound-only client poll; updates `last_seen_at`, expires overdue licences and returns the signed entitlement data. |
-| `developer_releases` | Published versions with migration files, channel and a single `is_latest` row. |
-| `developer_update_runs` | Auditable deployment runs with from/to version, status, webhook status and a data-preserved flag. |
+| `poll_taw_license(text)` | Product-scoped TAW poll over `developer_license_keys`; rejects every non-TAW key. |
+| `developer_license_keys` | Product-scoped keys issued from the portal; admin-only reads, public polling only through the RPC. |
+| `developer_releases` | Published versions keyed by `(product, version)` with migration files, channel and one `is_latest` row per product. |
+| `developer_update_runs` | Auditable deployment runs with product, from/to version, status, webhook status and a data-preserved flag. |
 | `request_client_update(client_id, to_version)` | Queues a one-click update and stamps `latest_version` on the client. |
 | `record_client_update_result(run_id, status, detail)` | Records the deploy result and promotes `app_version` on success. |
 
