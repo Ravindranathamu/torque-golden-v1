@@ -203,7 +203,7 @@ interface AppStoreValue {
   togglePartIncludedInLabor: (partId: string, included: boolean) => void;
   updateJobSections: (jobId: string, sectionIds: string[]) => void;
   syncLicence: () => Promise<ActionResult>;
-  addUser: (user: Omit<WorkshopUser, "id" | "createdAt">) => string;
+  addUser: (user: Omit<WorkshopUser, "id" | "createdAt"> & { id?: string }) => string;
   updateUser: (user: WorkshopUser) => void;
   removeUser: (userId: string) => ActionResult;
   addWorker: (worker: Omit<WorkerProfile, "id">) => string;
@@ -1526,38 +1526,42 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }));
   }, []);
 
-  const addUser = useCallback((user: Omit<WorkshopUser, "id" | "createdAt">) => {
-    const id = uid("usr");
-    setState((prev) => {
-      const sectionIds = new Set(user.sectionIds ?? []);
-      const supervises = user.departments.includes("Supervisor");
-      const keepsStores = user.departments.includes("Stores");
-      return {
-        ...prev,
-        users: [
-          ...prev.users,
-          { ...user, id, createdAt: new Date().toISOString() },
-        ],
-        workers: prev.workers.map((worker) =>
-          user.workerId && worker.id === user.workerId
-            ? { ...worker, sectionIds: Array.from(sectionIds) }
-            : worker,
-        ),
-        sections: prev.sections.map((section) => ({
-          ...section,
-          supervisorIds:
-            supervises && sectionIds.has(section.id)
-              ? Array.from(new Set([...section.supervisorIds, id]))
-              : section.supervisorIds.filter((entry) => entry !== id),
-          storekeeperIds:
-            keepsStores && sectionIds.has(section.id)
-              ? Array.from(new Set([...section.storekeeperIds, id]))
-              : section.storekeeperIds.filter((entry) => entry !== id),
-        })),
-      };
-    });
-    return id;
-  }, []);
+  const addUser = useCallback(
+    (input: Omit<WorkshopUser, "id" | "createdAt"> & { id?: string }) => {
+      const { id: suppliedId, ...user } = input;
+      const id = suppliedId ?? uid("usr");
+      setState((prev) => {
+        const sectionIds = new Set(user.sectionIds ?? []);
+        const supervises = user.departments.includes("Supervisor");
+        const keepsStores = user.departments.includes("Stores");
+        return {
+          ...prev,
+          users: [
+            ...prev.users,
+            { ...user, id, createdAt: new Date().toISOString() },
+          ],
+          workers: prev.workers.map((worker) =>
+            user.workerId && worker.id === user.workerId
+              ? { ...worker, sectionIds: Array.from(sectionIds) }
+              : worker,
+          ),
+          sections: prev.sections.map((section) => ({
+            ...section,
+            supervisorIds:
+              supervises && sectionIds.has(section.id)
+                ? Array.from(new Set([...section.supervisorIds, id]))
+                : section.supervisorIds.filter((entry) => entry !== id),
+            storekeeperIds:
+              keepsStores && sectionIds.has(section.id)
+                ? Array.from(new Set([...section.storekeeperIds, id]))
+                : section.storekeeperIds.filter((entry) => entry !== id),
+          })),
+        };
+      });
+      return id;
+    },
+    [],
+  );
 
   const updateUser = useCallback((user: WorkshopUser) => {
     setState((prev) => {

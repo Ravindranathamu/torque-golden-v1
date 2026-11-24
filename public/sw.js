@@ -1,5 +1,5 @@
 /* Torque ERP service worker — offline app shell + static asset cache. */
-const VERSION = "torque-v2";
+const VERSION = "torque-v3";
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const SHELL_URLS = [

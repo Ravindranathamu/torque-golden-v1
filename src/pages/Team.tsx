@@ -20,6 +20,7 @@ import {
 } from "lucide-react";
 import { useApp } from "../state/AppStore";
 import { supabase } from "../lib/supabase";
+import { createCloudStaffAccount } from "../lib/cloudStaff";
 import { featureEnabled } from "../lib/features";
 import { commissionsByWorker } from "../lib/analytics";
 import { dateOnly, money, shortDate, waLink } from "../lib/utils";
@@ -46,6 +47,7 @@ const emptyStaffForm = {
   name: "",
   username: "",
   pin: "",
+  password: "",
   phone: "",
   email: "",
   gdriveEmail: "",
@@ -56,6 +58,29 @@ const emptyStaffForm = {
   sectionIds: [] as string[],
   active: true,
 };
+
+function generateStaffPassword(): string {
+  const upper = "ABCDEFGHJKLMNPQRSTUVWXYZ";
+  const lower = "abcdefghjkmnpqrstuvwxyz";
+  const digits = "23456789";
+  const symbols = "!@#$%^&*-_";
+  const all = upper + lower + digits + symbols;
+  const pick = (set: string, random: number) => set[random % set.length];
+  const values = new Uint32Array(20);
+  window.crypto.getRandomValues(values);
+  const chars = [
+    pick(upper, values[0]),
+    pick(lower, values[1]),
+    pick(digits, values[2]),
+    pick(symbols, values[3]),
+    ...Array.from({ length: 16 }, (_, index) => pick(all, values[index + 4])),
+  ];
+  for (let index = chars.length - 1; index > 0; index -= 1) {
+    const target = values[index] % (index + 1);
+    [chars[index], chars[target]] = [chars[target], chars[index]];
+  }
+  return chars.join("");
+}
 
 const emptyWorkerForm = {
   fullName: "",
@@ -93,6 +118,7 @@ export function TeamPage() {
   const unlocked = cloudMode ? Boolean(currentUser?.isOwner) : unlockedLocal;
   const [password, setPassword] = useState("");
   const [staffOpen, setStaffOpen] = useState(false);
+  const [savingStaff, setSavingStaff] = useState(false);
   const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [staffForm, setStaffForm] = useState({ ...emptyStaffForm });
   const [removeTarget, setRemoveTarget] = useState<WorkshopUser | null>(null);
@@ -135,12 +161,6 @@ export function TeamPage() {
       push("Unlock owner controls to manage staff accounts.", "error");
       return;
     }
-    if (cloudMode) {
-      push(
-        "Sign-in accounts live on the workshop server. Ask RAVBsoft to create the Auth account, then assign its departments here.",
-      );
-      return;
-    }
     setEditingUserId(null);
     setStaffForm({ ...emptyStaffForm });
     setStaffOpen(true);
@@ -156,6 +176,7 @@ export function TeamPage() {
       name: user.name,
       username: user.username,
       pin: user.pin,
+      password: "",
       phone: user.phone,
       email: user.email ?? "",
       gdriveEmail: user.gdriveEmail ?? "",
@@ -188,6 +209,14 @@ export function TeamPage() {
     }
     if (!cloudMode && !/^\d{4,6}$/.test(staffForm.pin)) {
       push("PIN must be 4 to 6 digits.", "error");
+      return;
+    }
+    if (cloudMode && !editingUser && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(staffForm.email.trim())) {
+      push("Enter a valid email address for the new sign-in.", "error");
+      return;
+    }
+    if (cloudMode && !editingUser && staffForm.password.length < 8) {
+      push("Create a password of at least 8 characters for the new sign-in.", "error");
       return;
     }
     if (!staffForm.phone.trim()) {
@@ -258,7 +287,7 @@ export function TeamPage() {
           : "Staff account updated.",
       );
     } else {
-      addUser({
+      const user = {
         name: staffForm.name.trim(),
         username: staffForm.username.trim().toLowerCase(),
         pin: staffForm.pin,
@@ -272,8 +301,37 @@ export function TeamPage() {
         commissionRate,
         workerId: staffForm.workerId || undefined,
         active: staffForm.active,
-      });
-      push("Staff account created. Share the PIN securely.");
+      };
+
+      if (cloudMode) {
+        setSavingStaff(true);
+        const result = await createCloudStaffAccount({
+          fullName: user.name,
+          username: user.username,
+          email: user.email ?? "",
+          password: staffForm.password,
+          phone: user.phone,
+          departments: user.departments,
+          baseSalary,
+          commissionRate,
+          gdriveEmail: user.gdriveEmail,
+          active: user.active,
+        });
+        setSavingStaff(false);
+        if (!result.ok) {
+          push(result.message, "error");
+          return;
+        }
+        addUser({ ...user, id: result.id });
+        push(
+          result.needsEmailConfirmation
+            ? "Staff account created. They must confirm their email before the first sign-in."
+            : `Staff account created. Sign-in: ${user.email} with the password you set.`,
+        );
+      } else {
+        addUser(user);
+        push("Staff account created. Share the PIN securely.");
+      }
     }
     setStaffOpen(false);
     setEditingUserId(null);
@@ -939,16 +997,24 @@ export function TeamPage() {
         open={staffOpen}
         onClose={() => setStaffOpen(false)}
         title={editingUser ? "Edit staff account" : "Add a staff account"}
-        subtitle="Departments control which screens and actions this login can use."
+        subtitle={
+          cloudMode && !editingUser
+            ? "Creates a workshop sign-in and assigns the departments this person can use."
+            : "Departments control which screens and actions this login can use."
+        }
         size="wide"
         footer={
           <>
             <button className="btn btn-secondary" onClick={() => setStaffOpen(false)}>
               Cancel
             </button>
-            <button className="btn btn-primary" onClick={saveStaff}>
+            <button className="btn btn-primary" onClick={saveStaff} disabled={savingStaff}>
               {editingUser ? <Pencil /> : <UserPlus />}
-              {editingUser ? "Save changes" : "Create account"}
+              {savingStaff
+                ? "Creating…"
+                : editingUser
+                  ? "Save changes"
+                  : "Create account"}
             </button>
           </>
         }
@@ -993,7 +1059,11 @@ export function TeamPage() {
                 onChange={(event) => setStaffForm({ ...staffForm, phone: event.target.value })}
               />
             </Field>
-            <Field label="Email">
+            <Field
+              label="Email"
+              required={cloudMode && !editingUser}
+              hint={cloudMode && !editingUser ? "This becomes the staff member's sign-in." : undefined}
+            >
               <input
                 className="input"
                 type="email"
@@ -1002,6 +1072,38 @@ export function TeamPage() {
                 onChange={(event) => setStaffForm({ ...staffForm, email: event.target.value })}
               />
             </Field>
+            {cloudMode && !editingUser && (
+              <Field
+                label="Temporary password"
+                required
+                hint="At least 8 characters. Share it securely with this staff member."
+              >
+                <div className="input-group">
+                  <input
+                    className="input"
+                    type="text"
+                    autoComplete="new-password"
+                    placeholder="At least 8 characters"
+                    value={staffForm.password}
+                    onChange={(event) =>
+                      setStaffForm({ ...staffForm, password: event.target.value })
+                    }
+                  />
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() =>
+                      setStaffForm((previous) => ({
+                        ...previous,
+                        password: generateStaffPassword(),
+                      }))
+                    }
+                  >
+                    Generate
+                  </button>
+                </div>
+              </Field>
+            )}
             <Field label="Google Drive email" hint="Optional. Used for workshop photo folders.">
               <input
                 className="input"
@@ -1140,6 +1242,12 @@ export function TeamPage() {
             </Field>
           </div>
 
+          {cloudMode && !editingUser && (
+            <Alert tone="warn" icon={<KeyRound />} title="Share this password once">
+              Torque does not store the plain password. Copy it before closing this window and
+              give it to the staff member securely.
+            </Alert>
+          )}
           <Alert tone="info" icon={<ShieldCheck />}>
             The owner account cannot be removed or suspended here. A staff account can be
             suspended instantly if a phone is lost or a team member leaves.
