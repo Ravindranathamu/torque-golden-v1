@@ -2534,7 +2534,9 @@ export function SettingsPage() {
               <div className="card-body stack">
                 <div className="row-between">
                   <span className="small">Status</span>
-                  <span className="badge badge-slate">Local demo</span>
+                  <span className={`badge ${settings.demoMode ? "badge-slate" : "badge-green"}`}>
+                    {settings.demoMode ? "Local demo" : "Cloud workshop"}
+                  </span>
                 </div>
                 <div className="kv">
                   <span>Schema</span>

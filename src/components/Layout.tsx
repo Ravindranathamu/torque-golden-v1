@@ -293,7 +293,7 @@ export function AppShell() {
           </div>
           <div style={{ padding: "10px 6px 0", fontSize: 9.5, color: "#5f7f85", display: "flex", justifyContent: "space-between" }}>
             <span>{DEVELOPER.product} · v{DEVELOPER.version}</span>
-            <span>Local demo</span>
+            <span>{state.settings.demoMode ? "Local demo" : "Cloud workshop"}</span>
           </div>
         </div>
       </aside>
