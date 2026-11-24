@@ -308,8 +308,21 @@ const PLAN_PRESETS: Record<LicencePlan, string> = {
 /** Annual billing is 10 months for 12 — two months free. */
 const ANNUAL_MONTHS_CHARGED = 10;
 
-/** Lifetime is a one-time licence priced at 60 monthly instalments. */
+/** Lifetime is a one-time outright purchase priced at 60 monthly instalments. */
 const LIFETIME_MONTHS_CHARGED = 60;
+
+/**
+ * A lifetime sale is stored as a far-future expiry so it works on the existing
+ * registry without a schema change. The portal and the client app both treat
+ * any expiry more than 50 years away as outright ownership.
+ */
+const LIFETIME_TERM_MONTHS = 100 * 12;
+const LIFETIME_DAYS_THRESHOLD = 365 * 50;
+
+/** True when a registry row represents an outright lifetime purchase. */
+function isLifetimeLicence(client: { expiresAt: string }): boolean {
+  return daysUntil(client.expiresAt) > LIFETIME_DAYS_THRESHOLD;
+}
 
 function monthlyFeeFor(client: { plan: LicencePlan; monthlyFee?: number }): number {
   const custom = Number(client.monthlyFee);
@@ -758,6 +771,7 @@ export function DeveloperPortalPage() {
   const [tokenHolder, setTokenHolder] = useState("");
   const [tokenPlan, setTokenPlan] = useState<LicencePlan>("Enterprise");
   const [tokenMonths, setTokenMonths] = useState(12);
+  const [tokenLifetime, setTokenLifetime] = useState(false);
   const [tokenFlags, setTokenFlags] = useState<FeatureFlags>(() => allFlags(true));
   const [verifyText, setVerifyText] = useState("");
   const [syncing, setSyncing] = useState(false);
@@ -862,6 +876,7 @@ export function DeveloperPortalPage() {
   }, []);
 
   const client = data.clients.find((entry) => entry.id === manageId) ?? null;
+  const clientIsLifetime = client ? isLifetimeLicence(client) : false;
 
   const filtered = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -886,10 +901,10 @@ export function DeveloperPortalPage() {
   const collectedThisMonth = data.payments
     .filter((payment) => payment.date.slice(0, 7) === monthKey)
     .reduce((sum, payment) => sum + payment.amount, 0);
-  const annualValue = activeClients.reduce(
-    (sum, entry) => sum + monthlyFeeFor(entry) * ANNUAL_MONTHS_CHARGED,
-    0,
-  );
+  const lifetimeCount = activeClients.filter(isLifetimeLicence).length;
+  const annualValue = activeClients
+    .filter((entry) => !isLifetimeLicence(entry))
+    .reduce((sum, entry) => sum + monthlyFeeFor(entry) * ANNUAL_MONTHS_CHARGED, 0);
   const onlineCount = data.clients.filter(
     (entry) => entry.lastSeenAt && daysUntil(entry.lastSeenAt) >= -2,
   ).length;
@@ -1272,8 +1287,58 @@ export function DeveloperPortalPage() {
     setEditing(true);
   }
 
+  async function sellLifetime() {
+    if (!client) return;
+    if (isLifetimeLicence(client)) {
+      setNotice({
+        tone: "warn",
+        text: "This client already owns a lifetime licence.",
+      });
+      return;
+    }
+    const amount = monthlyFeeFor(client) * LIFETIME_MONTHS_CHARGED;
+    const expiresAt = addMonths(new Date().toISOString(), LIFETIME_TERM_MONTHS);
+    const payment: PortalPayment = {
+      id: uid("pay"),
+      clientId: client.id,
+      workshopName: client.workshopName,
+      date: new Date().toISOString(),
+      amount,
+      method: renewMethod,
+      reference: renewReference.trim() || undefined,
+      months: LIFETIME_TERM_MONTHS,
+      note: "Lifetime outright purchase — no subscription",
+    };
+    setData((prev) => ({
+      ...prev,
+      payments: [payment, ...prev.payments],
+      clients: prev.clients.map((entry) =>
+        entry.id === client.id
+          ? { ...entry, status: "Active", expiresAt, lastSeenAt: new Date().toISOString() }
+          : entry,
+      ),
+    }));
+    setRenewReference("");
+    const clientError = await pushClient({ ...client, status: "Active", expiresAt });
+    const paymentError = await pushPayment(payment);
+    const pushError = clientError ?? paymentError;
+    setNotice({
+      tone: pushError ? "error" : "ok",
+      text: pushError
+        ? `Lifetime sale saved on this device, but the master registry rejected it: ${pushError}`
+        : `${client.workshopName} now owns ${client.softwareName} outright. ${money(amount)} recorded once — no subscription or renewal.`,
+    });
+  }
+
   async function renewClient() {
     if (!client) return;
+    if (isLifetimeLicence(client)) {
+      setNotice({
+        tone: "warn",
+        text: "This client owns a lifetime licence. No renewal is due.",
+      });
+      return;
+    }
     const months = Math.max(1, Math.round(renewMonths));
     const startFrom =
       daysUntil(client.expiresAt) > 0 ? client.expiresAt : new Date().toISOString();
@@ -1355,14 +1420,19 @@ export function DeveloperPortalPage() {
       holder: tokenHolder.trim() || "RAVBsoft client",
       plan: tokenPlan,
       status: "Active",
-      expiresAt: addMonths(new Date().toISOString(), Math.max(1, tokenMonths)),
+      expiresAt: addMonths(
+        new Date().toISOString(),
+        tokenLifetime ? LIFETIME_TERM_MONTHS : Math.max(1, tokenMonths),
+      ),
       issuedAt: new Date().toISOString(),
       featureFlags: tokenFlags,
     });
     setTokenText(token);
     setNotice({
       tone: "ok",
-      text: "Signed offline activation token generated. Send it to the client owner.",
+      text: tokenLifetime
+        ? "Signed lifetime token generated. The client owns the app with no renewal or expiry."
+        : "Signed offline activation token generated. Send it to the client owner.",
     });
   }
 
@@ -1374,6 +1444,13 @@ export function DeveloperPortalPage() {
   }
 
   function reminder(clientRecord: PortalClient) {
+    if (isLifetimeLicence(clientRecord)) {
+      setNotice({
+        tone: "warn",
+        text: "This client owns a lifetime licence. No renewal reminder is needed.",
+      });
+      return;
+    }
     const link = `https://wa.me/${whatsappNumber(clientRecord.phone)}?text=${encodeURIComponent(
       `Hello ${clientRecord.ownerName}, this is RAVBsoft. The ${clientRecord.softwareName} ${clientRecord.plan} licence for ${clientRecord.workshopName} (${clientRecord.id}) expires on ${shortDate(clientRecord.expiresAt)}. Please renew to keep modules and cloud sync active.`,
     )}`;
@@ -1639,9 +1716,9 @@ export function DeveloperPortalPage() {
           <div className="developer-kpi">
             <div className="developer-kpi-icon blue"><Banknote size={17} /></div>
             <div>
-              <span>Annualised value</span>
+              <span>Annualised subscriptions</span>
               <strong>{money(annualValue)}</strong>
-              <em>{onlineCount} seen in the last 48 hours</em>
+              <em>{lifetimeCount} lifetime · {onlineCount} seen in the last 48 hours</em>
             </div>
           </div>
         </div>
@@ -1714,6 +1791,7 @@ export function DeveloperPortalPage() {
                   <tbody>
                     {filtered.map((entry) => {
                       const days = daysUntil(entry.expiresAt);
+                      const lifetime = isLifetimeLicence(entry);
                       return (
                         <tr key={entry.id}>
                           <td>
@@ -1760,7 +1838,9 @@ export function DeveloperPortalPage() {
                           </td>
                           <td>
                             <div className="cell-main">
-                              {entry.plan} · {money(monthlyFeeFor(entry))}/mo
+                              {lifetime
+                                ? `${entry.plan} · Lifetime`
+                                : `${entry.plan} · ${money(monthlyFeeFor(entry))}/mo`}
                             </div>
                             <div className="row wrap" style={{ gap: 5, marginTop: 2 }}>
                               <span className={`badge ${entry.appVersion === LATEST_APP_VERSION ? "badge-green" : "badge-amber"}`}>
@@ -1774,12 +1854,20 @@ export function DeveloperPortalPage() {
                               <span className={`badge ${statusTone(entry.status)}`}>
                                 {entry.status}
                               </span>
-                              <span className={`cell-sub ${days <= 30 ? "text-amber" : ""}`}>
-                                {shortDate(entry.expiresAt)}
-                              </span>
+                              {lifetime ? (
+                                <span className="badge badge-green">Owned outright</span>
+                              ) : (
+                                <span className={`cell-sub ${days <= 30 ? "text-amber" : ""}`}>
+                                  {shortDate(entry.expiresAt)}
+                                </span>
+                              )}
                             </div>
-                            <div className={`cell-sub ${days <= 30 ? "text-amber" : ""}`}>
-                              {days < 0 ? `${Math.abs(days)} days overdue` : `${days} days left`}
+                            <div className={`cell-sub ${!lifetime && days <= 30 ? "text-amber" : ""}`}>
+                              {lifetime
+                                ? "Lifetime licence — no renewal due"
+                                : days < 0
+                                  ? `${Math.abs(days)} days overdue`
+                                  : `${days} days left`}
                             </div>
                           </td>
                           <td>
@@ -1798,13 +1886,15 @@ export function DeveloperPortalPage() {
                                 <Pencil size={12} />
                                 Manage
                               </button>
-                              <button
-                                className="btn btn-secondary btn-sm"
-                                onClick={() => reminder(entry)}
-                                title="Send a WhatsApp renewal reminder"
-                              >
-                                <MessageCircle size={12} />
-                              </button>
+                              {!lifetime && (
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() => reminder(entry)}
+                                  title="Send a WhatsApp renewal reminder"
+                                >
+                                  <MessageCircle size={12} />
+                                </button>
+                              )}
                             </div>
                           </td>
                         </tr>
@@ -1901,11 +1991,14 @@ export function DeveloperPortalPage() {
             <div className="card-head">
               <div>
                 <h3>Licence payments</h3>
-                <p>Every renewal collected in LKR, with method and reference for reconciliation.</p>
+                <p>
+                  Every subscription renewal and lifetime sale collected in LKR, with method and
+                  reference for reconciliation.
+                </p>
               </div>
               <span className="badge badge-green">
                 <Banknote size={12} />
-                {money(data.payments.reduce((sum, payment) => sum + payment.amount, 0))} lifetime
+                {money(data.payments.reduce((sum, payment) => sum + payment.amount, 0))} all time
               </span>
             </div>
             <div className="table-wrap">
@@ -1932,7 +2025,11 @@ export function DeveloperPortalPage() {
                           {payment.note && <div className="cell-sub">{payment.note}</div>}
                         </td>
                         <td className="tiny">{payment.clientId}</td>
-                        <td>{payment.months} month{payment.months === 1 ? "" : "s"}</td>
+                        <td>
+                          {payment.months >= LIFETIME_TERM_MONTHS
+                            ? "Lifetime"
+                            : `${payment.months} month${payment.months === 1 ? "" : "s"}`}
+                        </td>
                         <td>{payment.method}</td>
                         <td className="tiny">{payment.reference ?? "—"}</td>
                         <td className="num">{money(payment.amount)}</td>
@@ -2059,9 +2156,10 @@ export function DeveloperPortalPage() {
                 <div>
                   <h3>Licence rate card</h3>
                   <p>
-                    Choose monthly, yearly or a one-time lifetime licence. Yearly billing is 12
-                    months for the price of {ANNUAL_MONTHS_CHARGED} — two months free. Each
-                    client can still carry a typed custom fee on its own record.
+                    Choose a monthly or yearly subscription, or sell the app outright with a
+                    one-time lifetime licence. Yearly billing is 12 months for the price of{" "}
+                    {ANNUAL_MONTHS_CHARGED} — two months free. Each client can still carry a
+                    typed custom fee on its own record.
                   </p>
                 </div>
                 <Wallet size={16} />
@@ -2084,17 +2182,22 @@ export function DeveloperPortalPage() {
                           {money(PLAN_PRICES[plan])}
                           <span>/month</span>
                         </div>
+                        <div className="developer-plan-billing">Monthly subscription</div>
                         <div className="developer-plan-terms">
                           <div className="developer-plan-term">
                             <span>Yearly</span>
                             <strong>{money(PLAN_PRICES[plan] * ANNUAL_MONTHS_CHARGED)}</strong>
-                            <em>2 months free</em>
+                            <em>12 months</em>
                           </div>
                           <div className="developer-plan-term">
                             <span>Lifetime</span>
                             <strong>{money(PLAN_PRICES[plan] * LIFETIME_MONTHS_CHARGED)}</strong>
                             <em>one-time</em>
                           </div>
+                        </div>
+                        <div className="developer-plan-owned">
+                          <BadgeCheck size={11} /> Lifetime is an outright purchase — no
+                          subscription
                         </div>
                         <p className="tiny">{PLAN_DESCRIPTIONS[plan]}</p>
                         <div className="tiny muted">
@@ -2104,7 +2207,15 @@ export function DeveloperPortalPage() {
                     );
                   })}
                 </div>
-                <div className="alert alert-info" style={{ marginTop: 14 }}>
+                <div className="alert alert-success" style={{ marginTop: 14 }}>
+                  <BadgeCheck />
+                  <span>
+                    <strong>Lifetime is not a subscription.</strong> The client pays the one-time
+                    price once and owns the app outright — no monthly charge, yearly renewal or
+                    expiry. Monthly and yearly plans remain recurring subscriptions.
+                  </span>
+                </div>
+                <div className="alert alert-info" style={{ marginTop: 10 }}>
                   <CircleAlert />
                   <span>
                     Open a client and edit its monthly fee to override the rate card. Renewals use
@@ -2159,17 +2270,31 @@ export function DeveloperPortalPage() {
                     </select>
                   </label>
                   <label className="field">
-                    <span className="label">Months</span>
-                    <input
-                      className="input"
-                      type="number"
-                      min={1}
-                      max={36}
-                      value={tokenMonths}
-                      onChange={(event) => setTokenMonths(Number(event.target.value))}
-                    />
+                    <span className="label">{tokenLifetime ? "Term" : "Months"}</span>
+                    {tokenLifetime ? (
+                      <input className="input" value="Lifetime — no expiry" readOnly />
+                    ) : (
+                      <input
+                        className="input"
+                        type="number"
+                        min={1}
+                        max={36}
+                        value={tokenMonths}
+                        onChange={(event) => setTokenMonths(Number(event.target.value))}
+                      />
+                    )}
                   </label>
                 </div>
+                <label className="row" style={{ gap: 7, fontSize: 12, cursor: "pointer" }}>
+                  <input
+                    type="checkbox"
+                    checked={tokenLifetime}
+                    onChange={(event) => setTokenLifetime(event.target.checked)}
+                  />
+                  <span>
+                    Lifetime purchase — outright ownership, no expiry and no subscription
+                  </span>
+                </label>
                 <div>
                   <div className="label" style={{ marginBottom: 6 }}>Enabled modules</div>
                   <div className="developer-flag-grid">
@@ -2220,7 +2345,10 @@ export function DeveloperPortalPage() {
                         Copy token
                       </button>
                       <span className="tiny muted">
-                        Valid until {shortDate(addMonths(new Date().toISOString(), tokenMonths))} · bound to {tokenInstallation.toUpperCase()}
+                        {tokenLifetime
+                          ? "Lifetime token — no expiry"
+                          : `Valid until ${shortDate(addMonths(new Date().toISOString(), tokenMonths))}`}{" "}
+                        · bound to {tokenInstallation.toUpperCase()}
                       </span>
                     </div>
                   </>
@@ -2503,15 +2631,22 @@ export function DeveloperPortalPage() {
                     </div>
                     <div>
                       <span>Plan</span>
-                      <strong>{client.plan}</strong>
+                      <strong>
+                        {client.plan}
+                        {clientIsLifetime ? " · Lifetime" : ""}
+                      </strong>
                     </div>
                     <div>
-                      <span>Expires</span>
-                      <strong>{shortDate(client.expiresAt)}</strong>
+                      <span>Licence term</span>
+                      <strong>
+                        {clientIsLifetime ? "Lifetime — no expiry" : shortDate(client.expiresAt)}
+                      </strong>
                       <em>
-                        {daysUntil(client.expiresAt) < 0
-                          ? `${Math.abs(daysUntil(client.expiresAt))} days overdue`
-                          : `${daysUntil(client.expiresAt)} days left`}
+                        {clientIsLifetime
+                          ? "Owned outright · no subscription"
+                          : daysUntil(client.expiresAt) < 0
+                            ? `${Math.abs(daysUntil(client.expiresAt))} days overdue`
+                            : `${daysUntil(client.expiresAt)} days left`}
                       </em>
                     </div>
                     <div>
@@ -2528,13 +2663,15 @@ export function DeveloperPortalPage() {
                       <Pencil size={12} />
                       Edit details
                     </button>
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => reminder(client)}
-                    >
-                      <MessageCircle size={12} />
-                      WhatsApp reminder
-                    </button>
+                    {!clientIsLifetime && (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => reminder(client)}
+                      >
+                        <MessageCircle size={12} />
+                        WhatsApp reminder
+                      </button>
+                    )}
                     <button
                       className="btn btn-soft btn-sm"
                       onClick={() => copyText(client.id, "Installation ID")}
@@ -2677,8 +2814,25 @@ export function DeveloperPortalPage() {
                   </div>
 
                   <div className="divider" />
-                  <h4 className="developer-section-title">Renew licence &amp; record payment</h4>
-                  <div className="grid cols-4" style={{ gap: 8, alignItems: "end" }}>
+                  <h4 className="developer-section-title">Licence term &amp; payments</h4>
+                  {clientIsLifetime ? (
+                    <>
+                      <div className="alert alert-success">
+                        <BadgeCheck />
+                        <span>
+                          <strong>Lifetime licence paid in full.</strong>{" "}
+                          {client.workshopName} owns {client.softwareName} outright. There is no
+                          subscription, no renewal and no expiry.
+                        </span>
+                      </div>
+                      <div className="tiny muted" style={{ marginTop: 8 }}>
+                        The one-time sale is already in the payments ledger. Use the status
+                        controls above only for support or enforcement.
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="grid cols-4" style={{ gap: 8, alignItems: "end" }}>
                     <label className="field">
                       <span className="label">Months</span>
                       <input
@@ -2723,6 +2877,19 @@ export function DeveloperPortalPage() {
                       Renew · {money(monthlyFeeFor(client) * (Math.max(1, renewMonths) === 12 ? ANNUAL_MONTHS_CHARGED : Math.max(1, renewMonths)))}
                     </button>
                   </div>
+                  <div className="row wrap" style={{ gap: 8, marginTop: 10 }}>
+                    <button className="btn btn-secondary" onClick={() => void sellLifetime()}>
+                      <BadgeCheck />
+                      Sell lifetime outright —{" "}
+                      {money(monthlyFeeFor(client) * LIFETIME_MONTHS_CHARGED)}
+                    </button>
+                    <span className="tiny muted">
+                      One payment, no subscription and no future renewals. Uses the current
+                      method and reference.
+                    </span>
+                  </div>
+                    </>
+                  )}
 
                   <div className="divider" />
                   <h4 className="developer-section-title">Offline activation token</h4>
@@ -2734,6 +2901,7 @@ export function DeveloperPortalPage() {
                         setTokenHolder(client.workshopName);
                         setTokenPlan(client.plan);
                         setTokenMonths(renewMonths);
+                        setTokenLifetime(clientIsLifetime);
                         setTokenFlags({ ...client.featureFlags });
                         setTokenText("");
                       }}
@@ -2748,18 +2916,21 @@ export function DeveloperPortalPage() {
                         setTokenHolder(client.workshopName);
                         setTokenPlan(client.plan);
                         setTokenMonths(renewMonths);
+                        setTokenLifetime(clientIsLifetime);
                         setTokenFlags({ ...client.featureFlags });
                         const token = generateOfflineToken({
                           installationId: client.id,
                           holder: client.workshopName,
                           plan: client.plan,
                           status: "Active",
-                          expiresAt: addMonths(
-                            daysUntil(client.expiresAt) > 0
-                              ? client.expiresAt
-                              : new Date().toISOString(),
-                            Math.max(1, renewMonths),
-                          ),
+                          expiresAt: clientIsLifetime
+                            ? addMonths(new Date().toISOString(), LIFETIME_TERM_MONTHS)
+                            : addMonths(
+                                daysUntil(client.expiresAt) > 0
+                                  ? client.expiresAt
+                                  : new Date().toISOString(),
+                                Math.max(1, renewMonths),
+                              ),
                           issuedAt: new Date().toISOString(),
                           featureFlags: client.featureFlags,
                         });
@@ -2767,7 +2938,7 @@ export function DeveloperPortalPage() {
                       }}
                     >
                       <KeyRound size={12} />
-                      Issue {renewMonths}-month token
+                      Issue {clientIsLifetime ? "lifetime" : `${renewMonths}-month`} token
                     </button>
                   </div>
                   {tokenText ? (

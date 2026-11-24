@@ -3584,6 +3584,30 @@ table.data tbody tr:hover {
   color: var(--muted);
   letter-spacing: 0;
 }
+.developer-plan-billing {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.developer-plan-owned {
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 6px 7px;
+  border-radius: 8px;
+  background: #eefaf2;
+  border: 1px solid #c9eed6;
+  color: #166534;
+  font-size: 9.8px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+.developer-plan-owned svg {
+  flex: 0 0 11px;
+  margin-top: 1px;
+}
 .developer-plan-terms {
   display: grid;
   gap: 4px;

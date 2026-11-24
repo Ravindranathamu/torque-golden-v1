@@ -2093,7 +2093,10 @@ export function SettingsPage() {
             <div className="card-head">
               <div>
                 <h3>Licence & activation</h3>
-                <p>30-day trial, then activate this installation with a RAVBsoft licence key.</p>
+                <p>
+                  30-day trial, then activate with a subscription licence or a one-time lifetime
+                  purchase.
+                </p>
               </div>
               <span
                 className={`badge ${
@@ -2145,16 +2148,22 @@ export function SettingsPage() {
                   <div className="kv">
                     <span>Licence expiry</span>
                     <span>
-                      {settings.licenseExpiresAt
-                        ? shortDate(settings.licenseExpiresAt)
-                        : licence.mode === "Trial"
-                          ? `${licence.daysLeft} days left`
-                          : "—"}
+                      {licence.lifetime
+                        ? "Lifetime — no expiry"
+                        : settings.licenseExpiresAt
+                          ? shortDate(settings.licenseExpiresAt)
+                          : licence.mode === "Trial"
+                            ? `${licence.daysLeft} days left`
+                            : "—"}
                     </span>
                   </div>
                   <div className="kv">
                     <span>Status</span>
-                    <span>{settings.licenseStatus ?? licence.mode}</span>
+                    <span>
+                      {licence.lifetime
+                        ? "Active — owned outright"
+                        : settings.licenseStatus ?? licence.mode}
+                    </span>
                   </div>
                   <div className="kv">
                     <span>Plan</span>
@@ -2297,9 +2306,10 @@ export function SettingsPage() {
                 <div className="divider" />
                 <div className="tiny muted">
                   Each client runs its own isolated server. The master portal can switch modules,
-                  suspend, renew or extend a licence remotely. A workshop that stays offline keeps
-                  working for {OFFLINE_GRACE_DAYS} days on the last successful check, then locks until it can sync
-                  again.
+                  suspend, renew or extend a licence remotely. Subscription licences keep working
+                  for {OFFLINE_GRACE_DAYS} days offline on the last successful check, then lock
+                  until they can sync again. Lifetime licences are owned outright and keep working
+                  without an online renewal check.
                 </div>
                 <div className="tiny muted">
                   Clock rollback is detected and forces a fresh online check before operations resume.

@@ -8,6 +8,11 @@ import { defaultFeatureFlags } from "./features";
 
 export const TRIAL_DAYS = 30;
 export const OFFLINE_GRACE_DAYS = 7;
+/**
+ * A lifetime sale is stored as a far-future expiry so it fits the existing
+ * licence schema. Anything beyond 50 years is treated as outright ownership.
+ */
+export const LIFETIME_DAYS_THRESHOLD = 365 * 50;
 export const LICENCE_PREFIX = "TRQ";
 export const OFFLINE_TOKEN_PREFIX = "TRQ2";
 const LICENCE_SECRET =
@@ -207,10 +212,18 @@ export interface LicenceInfo {
   reason?: "suspended" | "offline-expired" | "clock-rollback" | "expired" | "trial-ended";
   lastSyncedAt?: string;
   offlineGraceDaysLeft?: number;
+  /** True when the client bought the app outright and no renewal is due. */
+  lifetime?: boolean;
 }
 
 function daysLeftUntil(iso: string): number {
   return Math.ceil((new Date(iso).getTime() - Date.now()) / 86400000);
+}
+
+/** True when an expiry is only a registry placeholder for a lifetime sale. */
+export function isLifetimeExpiry(expiresAt?: string): boolean {
+  if (!expiresAt) return false;
+  return daysLeftUntil(expiresAt) > LIFETIME_DAYS_THRESHOLD;
 }
 
 export function licenceInfo(settings: WorkshopSettings): LicenceInfo {
@@ -240,6 +253,19 @@ export function licenceInfo(settings: WorkshopSettings): LicenceInfo {
       daysLeft: 0,
       status: "Suspended",
       reason: "suspended",
+      lastSyncedAt: settings.lastLicenceSyncAt,
+    };
+  }
+
+  if (isLifetimeExpiry(settings.licenseExpiresAt)) {
+    const plan = settings.licensePlan ? ` — ${settings.licensePlan}` : "";
+    return {
+      mode: "Active",
+      label: `Lifetime licence${plan} — owned outright`,
+      daysLeft: 0,
+      expiresAt: settings.licenseExpiresAt,
+      status: "Active",
+      lifetime: true,
       lastSyncedAt: settings.lastLicenceSyncAt,
     };
   }
