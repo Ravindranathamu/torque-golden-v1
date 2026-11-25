@@ -984,9 +984,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [cloud]);
 
   const loadDemo = useCallback(() => {
+    if (cloud.status !== "disabled") {
+      console.warn("Demo restore is disabled on a cloud installation.");
+      return;
+    }
     const demo = createDemoState();
     setState({ ...demo, currentUserId: null });
-  }, []);
+  }, [cloud.status]);
 
   const createWorkshop = useCallback((input: SetupInput) => {
     const owner: WorkshopUser = {
@@ -4360,6 +4364,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             ...prev.settings,
             licenseKey: clean,
             licenseActivatedAt: new Date().toISOString(),
+            licenceActivationAcknowledgedAt: undefined,
             licenseExpiresAt: new Date(payload.expiresAt).toISOString(),
             licenseHolder: payload.holder || prev.settings.licenseHolder,
             licenseStatus: payload.status,
@@ -4382,6 +4387,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           ...prev.settings,
           licenseKey: clean.toUpperCase(),
           licenseActivatedAt: new Date().toISOString(),
+          licenceActivationAcknowledgedAt: undefined,
           licenseExpiresAt: result.expiresAt,
           licenseStatus: "Active",
           lastLicenceSyncAt: new Date().toISOString(),
@@ -4411,20 +4417,28 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
     if (!result.ok) return { ok: false, message: result.message };
     const now = new Date().toISOString();
-    setState((prev) => ({
-      ...prev,
-      settings: {
-        ...prev.settings,
-        licenseStatus: result.status ?? prev.settings.licenseStatus,
-        licensePlan: result.plan ?? prev.settings.licensePlan,
-        licenseExpiresAt: result.expiresAt ?? prev.settings.licenseExpiresAt,
-        licenseHolder: result.holder ?? prev.settings.licenseHolder,
-        featureFlags: result.featureFlags ?? featureFlagsFor(prev.settings),
-        lastLicenceSyncAt: now,
-        lastLicenceServerTime: result.serverTime ?? now,
-        licenceClockRollback: false,
-      },
-    }));
+    setState((prev) => {
+      const becameActive =
+        result.status === "Active" && prev.settings.licenseStatus !== "Active";
+      return {
+        ...prev,
+        settings: {
+          ...prev.settings,
+          licenseStatus: result.status ?? prev.settings.licenseStatus,
+          licensePlan: result.plan ?? prev.settings.licensePlan,
+          licenseExpiresAt: result.expiresAt ?? prev.settings.licenseExpiresAt,
+          licenseHolder: result.holder ?? prev.settings.licenseHolder,
+          featureFlags: result.featureFlags ?? featureFlagsFor(prev.settings),
+          licenseActivatedAt: becameActive ? now : prev.settings.licenseActivatedAt,
+          licenceActivationAcknowledgedAt: becameActive
+            ? undefined
+            : prev.settings.licenceActivationAcknowledgedAt,
+          lastLicenceSyncAt: now,
+          lastLicenceServerTime: result.serverTime ?? now,
+          licenceClockRollback: false,
+        },
+      };
+    });
     return { ok: true, message: result.message };
   }, [state.settings]);
 

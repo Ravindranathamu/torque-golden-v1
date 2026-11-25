@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import QRCode from "qrcode";
 import {
   BadgeCheck,
@@ -101,6 +101,7 @@ function formatBytes(bytes: number): string {
 export function SettingsPage() {
   const {
     state,
+    cloudStatus,
     currentUser,
     updateSettings,
     loadDemo,
@@ -125,8 +126,15 @@ export function SettingsPage() {
   } = useApp();
   const { push } = useToast();
   const navigate = useNavigate();
+  const location = useLocation();
   const settings = state.settings;
-  const [tab, setTab] = useState<SettingsTab>("profile");
+  const demoControlsAllowed = cloudStatus === "disabled";
+  const requestedTab = (location.state as { tab?: SettingsTab } | null)?.tab;
+  const [tab, setTab] = useState<SettingsTab>(requestedTab ?? "profile");
+
+  useEffect(() => {
+    if (requestedTab) setTab(requestedTab);
+  }, [requestedTab]);
   const [profile, setProfile] = useState({
     companyName: settings.companyName,
     address: settings.address,
@@ -211,6 +219,9 @@ export function SettingsPage() {
   const installationId = settings.installationId || getInstallationId();
   const [syncCache, setSyncCache] = useState(() => readLicenceCache());
   const flags = featureFlagsFor(settings);
+  const licensedFlags = FEATURE_FLAGS.filter(
+    (flag) => (settings.featureFlags?.[flag.key] ?? flag.defaultEnabled) !== false,
+  );
   const supervisors = state.users.filter((user) => user.departments.includes("Supervisor"));
   const storekeepers = state.users.filter((user) => user.departments.includes("Stores"));
   const activeWorkers = state.workers.filter((worker) => worker.status === "Active");
@@ -528,6 +539,11 @@ export function SettingsPage() {
   }
 
   function runConfirmedAction() {
+    if (!demoControlsAllowed) {
+      push("Demo and reset controls are disabled on licensed cloud installations.", "error");
+      setConfirmAction(null);
+      return;
+    }
     if (confirmAction === "demo") {
       loadDemo();
       push("Demo workshop restored. Sign in with any demo account and PIN 1234.");
@@ -2184,6 +2200,38 @@ export function SettingsPage() {
                 className="card"
                 style={{ padding: 12, background: "var(--surface-2, #f8fafc)" }}
               >
+                <div className="row-between wrap" style={{ gap: 8 }}>
+                  <div>
+                    <div className="label">Modules on this licence</div>
+                    <div className="tiny muted" style={{ marginTop: 2 }}>
+                      {licence.mode === "Trial"
+                        ? "Every module is unlocked during the trial. After activation these stay available."
+                        : "Provisioned by RAVBsoft for this installation."}
+                    </div>
+                  </div>
+                  <span className="badge badge-blue">
+                    {licensedFlags.length} of {FEATURE_FLAGS.length}
+                  </span>
+                </div>
+                <div className="row wrap" style={{ gap: 5, marginTop: 9 }}>
+                  {licensedFlags.map((flag) => (
+                    <span key={flag.key} className="badge badge-slate">
+                      <BadgeCheck size={10} /> {flag.label}
+                    </span>
+                  ))}
+                  {licensedFlags.length === 0 && (
+                    <span className="tiny muted">
+                      No modules are recorded on this licence yet. RAVBsoft sets them when the
+                      installation is activated.
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              <div
+                className="card"
+                style={{ padding: 12, background: "var(--surface-2, #f8fafc)" }}
+              >
                 <div className="row-between wrap" style={{ gap: 10 }}>
                   <div>
                     <div className="label">Installation ID</div>
@@ -2791,39 +2839,57 @@ export function SettingsPage() {
               </div>
             </div>
 
-            <div className="card">
-              <div className="card-head">
-                <div>
-                  <h3>Demo & reset</h3>
-                  <p>Restore the showcase data or clear operations.</p>
+            {demoControlsAllowed ? (
+              <div className="card">
+                <div className="card-head">
+                  <div>
+                    <h3>Demo & reset</h3>
+                    <p>Restore the showcase data or clear operations.</p>
+                  </div>
+                  <Database size={18} className="muted" />
                 </div>
-                <Database size={18} className="muted" />
+                <div className="card-body stack">
+                  <div className="kv">
+                    <span>Storage key</span>
+                    <span className="mono" style={{ fontSize: 10.5 }}>{STORAGE_KEY}</span>
+                  </div>
+                  <div className="kv">
+                    <span>Mode</span>
+                    <span>{settings.demoMode ? "Demo workshop" : "Custom workshop"}</span>
+                  </div>
+                  <div className="divider" />
+                  <button className="btn btn-secondary" onClick={() => setConfirmAction("demo")}>
+                    <RefreshCcw />
+                    Restore demo workshop
+                  </button>
+                  <button className="btn btn-danger-soft" onClick={() => setConfirmAction("reset")}>
+                    <Trash2 />
+                    Clear operational data
+                  </button>
+                  <div className="tiny muted">
+                    The reset clears check-ins, jobs, tasks, parts, credits, expenses, ledger,
+                    marketing and notifications. Staff, workers, inventory, suppliers and settings
+                    are kept.
+                  </div>
+                </div>
               </div>
-              <div className="card-body stack">
-                <div className="kv">
-                  <span>Storage key</span>
-                  <span className="mono" style={{ fontSize: 10.5 }}>{STORAGE_KEY}</span>
+            ) : (
+              <div className="card">
+                <div className="card-head">
+                  <div>
+                    <h3>Demo & reset</h3>
+                    <p>Local demo controls are not available on licensed installations.</p>
+                  </div>
+                  <Lock size={18} className="muted" />
                 </div>
-                <div className="kv">
-                  <span>Mode</span>
-                  <span>{settings.demoMode ? "Demo workshop" : "Custom workshop"}</span>
-                </div>
-                <div className="divider" />
-                <button className="btn btn-secondary" onClick={() => setConfirmAction("demo")}>
-                  <RefreshCcw />
-                  Restore demo workshop
-                </button>
-                <button className="btn btn-danger-soft" onClick={() => setConfirmAction("reset")}>
-                  <Trash2 />
-                  Clear operational data
-                </button>
-                <div className="tiny muted">
-                  The reset clears check-ins, jobs, tasks, parts, credits, expenses, ledger,
-                  marketing and notifications. Staff, workers, inventory, suppliers and settings
-                  are kept.
+                <div className="card-body">
+                  <div className="tiny muted">
+                    Demo restore and operational reset are disabled here. Workshop records and
+                    licence status are managed by the connected RAVBsoft cloud installation.
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
           </div>
 
           <div className="card">
