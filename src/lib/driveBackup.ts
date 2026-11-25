@@ -1,10 +1,32 @@
-import type { AppState } from "../types";
+import type { AppState, DamagePhoto } from "../types";
 import { dateOnly } from "./utils";
 
 export interface DriveBackupResult {
   ok: boolean;
   message: string;
   filename?: string;
+}
+
+export interface DriveJobFolderResult {
+  ok: boolean;
+  message: string;
+  /** Google Drive folder ID returned by the Apps Script adapter. */
+  folderId?: string;
+  folderUrl?: string;
+}
+
+export interface DriveSettingsLike {
+  driveBackupUrl?: string;
+  driveBackupKey?: string;
+  driveBackupFolderId?: string;
+}
+
+function dataUrlParts(dataUrl: string): { data: string; mimetype: string } {
+  const comma = dataUrl.indexOf(",");
+  if (comma < 0) return { data: dataUrl, mimetype: "image/jpeg" };
+  const meta = dataUrl.slice(0, comma);
+  const mimetype = /^data:([^;]+)/.exec(meta)?.[1] || "image/jpeg";
+  return { data: dataUrl.slice(comma + 1), mimetype };
 }
 
 export function driveBackupFilename(state: AppState): string {
@@ -69,6 +91,7 @@ export async function uploadBackupToDrive(
       headers: { "Content-Type": "text/plain;charset=utf-8" },
       body: JSON.stringify({
         key: settings.driveBackupKey.trim(),
+        action: "backup",
         folderId: settings.driveBackupFolderId?.trim() || undefined,
         filename,
         content,
@@ -108,6 +131,80 @@ export async function uploadBackupToDrive(
         error instanceof Error
           ? error.message
           : "Could not reach the Google Drive backup endpoint.",
+    };
+  }
+}
+
+/**
+ * Creates a real Drive folder for an accepted job and uploads its compressed
+ * inspection photos. It reuses the daily-backup webhook and shared secret, so
+ * no Google Cloud credentials are shipped to the browser.
+ */
+export async function uploadJobPhotosToDrive(
+  jobNumber: number,
+  photos: DamagePhoto[],
+  settings: DriveSettingsLike,
+): Promise<DriveJobFolderResult> {
+  const url = settings.driveBackupUrl?.trim();
+  const key = settings.driveBackupKey?.trim();
+  if (!url) {
+    return { ok: false, message: "Add the Google Drive webhook URL first." };
+  }
+  if (!key) {
+    return { ok: false, message: "Add the Google Drive shared secret first." };
+  }
+  if (photos.length === 0) {
+    return { ok: false, message: "No inspection photos to upload." };
+  }
+
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({
+        key,
+        action: "jobFolder",
+        jobNo: String(jobNumber),
+        folderId: settings.driveBackupFolderId?.trim() || undefined,
+        photos: photos.map((photo) => {
+          const parts = dataUrlParts(photo.dataUrl);
+          return {
+            name: photo.name,
+            mimetype: parts.mimetype,
+            data: parts.data,
+          };
+        }),
+      }),
+    });
+    const text = await response.text();
+    let data: (DriveJobFolderResult & { message?: string }) | null = null;
+    try {
+      data = text ? JSON.parse(text) : null;
+    } catch {
+      data = null;
+    }
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: data?.message ?? `Drive endpoint returned HTTP ${response.status}.`,
+      };
+    }
+    if (data && data.ok === false) {
+      return { ok: false, message: data.message ?? "Drive rejected the photo upload." };
+    }
+    return {
+      ok: true,
+      message: data?.message ?? `Photos uploaded to Drive for job ${jobNumber}.`,
+      folderId: data?.folderId,
+      folderUrl: data?.folderUrl,
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message:
+        error instanceof Error
+          ? error.message
+          : "Could not reach the Google Drive endpoint.",
     };
   }
 }

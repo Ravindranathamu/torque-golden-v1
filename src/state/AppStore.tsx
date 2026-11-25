@@ -84,7 +84,7 @@ import {
   taskWorkers,
   uid,
 } from "../lib/utils";
-import { uploadBackupToDrive } from "../lib/driveBackup";
+import { uploadBackupToDrive, uploadJobPhotosToDrive } from "../lib/driveBackup";
 import { dailyWageDue, localDateKey } from "../lib/payroll";
 import {
   acceptanceMessage,
@@ -1802,6 +1802,21 @@ export function AppProvider({ children }: { children: ReactNode }) {
           { vehicleNo: job.vehicleNo, eventType: "job" },
         ),
       }));
+
+      if (data.photos.length > 0) {
+        void uploadJobPhotosToDrive(nextNum, data.photos, state.settings).then((result) => {
+          if (!result.ok || !result.folderId) return;
+          setState((prev) => ({
+            ...prev,
+            jobCards: prev.jobCards.map((entry) =>
+              entry.id === jobId
+                ? { ...entry, driveFolderId: `gdrive://${result.folderId}` }
+                : entry,
+            ),
+          }));
+        });
+      }
+
       queueWhatsApp(job.phone, acceptanceMessage(job, state.settings), state.settings);
       const ownerUser = state.users.find((entry) => entry.isOwner && entry.active);
       if (ownerUser?.phone && state.settings.whatsappOwnerNotify !== false) {
