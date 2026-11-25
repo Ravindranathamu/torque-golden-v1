@@ -1,43 +1,74 @@
 # Public demo link access control
 
-A localStorage-only demo can always be restarted by clearing browser data. To stop that, a public demo build has a fixed expiry compiled into the frontend.
+The public demo at `https://ravsoft-portal.pages.dev/dashboard` now uses a server-backed seven-day access window.
 
-## Build an expiring demo
+## How it works
 
-1. Create `.env.demo` locally:
+- The first visitor who opens the demo starts a global seven-day window.
+- The start timestamp is stored in the master Supabase project, not the browser.
+- Clearing browser storage, reinstalling the PWA, or running setup again cannot restart the window.
+- After seven days, every visitor sees **Demo access ended**.
+- Real client builds are unaffected because they have their own client Supabase project.
+
+The RPC is:
+
+```text
+POST https://<MASTER_SUPABASE_URL>/rest/v1/rpc/poll_demo_access
+```
+
+It returns:
+
+```json
+{
+  "started_at": "...",
+  "expires_at": "...",
+  "server_time": "...",
+  "allowed": true
+}
+```
+
+## Apply the migration once
+
+Run this file against the **master portal Supabase project**:
+
+```text
+supabase/migrations/20261126000300_public_demo_access.sql
+```
+
+It creates:
+
+- `public.demo_access_windows`
+- `public.poll_demo_access()`
+
+No direct table access is granted. The security-definer RPC is the only access path.
+
+## Deploy the portal demo build
+
+```powershell
+npm run deploy:portal
+```
+
+The gate automatically activates in the portal build because it has the master portal keys but no client database keys.
+
+## Optional fixed build expiry
+
+A public demo can also have a hard build expiry:
 
 ```dotenv
 VITE_DEMO_EXPIRES_AT=2026-12-31T23:59:59Z
 ```
 
-Use a UTC date/time. Choose the last day the demo should work.
-
-2. Build the demo bundle:
+Then:
 
 ```powershell
 npm run build:demo
 ```
 
-3. Deploy the generated `dist` folder to the demo Pages project.
+The effective expiry is the earlier of:
 
-After the expiry time, every route in that demo build shows **Demo access ended**. Clearing storage, reinstalling the PWA, or creating a new workshop cannot restart it.
+- the server-backed seven-day window, and
+- the fixed build expiry, if set.
 
-## Renewing the demo
+## Security note
 
-Set a newer `VITE_DEMO_EXPIRES_AT`, rebuild with `npm run build:demo`, and redeploy. Do not reuse an expired bundle.
-
-## Important security note
-
-The expiry is compiled into browser JavaScript. It stops normal users and storage-clearing, but it is **not a secret** and is not suitable for confidential data.
-
-For a stronger public deployment, also protect the demo domain with one of:
-
-- Cloudflare Access with email/password or one-time PIN
-- Cloudflare Zero Trust with an allow-list
-- Supabase Auth plus server-side workshop data
-
-For RAVBsoft sales demos, the expiring build is usually enough because the data is only showcase data.
-
-## Normal client builds
-
-Leave `VITE_DEMO_EXPIRES_AT` blank for real client builds. Client installations continue to use Supabase and the developer portal registry for licence control.
+The server-backed timestamp cannot be reset by clearing browser data. It is still a sales demo, not a confidential system. For confidential demonstrations, also protect the demo domain with Cloudflare Access or another login gate.

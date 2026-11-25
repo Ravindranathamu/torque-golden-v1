@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import { useApp, hasAnyDepartment } from "./state/AppStore";
 import { AccessDenied, AppShell, HomeRedirect } from "./components/Layout";
@@ -23,10 +23,75 @@ import { LicenceLockPage } from "./pages/LicenceLock";
 import { DeveloperPortalPage } from "./pages/DeveloperPortal";
 import { StartOrderPage } from "./pages/StartOrder";
 import { DemoAccessExpiredPage } from "./components/DemoAccessGate";
-import { demoAccessExpired, licenceInfo } from "./lib/licence";
+import { pollPublicDemoAccess, publicDemoAccessEnabled } from "./lib/demoAccess";
+import { demoAccessExpiry, demoAccessExpired, licenceInfo } from "./lib/licence";
 import { featureFlagsFor } from "./lib/features";
 import { cloudConfigured } from "./lib/supabase";
 import type { Department, FeatureFlagKey } from "./types";
+
+type DemoGateStatus = "checking" | "allowed" | "denied" | "error";
+
+interface DemoGateState {
+  status: DemoGateStatus;
+  expiry?: string;
+  message?: string;
+}
+
+function DemoAccessBoundary({ children }: { children: ReactNode }) {
+  const [gate, setGate] = useState<DemoGateState>(() => ({
+    status: publicDemoAccessEnabled() ? "checking" : "allowed",
+    expiry: demoAccessExpiry(),
+  }));
+
+  useEffect(() => {
+    if (!publicDemoAccessEnabled()) return;
+    let active = true;
+    void pollPublicDemoAccess()
+      .then((result) => {
+        if (!active) return;
+        setGate({
+          status: result.allowed ? "allowed" : "denied",
+          expiry: result.expiresAt,
+          message: result.allowed
+            ? undefined
+            : "The seven-day public demo window has ended.",
+        });
+      })
+      .catch((error: unknown) => {
+        if (!active) return;
+        setGate({
+          status: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Could not verify the public demo access period.",
+        });
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  if (demoAccessExpired()) {
+    return (
+      <DemoAccessExpiredPage
+        expiry={demoAccessExpiry()}
+        message="This demo build has reached its expiry date."
+      />
+    );
+  }
+  if (gate.status === "checking") return <DemoAccessExpiredPage status="checking" />;
+  if (gate.status !== "allowed") {
+    return (
+      <DemoAccessExpiredPage
+        status={gate.status}
+        expiry={gate.expiry}
+        message={gate.message}
+      />
+    );
+  }
+  return <>{children}</>;
+}
 
 function ProtectedShell() {
   const { state, currentUser } = useApp();
@@ -72,9 +137,9 @@ function PublicCheckInGate() {
 }
 
 export default function App() {
-  if (demoAccessExpired()) return <DemoAccessExpiredPage />;
   return (
-    <Routes>
+    <DemoAccessBoundary>
+      <Routes>
       <Route path="/setup" element={<SetupPage />} />
       <Route path="/login" element={<LoginPage />} />
       <Route path="/check-in" element={<PublicCheckInGate />} />
@@ -178,6 +243,7 @@ export default function App() {
       </Route>
 
       <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      </Routes>
+    </DemoAccessBoundary>
   );
 }
