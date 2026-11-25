@@ -1,5 +1,6 @@
 import type { Session } from "@supabase/supabase-js";
 import type {
+  AppNotification,
   AppState,
   AttendanceRecord,
   CheckIn,
@@ -218,6 +219,33 @@ export function checkInRowToPayload(row: CloudCheckInRow): CheckIn {
       ["Awaiting Approval", "Accepted", "Rejected"] as const,
       "Awaiting Approval",
     ),
+  };
+}
+
+/** Stable ID so a check-in never produces duplicate spoken notifications. */
+export function checkInNotificationId(checkInId: string): string {
+  return `ntf_checkin_${checkInId}`;
+}
+
+/**
+ * Public check-ins bypass `submitCheckIn`, so they would otherwise create no
+ * notification and stay silent. Give them the same gate notification, with a
+ * short voice line; VoiceAlertBridge appends the spoken plate number.
+ */
+export function checkInNotification(checkIn: CheckIn): AppNotification {
+  const vehicle = [checkIn.make, checkIn.model].filter(Boolean).join(" ");
+  return {
+    id: checkInNotificationId(checkIn.id),
+    departments: ["PRO"],
+    title: "New check-in waiting approval",
+    message: `${checkIn.vehicleNo}${vehicle ? ` (${vehicle})` : ""} is waiting for gate approval.`,
+    priority: "high",
+    createdAt: checkIn.createdAt,
+    read: false,
+    link: "/gate",
+    vehicleNo: checkIn.vehicleNo,
+    voiceText: "New check-in waiting approval",
+    eventType: "job",
   };
 }
 
@@ -642,8 +670,21 @@ export async function ensureCloudState(context: CloudContext): Promise<CloudStat
   const knownCheckInIds = new Set(state.checkIns.map((checkIn) => checkIn.id));
   for (const row of context.checkIns ?? []) {
     if (knownCheckInIds.has(row.id)) continue;
-    state.checkIns = [checkInRowToPayload(row), ...state.checkIns];
+    const checkIn = checkInRowToPayload(row);
+    state.checkIns = [checkIn, ...state.checkIns];
     knownCheckInIds.add(row.id);
+
+    // Recover alerts for submissions that arrived while the workshop was
+    // closed, but keep older history silent.
+    const age = row.created_at ? Date.now() - new Date(row.created_at).getTime() : Infinity;
+    if (
+      checkIn.status === "Awaiting Approval" &&
+      age >= 0 &&
+      age <= 2 * 60 * 1000 &&
+      !state.notifications.some((entry) => entry.id === checkInNotificationId(checkIn.id))
+    ) {
+      state.notifications = [checkInNotification(checkIn), ...state.notifications].slice(0, 120);
+    }
   }
   state.checkIns.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 

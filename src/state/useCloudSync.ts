@@ -6,9 +6,11 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
-import type { AppState } from "../types";
+import type { AppState, CheckIn } from "../types";
 import {
   applyCloudRow,
+  checkInNotification,
+  checkInNotificationId,
   diffRows,
   ensureCloudState,
   loadCloudContext,
@@ -184,15 +186,33 @@ export function useCloudSync(
           if (change.row?.updated_by === context.session.user.id) return;
           if (!change.row) return;
           setStateRef.current((previous) => {
+            const checkIn = change.fromCheckInsTable
+              ? (change.row?.payload as CheckIn | undefined)
+              : undefined;
+            const notificationId = checkIn ? checkInNotificationId(checkIn.id) : null;
+            const withNotification = (state: AppState): AppState => {
+              if (!checkIn || checkIn.status !== "Awaiting Approval" || notificationId === null) {
+                return state;
+              }
+              if (state.notifications.some((entry) => entry.id === notificationId)) return state;
+              return {
+                ...state,
+                notifications: [checkInNotification(checkIn), ...state.notifications].slice(
+                  0,
+                  120,
+                ),
+              };
+            };
+
             // The check_ins subscription only reports new public submissions.
             // Once a check-in exists in app_records, accept/reject must win.
             if (
               change.fromCheckInsTable &&
-              previous.checkIns.some((checkIn) => checkIn.id === change.recordId)
+              previous.checkIns.some((entry) => entry.id === change.recordId)
             ) {
-              return previous;
+              return withNotification(previous);
             }
-            return applyCloudRow(previous, change.row!);
+            return withNotification(applyCloudRow(previous, change.row!));
           });
         });
 
