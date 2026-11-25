@@ -183,7 +183,17 @@ export function useCloudSync(
           if (pending || change.deleted) return;
           if (change.row?.updated_by === context.session.user.id) return;
           if (!change.row) return;
-          setStateRef.current((previous) => applyCloudRow(previous, change.row!));
+          setStateRef.current((previous) => {
+            // The check_ins subscription only reports new public submissions.
+            // Once a check-in exists in app_records, accept/reject must win.
+            if (
+              change.fromCheckInsTable &&
+              previous.checkIns.some((checkIn) => checkIn.id === change.recordId)
+            ) {
+              return previous;
+            }
+            return applyCloudRow(previous, change.row!);
+          });
         });
 
         if (pendingRef.current.length) {

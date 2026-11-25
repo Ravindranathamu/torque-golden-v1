@@ -2,6 +2,8 @@ import type { Session } from "@supabase/supabase-js";
 import type {
   AppState,
   AttendanceRecord,
+  CheckIn,
+  CheckInStatus,
   Department,
   FeatureFlags,
   WorkshopSettings,
@@ -128,12 +130,28 @@ export interface CloudProfileRow {
   notification_preferences?: WorkshopUser["notificationPreferences"] | null;
 }
 
+export interface CloudCheckInRow {
+  id: string;
+  workshop_id: string;
+  vehicle_no: string;
+  make?: string | null;
+  model?: string | null;
+  customer_name: string;
+  phone?: string | null;
+  mileage?: number | string | null;
+  email?: string | null;
+  address?: string | null;
+  status: string;
+  created_at?: string | null;
+}
+
 export interface CloudContext {
   session: Session;
   profile: CloudProfileRow;
   workshop: CloudWorkshopRow;
   profiles: CloudProfileRow[];
   records: AppRecordRow[];
+  checkIns: CloudCheckInRow[];
 }
 
 export interface CloudStateBundle {
@@ -147,6 +165,8 @@ export interface CloudChange {
   recordId: string;
   row?: AppRecordRow;
   deleted: boolean;
+  /** True when the row came from public.check_ins rather than app_records. */
+  fromCheckInsTable?: boolean;
 }
 
 const DEPARTMENTS: Department[] = ["PRO", "Supervisor", "Cashier", "Accounting", "Stores"];
@@ -162,6 +182,43 @@ function text(value: unknown, fallback = ""): string {
 
 function oneOf<T extends string>(value: unknown, allowed: readonly T[], fallback: T): T {
   return allowed.includes(value as T) ? (value as T) : fallback;
+}
+
+/**
+ * The public check-in RPC writes to the normalised check_ins table, while the
+ * ERP reads its state from app_records. Map the server row into the same shape
+ * so a customer submission reaches the gate without a schema migration.
+ */
+export function checkInRowToPayload(row: CloudCheckInRow): CheckIn {
+  const parsedDate = row.created_at ? new Date(row.created_at) : new Date();
+  const createdAt = Number.isNaN(parsedDate.getTime())
+    ? new Date().toISOString()
+    : parsedDate.toISOString();
+  const digits = String(row.phone ?? "").replace(/\D/g, "");
+  const phone = digits.startsWith("0")
+    ? `+94${digits.slice(1)}`
+    : digits.startsWith("94")
+      ? `+${digits}`
+      : digits
+        ? `+${digits}`
+        : "";
+  return {
+    id: row.id,
+    createdAt,
+    vehicleNo: row.vehicle_no,
+    make: row.make ?? "",
+    model: row.model ?? "",
+    customerName: row.customer_name,
+    phone,
+    mileage: Number(row.mileage ?? 0),
+    email: row.email ?? undefined,
+    address: row.address ?? undefined,
+    status: oneOf<CheckInStatus>(
+      row.status,
+      ["Awaiting Approval", "Accepted", "Rejected"] as const,
+      "Awaiting Approval",
+    ),
+  };
 }
 
 export function profileToUser(profile: CloudProfileRow): WorkshopUser {
@@ -541,6 +598,12 @@ export async function loadCloudContext(): Promise<CloudContext | null> {
   if (profilesError) throw profilesError;
 
   const records = await fetchCloudRecords(typedProfile.workshop_id);
+  const { data: checkIns, error: checkInsError } = await client
+    .from("check_ins")
+    .select("*")
+    .eq("workshop_id", typedProfile.workshop_id)
+    .order("created_at", { ascending: false });
+  if (checkInsError) throw checkInsError;
 
   return {
     session,
@@ -550,6 +613,7 @@ export async function loadCloudContext(): Promise<CloudContext | null> {
       ? (profiles as CloudProfileRow[])
       : [typedProfile],
     records,
+    checkIns: (checkIns ?? []) as CloudCheckInRow[],
   };
 }
 
@@ -562,11 +626,28 @@ export async function ensureCloudState(context: CloudContext): Promise<CloudStat
       !row.deleted,
   );
 
+  const state = hasSettings ? recordsToState(context.records, fallback) : fallback;
+  state.currentUserId = context.profile.id;
+
+  // The auth profile table has no worker link. Derive it from the worker record
+  // when an older app_records user payload is missing one.
+  state.users = state.users.map((user) => {
+    if (user.workerId) return user;
+    const linkedWorker = state.workers.find((worker) => worker.userId === user.id);
+    return linkedWorker ? { ...user, workerId: linkedWorker.id } : user;
+  });
+
+  // Public check-ins land in the normalised table. Merge any that have not
+  // already been copied into app_records so the gate never misses a vehicle.
+  const knownCheckInIds = new Set(state.checkIns.map((checkIn) => checkIn.id));
+  for (const row of context.checkIns ?? []) {
+    if (knownCheckInIds.has(row.id)) continue;
+    state.checkIns = [checkInRowToPayload(row), ...state.checkIns];
+    knownCheckInIds.add(row.id);
+  }
+  state.checkIns.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
   if (!hasSettings) {
-    const state = {
-      ...fallback,
-      currentUserId: context.profile.id,
-    };
     const rows = stateToRows(state);
     await pushCloudRecords(context.workshop.id, rows);
     return {
@@ -579,14 +660,6 @@ export async function ensureCloudState(context: CloudContext): Promise<CloudStat
     };
   }
 
-  const state = recordsToState(context.records, fallback);
-  // The auth profile table has no worker link. Derive it from the worker record
-  // when an older app_records user payload is missing one.
-  state.users = state.users.map((user) => {
-    if (user.workerId) return user;
-    const linkedWorker = state.workers.find((worker) => worker.userId === user.id);
-    return linkedWorker ? { ...user, workerId: linkedWorker.id } : user;
-  });
   const canonicalInstallationId = text(context.workshop.installation_id).trim().toUpperCase();
   if (canonicalInstallationId) {
     state.settings.installationId = canonicalInstallationId;
@@ -641,8 +714,41 @@ export function subscribeCloudRecords(
     )
     .subscribe();
 
+  // New public check-ins arrive in the normalised table, not app_records.
+  const checkInsChannel = client
+    .channel(`check-ins-${workshopId}`)
+    .on(
+      "postgres_changes",
+      {
+        event: "INSERT",
+        schema: "public",
+        table: "check_ins",
+        filter: `workshop_id=eq.${workshopId}`,
+      },
+      (payload) => {
+        const row = payload.new as CloudCheckInRow;
+        if (!row?.id) return;
+        onChange({
+          collection: "checkIns",
+          recordId: row.id,
+          row: {
+            workshop_id: workshopId,
+            collection: "checkIns",
+            record_id: row.id,
+            payload: checkInRowToPayload(row),
+            sort_order: 0,
+            deleted: false,
+          },
+          deleted: false,
+          fromCheckInsTable: true,
+        });
+      },
+    )
+    .subscribe();
+
   return () => {
     void client.removeChannel(channel);
+    void client.removeChannel(checkInsChannel);
   };
 }
 
