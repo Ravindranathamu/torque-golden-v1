@@ -15,6 +15,23 @@ export { OFFLINE_GRACE_DAYS, TRIAL_DAYS } from "./licenceConfig";
 export const LIFETIME_DAYS_THRESHOLD = 365 * 50;
 export const LICENCE_PREFIX = "TRQ";
 export const OFFLINE_TOKEN_PREFIX = "TRQ2";
+
+/**
+ * Optional expiry for a PUBLIC demo deployment. It is compiled into the build,
+ * so clearing browser storage cannot restart the demo. Normal client builds
+ * leave it blank and are unaffected.
+ */
+export function demoAccessExpiry(): string | undefined {
+  return (import.meta.env.VITE_DEMO_EXPIRES_AT as string | undefined)?.trim() || undefined;
+}
+
+export function demoAccessExpired(nowMs = Date.now()): boolean {
+  const iso = demoAccessExpiry();
+  if (!iso) return false;
+  const expiresAt = Date.parse(iso);
+  if (!Number.isFinite(expiresAt)) return false;
+  return nowMs >= expiresAt;
+}
 const LICENCE_SECRET =
   (import.meta.env.VITE_LICENSE_SIGNING_KEY as string | undefined)?.trim() ||
   "TORQUE-ERP-RAVSOFT-2026";

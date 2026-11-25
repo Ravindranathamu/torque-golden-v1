@@ -22,7 +22,8 @@ import { SettingsPage } from "./pages/Settings";
 import { LicenceLockPage } from "./pages/LicenceLock";
 import { DeveloperPortalPage } from "./pages/DeveloperPortal";
 import { StartOrderPage } from "./pages/StartOrder";
-import { licenceInfo } from "./lib/licence";
+import { DemoAccessExpiredPage } from "./components/DemoAccessGate";
+import { demoAccessExpired, licenceInfo } from "./lib/licence";
 import { featureFlagsFor } from "./lib/features";
 import { cloudConfigured } from "./lib/supabase";
 import type { Department, FeatureFlagKey } from "./types";
@@ -71,6 +72,7 @@ function PublicCheckInGate() {
 }
 
 export default function App() {
+  if (demoAccessExpired()) return <DemoAccessExpiredPage />;
   return (
     <Routes>
       <Route path="/setup" element={<SetupPage />} />
