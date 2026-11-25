@@ -63,6 +63,15 @@ remotely and generate signed offline tokens. Products are now scoped: Torque ERP
 (`WS-LK-*`), ScanPlan (`SP-LK-*`) and TAW vehicle carrier (`TAW-LK-*`) each have
 their own release train and licence keys.
 
+New clients can start from the public order link at `/start`. They choose the
+product, plan and (for Torque ERP) modules, and the order lands in the portal as
+a **pending installation**. The portal then tracks provisioning, deployment,
+initial credentials and handover; the client gets a 30-day full-access trial,
+a day-15 activation prompt, and after payment the developer activates the copy
+so only the purchased modules stay unlocked. See
+[docs/ORDER_AND_LICENCE_CONTRACT.md](docs/ORDER_AND_LICENCE_CONTRACT.md) for the
+shared Torque ERP, ScanPlan and TAW contract.
+
 > Demo data lives in `localStorage`. Use **Settings → Data & backup** to export a
 > JSON snapshot before clearing your browser, or reset the demo at any time.
 > Because the demo has no shared server, the public QR check-in and the staff
@@ -553,7 +562,7 @@ In short:
   summary, publishes the latest release and requests one-click updates through
   `request_client_update(...)`. Every deploy uses additive migrations and keeps
   client data. See [docs/UPDATE_WORKFLOW.md](docs/UPDATE_WORKFLOW.md).
-- TAW-Carrier is registered with software `TAW` and a `TAW-LK-*` installation ID. Its licence keys are issued from **Fleet → TAW licence keys** and verified by `poll_taw_license`; its deploys use the TAW release train independently of Torque ERP. See the TAW-Carrier repository for its golden-master schema and deployment guide.
+- TAW-Carrier is registered with software `TAW` and a portal-assigned `TAW-LK-*` installation ID. Orders registered from **Orders** start a 30-day trial and are activated from the portal; `poll_taw_license` accepts that installation ID (and older TAW keys as a fallback). TAW deploys use the TAW release train independently of Torque ERP. See the TAW-Carrier repository for its golden-master schema and deployment guide.
 - The deploy webhook payload is
   `{ clientId, software, branch, fromVersion, toVersion, strategy: "additive-migrations", preserveClientData: true, requestedAt }`.
 

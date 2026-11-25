@@ -42,6 +42,7 @@ import { Avatar, Field, Modal } from "./ui";
 import { useToast } from "./Toast";
 import { DeveloperCredit } from "./DeveloperCredit";
 import { VoiceSettingsPanel } from "./VoiceSettings";
+import { LicencePrompts } from "./LicencePrompts";
 
 interface NavItem {
   to: string;
@@ -542,6 +543,7 @@ export function AppShell() {
       </Modal>
 
       <VoiceAlertBridge />
+      <LicencePrompts />
     </div>
   );
 }

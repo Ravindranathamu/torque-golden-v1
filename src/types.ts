@@ -757,6 +757,8 @@ export interface WorkshopSettings {
   trialStartedAt: string;
   licenseKey?: string;
   licenseActivatedAt?: string;
+  /** Set when the owner dismisses the one-time activation thank-you. */
+  licenceActivationAcknowledgedAt?: string;
   licenseExpiresAt?: string;
   licenseHolder?: string;
   installationId?: string;

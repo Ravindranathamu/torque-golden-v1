@@ -225,7 +225,7 @@ release `1.4.0` published and the licence RPC reachable by clients.
 
 ### 2.2 Apply the migrations
 
-Apply all eight files **in order**. They are additive and idempotent.
+Apply all nine files **in order**. They are additive and idempotent.
 
 | Order | File |
 | --- | --- |
@@ -236,12 +236,14 @@ Apply all eight files **in order**. They are additive and idempotent.
 | 5 | `supabase/migrations/20261114000500_app_records.sql` |
 | 6 | `supabase/migrations/20261114000600_portal_security.sql` |
 | 7 | `supabase/migrations/20261120000100_licence_pricing.sql` |
+| 8 | `supabase/migrations/20261124000200_taw_product.sql` |
+| 9 | `supabase/migrations/20261126000100_client_orders.sql` |
 
 **Option A — SQL editor:**
 
 1. Open **SQL Editor**.
 2. Paste `20261114000100_schema.sql`, click **Run**, wait for success.
-3. Repeat for `20261114000200` through `20261120000100`.
+3. Repeat for `20261114000200` through `20261126000100`.
 4. If any file fails, stop and fix the error before continuing.
 
 **Option B — `psql`:**
@@ -257,6 +259,8 @@ psql $PORTAL_DB -v ON_ERROR_STOP=1 -f .\supabase\migrations\20261114000400_porta
 psql $PORTAL_DB -v ON_ERROR_STOP=1 -f .\supabase\migrations\20261114000500_app_records.sql
 psql $PORTAL_DB -v ON_ERROR_STOP=1 -f .\supabase\migrations\20261114000600_portal_security.sql
 psql $PORTAL_DB -v ON_ERROR_STOP=1 -f .\supabase\migrations\20261120000100_licence_pricing.sql
+psql $PORTAL_DB -v ON_ERROR_STOP=1 -f .\supabase\migrations\20261124000200_taw_product.sql
+psql $PORTAL_DB -v ON_ERROR_STOP=1 -f .\supabase\migrations\20261126000100_client_orders.sql
 ```
 
 If the password contains `@`, `:`, `/` or `#`, URL-encode it before putting it
@@ -280,7 +284,7 @@ select version, name
  order by version;
 ```
 
-Expect eight rows ending in `20261124000200`. Never rename a migration that has
+Expect nine rows ending in `20261126000100`. Never rename a migration that has
 already been applied: the CLI matches history by filename. If a database was
 built from the old `0001_…` names, treat it as already migrated and stamp the
 timestamped versions before using `db push` again, or keep using Option A/B for
@@ -1415,6 +1419,72 @@ Invoke-RestMethod `
 Keep **demo mode** on until the client signs off. Every outbound message and PDF
 will route to `+94 75 575 56803`. For live sending, turn demo mode off and test
 with a consented number.
+
+### 4.11a Self-service order intake and activation
+
+The portal now has one public order link for Torque ERP, ScanPlan and TAW. The
+full contract is in
+[ORDER_AND_LICENCE_CONTRACT.md](ORDER_AND_LICENCE_CONTRACT.md); the runbook is:
+
+1. Apply `20261126000100_client_orders.sql` with the other migrations (§2.2).
+2. Open the portal and copy the **Order link** from the header or the **Orders**
+   panel. In production it is `<PORTAL_URL>/start`.
+3. The client chooses the product, plan and (Torque ERP) modules, enters the
+   business and contact details, and submits. The order appears under **Orders**
+   as **New order** and increments **Pending installations**.
+4. Review the order and confirm the fee with the client. Move it to
+   **Reviewing** and then **Provisioning**.
+5. Create the client's own Supabase project, Cloudflare Pages project, DNS,
+   WAHA/WhatsApp (only where needed) and any other accounts. Give the deployment
+   agent access, then tick each item in the provisioning checklist.
+6. Record the deployment values: generated installation ID (`WS-LK-*`,
+   `SP-LK-*` or `TAW-LK-*`), server address, app URL, Supabase URL, Cloudflare
+   project and optional deploy webhook.
+7. Choose the initial owner login, password and PIN. These are stored only on the
+   admin-only order row; clear them after the client changes the password.
+8. Deploy the golden master. **Copy deployment brief** produces the full
+   handover brief for the deployment agent; **Deploy now** posts it to the
+   webhook if one is configured and marks the order **Deployed**.
+9. Click **Register installation**. This creates the
+   `developer_client_installations` row with the same installation ID, starts the
+   30-day trial and stores the purchased module flags. The order becomes
+   **Trial**.
+10. Send the handover message (copy, WhatsApp or email) with the app link,
+    installation ID and initial login, then click **Mark link sent**.
+11. The client completes initial setup. The app runs with every module unlocked
+    for 30 days. From day 15 the owner sees a daily activation prompt.
+12. After payment, choose the paid period, method and reference in the order's
+    **Register & activate** section and click **Activate**. The portal sets the
+    installation **Active**, writes the expiry, records the payment and keeps
+    only the purchased Torque ERP modules unlocked. ScanPlan and TAW stay
+    all-feature.
+
+Verify the pipeline:
+
+```sql
+select reference, product, client_name, status, installation_id, client_id,
+       plan, monthly_fee, submitted_at, delivered_at, activated_at
+  from public.developer_client_orders
+ order by submitted_at desc;
+
+select id, workshop_name, software_name, status, plan, expires_at,
+       feature_flags, last_seen_at
+  from public.developer_client_installations
+ order by created_at desc;
+
+select client_id, paid_at, amount, method, reference, months
+  from public.developer_license_payments
+ order by paid_at desc;
+```
+
+Expected after activation: the order is `Active`, the installation is `Active`
+with the paid expiry, and exactly one matching payment row exists. A Torque ERP
+installation's `feature_flags` must match the order's `modules`; ScanPlan and TAW
+may keep their normal full-feature flags.
+
+The manual **Register client** button remains for legacy installs and for
+clients who did not use the order link. It writes the same installation row, so
+the licence and activation behaviour is identical.
 
 ### 4.11 Register the client in the portal
 

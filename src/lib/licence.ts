@@ -5,9 +5,9 @@ import type {
   WorkshopSettings,
 } from "../types";
 import { defaultFeatureFlags } from "./features";
+import { OFFLINE_GRACE_DAYS, TRIAL_DAYS } from "./licenceConfig";
 
-export const TRIAL_DAYS = 30;
-export const OFFLINE_GRACE_DAYS = 7;
+export { OFFLINE_GRACE_DAYS, TRIAL_DAYS } from "./licenceConfig";
 /**
  * A lifetime sale is stored as a far-future expiry so it fits the existing
  * licence schema. Anything beyond 50 years is treated as outright ownership.
@@ -291,13 +291,40 @@ export function licenceInfo(settings: WorkshopSettings): LicenceInfo {
     };
   }
 
+  // A remote trial carries an expiry date. Keep it in Trial mode (not Active)
+  // so the client sees the trial countdown and the activation prompt.
+  if (settings.licenseStatus === "Trial" && settings.licenseExpiresAt) {
+    const daysLeft = daysLeftUntil(settings.licenseExpiresAt);
+    const plan = settings.licensePlan ? ` · ${settings.licensePlan}` : "";
+    if (daysLeft >= 0) {
+      return {
+        mode: "Trial",
+        label: `Trial${plan} · ${daysLeft} day${daysLeft === 1 ? "" : "s"} left`,
+        daysLeft,
+        expiresAt: settings.licenseExpiresAt,
+        status: "Trial",
+        lastSyncedAt: settings.lastLicenceSyncAt,
+        offlineGraceDaysLeft: settings.lastLicenceSyncAt ? graceLeft : undefined,
+      };
+    }
+    return {
+      mode: "Expired",
+      label: "30-day trial ended",
+      daysLeft,
+      expiresAt: settings.licenseExpiresAt,
+      status: "Expired",
+      reason: "trial-ended",
+      lastSyncedAt: settings.lastLicenceSyncAt,
+    };
+  }
+
   if (settings.licenseExpiresAt) {
     const daysLeft = daysLeftUntil(settings.licenseExpiresAt);
     if (daysLeft >= 0) {
       const plan = settings.licensePlan ? ` · ${settings.licensePlan}` : "";
       return {
         mode: "Active",
-        label: `${settings.licenseStatus === "Trial" ? "Trial" : "Licensed"}${plan} · ${daysLeft} day${daysLeft === 1 ? "" : "s"} left`,
+        label: `Licensed${plan} · ${daysLeft} day${daysLeft === 1 ? "" : "s"} left`,
         daysLeft,
         expiresAt: settings.licenseExpiresAt,
         status: settings.licenseStatus ?? "Active",

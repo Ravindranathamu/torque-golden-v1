@@ -8,6 +8,7 @@ import {
   Banknote,
   CalendarClock,
   CircleAlert,
+  ClipboardList,
   Cloud,
   CloudOff,
   Copy,
@@ -50,6 +51,16 @@ import {
 } from "../lib/licence";
 import { money, shortDate, uid } from "../lib/utils";
 import { cloudConfigured, masterSupabase, portalConfigured } from "../lib/supabase";
+import {
+  orderFromRow,
+  orderToRow,
+  productHasModules,
+  readLocalOrders,
+  writeLocalOrders,
+  type ClientOrder,
+  type ClientOrderRow,
+} from "../lib/orders";
+import { OrdersPanel, type OrderPaymentMethod } from "../components/OrdersPanel";
 
 const PORTAL_KEY = "ravsoft_master_portal_v1";
 const LEGACY_PORTAL_KEY = "torque_master_portal_v1";
@@ -490,6 +501,19 @@ function flagsFromPreset(presetId: string): FeatureFlags {
   return flags;
 }
 
+/**
+ * Trial clients keep every module because featureFlagsFor() unlocks all during
+ * the trial. Once the licence is Active these flags decide what stays open.
+ */
+function flagsForOrder(order: ClientOrder): FeatureFlags {
+  if (!productHasModules(order.product)) return allFlags(true);
+  const flags = allFlags(false);
+  order.modules.forEach((key) => {
+    flags[key] = true;
+  });
+  return flags;
+}
+
 function seedPortal(): PortalData {
   const enterprise = allFlags(true);
   return {
@@ -924,7 +948,10 @@ function DeveloperPortalLogin() {
 
 export function DeveloperPortalPage() {
   const [data, setData] = useState<PortalData>(() => loadPortal());
-  const [tab, setTab] = useState<"fleet" | "payments" | "releases" | "plans" | "offline">("fleet");
+  const [orders, setOrders] = useState<ClientOrder[]>(() => readLocalOrders());
+  const [tab, setTab] = useState<
+    "orders" | "fleet" | "payments" | "releases" | "plans" | "offline"
+  >("orders");
   const [query, setQuery] = useState("");
   const [softwareFilter, setSoftwareFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<"all" | LicenceStatus>("all");
@@ -964,11 +991,6 @@ export function DeveloperPortalPage() {
   const [tokenMonths, setTokenMonths] = useState(12);
   const [tokenLifetime, setTokenLifetime] = useState(false);
   const [tokenFlags, setTokenFlags] = useState<FeatureFlags>(() => allFlags(true));
-  const [licenceKeyHolder, setLicenceKeyHolder] = useState("");
-  const [licenceKeyPlan, setLicenceKeyPlan] = useState<LicencePlan>("Growth");
-  const [licenceKeyMonths, setLicenceKeyMonths] = useState(12);
-  const [licenceKeyText, setLicenceKeyText] = useState("");
-  const [licenceKeyBusy, setLicenceKeyBusy] = useState(false);
   const [verifyText, setVerifyText] = useState("");
   const [syncing, setSyncing] = useState(false);
   const [portalSession, setPortalSession] = useState<Session | null>(null);
@@ -1022,7 +1044,7 @@ export function DeveloperPortalPage() {
     setPortalDenied(false);
     setSyncing(true);
     try {
-      const [clientsResult, paymentsResult] = await Promise.all([
+      const [clientsResult, paymentsResult, ordersResult] = await Promise.all([
         masterSupabase
           .from("developer_client_installations")
           .select("*")
@@ -1031,6 +1053,10 @@ export function DeveloperPortalPage() {
           .from("developer_license_payments")
           .select("*")
           .order("paid_at", { ascending: false }),
+        masterSupabase
+          .from("developer_client_orders")
+          .select("*")
+          .order("submitted_at", { ascending: false }),
       ]);
       if (clientsResult.error) throw clientsResult.error;
       if (paymentsResult.error) throw paymentsResult.error;
@@ -1038,6 +1064,9 @@ export function DeveloperPortalPage() {
         clients: ((clientsResult.data ?? []) as PortalClientRow[]).map(clientFromRow),
         payments: ((paymentsResult.data ?? []) as PortalPaymentRow[]).map(paymentFromRow),
       });
+      if (!ordersResult.error) {
+        setOrders(((ordersResult.data ?? []) as ClientOrderRow[]).map(orderFromRow));
+      }
       setRemoteError("");
     } catch (error) {
       setRemoteError(
@@ -1068,6 +1097,10 @@ export function DeveloperPortalPage() {
       /* storage unavailable */
     }
   }, [data]);
+
+  useEffect(() => {
+    writeLocalOrders(orders);
+  }, [orders]);
 
   useEffect(() => {
     if (!notice) return;
@@ -1140,6 +1173,10 @@ export function DeveloperPortalPage() {
   const onlineCount = productClients.filter(
     (entry) => entry.lastSeenAt && daysUntil(entry.lastSeenAt) >= -2,
   ).length;
+  const pendingOrders = orders.filter(
+    (order) => order.status !== "Active" && order.status !== "Cancelled",
+  ).length;
+  const orderLink = `${window.location.origin}${import.meta.env.BASE_URL.replace(/\/$/, "")}/start`;
 
   if (portalConfigured && !portalAuthReady) {
     return (
@@ -1347,6 +1384,185 @@ export function DeveloperPortalPage() {
       return false;
     }
     return true;
+  }
+
+  async function saveOrder(order: ClientOrder): Promise<boolean> {
+    setOrders((prev) =>
+      prev.some((entry) => entry.id === order.id)
+        ? prev.map((entry) => (entry.id === order.id ? order : entry))
+        : [order, ...prev],
+    );
+    if (!masterSupabase || !portalSession) return true;
+    const { error } = await masterSupabase
+      .from("developer_client_orders")
+      .upsert(orderToRow(order), { onConflict: "id" });
+    if (error) {
+      setNotice({
+        tone: "error",
+        text: `Order saved on this device, but the master database rejected it: ${error.message}`,
+      });
+      return false;
+    }
+    return true;
+  }
+
+  async function convertOrder(
+    order: ClientOrder,
+  ): Promise<{ ok: boolean; message: string }> {
+    const installationId = order.installationId?.trim().toUpperCase();
+    if (!installationId) {
+      return { ok: false, message: "Generate an installation ID before registering the order." };
+    }
+    if (!validInstallationId(installationId, order.product)) {
+      return {
+        ok: false,
+        message: `A ${order.product} installation ID must look like ${installationIdHint(order.product)}.`,
+      };
+    }
+    const existing = data.clients.find((entry) => entry.id === installationId);
+    const now = new Date().toISOString();
+    const keepActive = existing?.status === "Active";
+    const trialEndsAt = order.trialEndsAt ?? isoDays(order.trialDays);
+    const clientRecord: PortalClient = {
+      id: installationId,
+      workshopName: order.clientName,
+      softwareName: order.product,
+      serverAddress: order.serverAddress ?? existing?.serverAddress,
+      appVersion: existing?.appVersion ?? latestVersionFor(order.product),
+      latestVersion: latestVersionFor(order.product),
+      gitBranch:
+        existing?.gitBranch ??
+        `client/${order.clientName.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`,
+      customBuild: existing?.customBuild ?? false,
+      customisationSummary: existing?.customisationSummary,
+      deployWebhookUrl: order.deployWebhookUrl ?? existing?.deployWebhookUrl,
+      lastDeployedAt: order.deployedAt ?? existing?.lastDeployedAt,
+      lastDeployedBy: existing?.lastDeployedBy,
+      ownerName: order.contactName,
+      phone: order.phone,
+      email: order.email,
+      district: order.district,
+      address: order.address,
+      plan: order.plan,
+      monthlyFee: order.monthlyFee ?? rateFor(order.product, order.plan),
+      status: keepActive ? "Active" : "Trial",
+      expiresAt: keepActive && existing ? existing.expiresAt : trialEndsAt,
+      lastSeenAt: existing?.lastSeenAt,
+      featureFlags: flagsForOrder(order),
+      notes: [`Order ${order.reference}`, order.notes].filter(Boolean).join(" · ") || undefined,
+      createdAt: existing?.createdAt ?? now,
+    };
+    const pushError = await pushClient(clientRecord);
+    if (pushError) {
+      return {
+        ok: false,
+        message: `The master database rejected the installation: ${pushError}`,
+      };
+    }
+    setData((prev) => ({
+      ...prev,
+      clients: prev.clients.some((entry) => entry.id === installationId)
+        ? prev.clients.map((entry) => (entry.id === installationId ? clientRecord : entry))
+        : [clientRecord, ...prev.clients],
+    }));
+    const updatedOrder: ClientOrder = {
+      ...order,
+      installationId,
+      clientId: installationId,
+      status: keepActive ? "Active" : "Trial",
+      trialEndsAt,
+      deliveredAt: order.deliveredAt ?? now,
+      updatedAt: now,
+    };
+    const orderSaved = await saveOrder(updatedOrder);
+    return {
+      ok: true,
+      message: `${order.clientName} registered as ${installationId}. ${
+        keepActive
+          ? "The existing licence remains Active."
+          : `Trial ends ${shortDate(trialEndsAt)} with every module unlocked.`
+      }${orderSaved ? "" : " The order row was saved locally only."}`,
+    };
+  }
+
+  async function activateOrder(
+    order: ClientOrder,
+    months: number,
+    method: OrderPaymentMethod,
+    reference: string,
+  ): Promise<{ ok: boolean; message: string }> {
+    const clientRecord = data.clients.find(
+      (entry) => entry.id === (order.clientId ?? order.installationId),
+    );
+    if (!clientRecord) {
+      return {
+        ok: false,
+        message: "Register the installation before activating this order.",
+      };
+    }
+    const now = new Date().toISOString();
+    const expiresAt = addMonths(now, Math.max(1, months));
+    const updatedClient: PortalClient = {
+      ...clientRecord,
+      status: "Active",
+      expiresAt,
+      plan: order.plan,
+      monthlyFee: order.monthlyFee ?? clientRecord.monthlyFee,
+      featureFlags: flagsForOrder(order),
+      notes: [`Order ${order.reference} activated`, clientRecord.notes]
+        .filter(Boolean)
+        .join(" · "),
+    };
+    const pushError = await pushClient(updatedClient);
+    if (pushError) {
+      return {
+        ok: false,
+        message: `The master database rejected the activation: ${pushError}`,
+      };
+    }
+    setData((prev) => ({
+      ...prev,
+      clients: prev.clients.map((entry) =>
+        entry.id === updatedClient.id ? updatedClient : entry,
+      ),
+    }));
+
+    const amount = monthlyFeeFor(updatedClient) * months;
+    const payment: PortalPayment = {
+      id: uid("pay"),
+      clientId: updatedClient.id,
+      workshopName: updatedClient.workshopName,
+      date: now,
+      amount,
+      method,
+      reference: reference || undefined,
+      months,
+      note: `Order ${order.reference} activation`,
+    };
+    const paymentError = await pushPayment(payment);
+    if (!paymentError) {
+      setData((prev) => ({ ...prev, payments: [payment, ...prev.payments] }));
+    }
+
+    const updatedOrder: ClientOrder = {
+      ...order,
+      clientId: updatedClient.id,
+      status: "Active",
+      activatedAt: now,
+      updatedAt: now,
+    };
+    const orderSaved = await saveOrder(updatedOrder);
+    const moduleNote = productHasModules(order.product)
+      ? `${order.modules.length} purchased module${order.modules.length === 1 ? "" : "s"} unlocked`
+      : "all product features unlocked";
+    return {
+      ok: true,
+      message: `${updatedClient.workshopName} is Active until ${shortDate(expiresAt)} — ${moduleNote}. ${
+        paymentError
+          ? `Payment could not be recorded: ${paymentError}`
+          : `${money(amount)} payment recorded.`
+      }${orderSaved ? "" : " The order row was saved locally only."}`,
+    };
   }
 
   async function saveDetails() {
@@ -1729,50 +1945,7 @@ export function DeveloperPortalPage() {
     });
   }
 
-  async function issueTawLicenceKey() {
-    if (!licenceKeyHolder.trim()) {
-      setNotice({ tone: "error", text: "Enter the TAW owner or company name first." });
-      return;
-    }
-    setLicenceKeyBusy(true);
-    try {
-      if (masterSupabase && portalSession) {
-        const { data, error } = await masterSupabase.rpc("portal_issue_license_key", {
-          p_product: TAW_LABEL,
-          p_holder: licenceKeyHolder.trim(),
-          p_plan: licenceKeyPlan,
-          p_months: licenceKeyMonths,
-        });
-        if (error) throw error;
-        setLicenceKeyText(String(data));
-        setNotice({
-          tone: "ok",
-          text: `TAW ${licenceKeyPlan} key issued to ${licenceKeyHolder.trim()} and stored in the master licence registry.`,
-        });
-      } else {
-        const bytes = new Uint8Array(6);
-        crypto.getRandomValues(bytes);
-        const suffix = Array.from(bytes, (value) => value.toString(16).padStart(2, "0"))
-          .join("")
-          .toUpperCase();
-        const expiry = addMonths(new Date().toISOString(), licenceKeyMonths)
-          .slice(0, 10)
-          .replace(/-/g, "");
-        setLicenceKeyText(`TAW-${expiry}-${suffix}`);
-        setNotice({
-          tone: "warn",
-          text: "Offline demo key generated. Configure the master registry to make it verifiable from TAW Settings.",
-        });
-      }
-    } catch (error) {
-      setNotice({
-        tone: "error",
-        text: `Could not issue the TAW key: ${error instanceof Error ? error.message : "the master registry rejected the request."}`,
-      });
-    } finally {
-      setLicenceKeyBusy(false);
-    }
-  }
+
 
   function copyText(value: string, label: string) {
     void navigator.clipboard
@@ -2053,6 +2226,14 @@ export function DeveloperPortalPage() {
                 <RefreshCw className={syncing ? "spin" : undefined} />
                 {syncing ? "Publishing…" : "Publish fleet"}
               </button>
+              <button
+                className="btn btn-secondary"
+                onClick={() => copyText(orderLink, "Order link")}
+                title="Copy the public client order link"
+              >
+                <Copy />
+                Order link
+              </button>
               <button className="btn btn-primary" onClick={openRegister}>
                 <Plus />
                 Register client
@@ -2068,6 +2249,14 @@ export function DeveloperPortalPage() {
               <span>Installations</span>
               <strong>{productClients.length}</strong>
               <em>{activeClients.length} active · {suspended.length} suspended</em>
+            </div>
+          </div>
+          <div className="developer-kpi">
+            <div className="developer-kpi-icon amber"><ClipboardList size={17} /></div>
+            <div>
+              <span>Pending installations</span>
+              <strong>{pendingOrders}</strong>
+              <em>{orders.length} order{orders.length === 1 ? "" : "s"} received</em>
             </div>
           </div>
           <div className="developer-kpi">
@@ -2099,6 +2288,11 @@ export function DeveloperPortalPage() {
         <div className="developer-tabs">
           {(
             [
+              [
+                "orders",
+                pendingOrders > 0 ? `Orders (${pendingOrders})` : "Orders",
+                <ClipboardList key="orders" size={14} />,
+              ],
               ["fleet", "Fleet", <Wrench key="fleet" size={14} />],
               ["payments", "Payments", <Wallet key="payments" size={14} />],
               ["releases", "Releases", <Layers key="releases" size={14} />],
@@ -2116,6 +2310,17 @@ export function DeveloperPortalPage() {
             </button>
           ))}
         </div>
+
+        {tab === "orders" && (
+          <OrdersPanel
+            orders={orders}
+            orderLink={orderLink}
+            onSave={saveOrder}
+            onConvert={convertOrder}
+            onActivate={activateOrder}
+            onNotice={(tone, text) => setNotice({ tone, text })}
+          />
+        )}
 
         {tab === "fleet" && (
           <>
@@ -2359,92 +2564,22 @@ export function DeveloperPortalPage() {
                     POST {remoteConfigured ? `${masterUrl}/rest/v1/rpc/poll_taw_license` : "{VITE_MASTER_LICENSE_URL}/rest/v1/rpc/poll_taw_license"}
                   </div>
                   <div className="tiny muted">
-                    Torque ERP and ScanPlan poll by installation ID. TAW polls by product-scoped
-                    licence key, so a Torque key can never unlock TAW. Clients keep working for 7
-                    days without a successful check, then lock until the next online sync.
+                    Installations poll the master server outbound only. Torque ERP and ScanPlan use
+                    the installation ID; TAW uses its product-scoped licence key. Every product
+                    follows the same rule: 30-day full-access trial, day-15 activation prompt, and
+                    after payment the portal activates the copy for the paid period. Clients keep
+                    working for 7 days without a successful check, then lock until the next sync.
                   </div>
                   <div className="developer-checklist">
                     <span><ShieldCheck size={13} /> Live polling for Torque ERP, ScanPlan and TAW</span>
-                    <span><ShieldCheck size={13} /> Product-scoped licence keys</span>
+                    <span><ShieldCheck size={13} /> One activation rule across all products</span>
                     <span><ShieldCheck size={13} /> Product-scoped release trains</span>
                     <span><ShieldCheck size={13} /> WhatsApp renewal reminders</span>
                   </div>
                 </div>
               </div>
 
-              <div className="card">
-                <div className="card-head">
-                  <div>
-                    <h3>TAW licence keys</h3>
-                    <p>
-                      Issue a product-scoped key for TAW-Carrier. The key is stored on the master
-                      project and validated through <code>poll_taw_license</code>.
-                    </p>
-                  </div>
-                  <span className="badge badge-brand">{TAW_LABEL}</span>
-                </div>
-                <div className="card-body stack" style={{ gap: 10 }}>
-                  <div className="grid cols-3" style={{ gap: 10 }}>
-                    <label className="field">
-                      <span className="label">Holder / company</span>
-                      <input
-                        className="input"
-                        value={licenceKeyHolder}
-                        onChange={(event) => setLicenceKeyHolder(event.target.value)}
-                        placeholder="Carrier owner name"
-                      />
-                    </label>
-                    <label className="field">
-                      <span className="label">Plan</span>
-                      <select
-                        className="select"
-                        value={licenceKeyPlan}
-                        onChange={(event) =>
-                          setLicenceKeyPlan(event.target.value as LicencePlan)
-                        }
-                      >
-                        {PLAN_ORDER.map((plan) => (
-                          <option key={plan} value={plan}>
-                            {plan}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="field">
-                      <span className="label">Months</span>
-                      <input
-                        className="input"
-                        type="number"
-                        min={1}
-                        max={120}
-                        value={licenceKeyMonths}
-                        onChange={(event) =>
-                          setLicenceKeyMonths(Math.max(1, Number(event.target.value) || 1))
-                        }
-                      />
-                    </label>
-                  </div>
-                  <button
-                    className="btn btn-primary"
-                    disabled={licenceKeyBusy || !licenceKeyHolder.trim()}
-                    onClick={() => void issueTawLicenceKey()}
-                  >
-                    {licenceKeyBusy ? <Loader2 className="spin" size={14} /> : <KeyRound size={14} />}
-                    Issue TAW key
-                  </button>
-                  {licenceKeyText && (
-                    <div className="stack" style={{ gap: 6 }}>
-                      <div className="developer-code">{licenceKeyText}</div>
-                      <button
-                        className="btn btn-soft btn-sm"
-                        onClick={() => copyText(licenceKeyText, "TAW licence key")}
-                      >
-                        <Copy size={12} /> Copy key
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </div>
+
             </div>
           </>
         )}

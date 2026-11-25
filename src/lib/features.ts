@@ -1,4 +1,5 @@
 import type { FeatureFlagKey, FeatureFlags, WorkshopSettings } from "../types";
+import { TRIAL_DAYS } from "./licenceConfig";
 
 export interface FeatureFlagDefinition {
   key: FeatureFlagKey;
@@ -104,7 +105,36 @@ export function allFeatureFlags(enabled = true): FeatureFlags {
   }, {} as FeatureFlags);
 }
 
+/**
+ * During the 30-day trial every module is available, regardless of the flags
+ * stored on the installation. Once the licence is Active the stored flags are
+ * authoritative, so only the modules bought on the order stay unlocked.
+ */
+function trialGrantsFullAccess(settings: WorkshopSettings): boolean {
+  if (settings.demoMode) return true;
+  if (settings.licenceClockRollback) return false;
+  if (settings.licenseStatus === "Suspended" || settings.licenseStatus === "Expired") {
+    return false;
+  }
+  if (settings.licenseStatus === "Trial") {
+    if (settings.licenseExpiresAt) {
+      const end = new Date(settings.licenseExpiresAt).getTime();
+      return Number.isFinite(end) && end > Date.now();
+    }
+    const trialStart = new Date(
+      settings.trialStartedAt || settings.createdAt || 0,
+    ).getTime();
+    if (!Number.isFinite(trialStart) || trialStart <= 0) return false;
+    return Date.now() - trialStart < TRIAL_DAYS * 86400000;
+  }
+  if (settings.licenseStatus === "Active" || settings.licenseExpiresAt) return false;
+  const start = new Date(settings.trialStartedAt || settings.createdAt || 0).getTime();
+  if (!Number.isFinite(start) || start <= 0) return false;
+  return Date.now() - start < TRIAL_DAYS * 86400000;
+}
+
 export function featureFlagsFor(settings: WorkshopSettings): FeatureFlags {
+  if (trialGrantsFullAccess(settings)) return allFeatureFlags(true);
   return {
     ...defaultFeatureFlags(),
     ...(settings.featureFlags ?? {}),

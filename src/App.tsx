@@ -21,6 +21,7 @@ import { TeamPage } from "./pages/Team";
 import { SettingsPage } from "./pages/Settings";
 import { LicenceLockPage } from "./pages/LicenceLock";
 import { DeveloperPortalPage } from "./pages/DeveloperPortal";
+import { StartOrderPage } from "./pages/StartOrder";
 import { licenceInfo } from "./lib/licence";
 import { featureFlagsFor } from "./lib/features";
 import { cloudConfigured } from "./lib/supabase";
@@ -78,6 +79,7 @@ export default function App() {
       <Route path="/check-in/:slug" element={<PublicCheckInGate />} />
       <Route path="/book" element={<PublicBookingPage />} />
       <Route path="/book/:token" element={<PublicBookingPage />} />
+      <Route path="/start" element={<StartOrderPage />} />
       <Route path="/developer" element={<DeveloperPortalPage />} />
 
       <Route element={<ProtectedShell />}>
