@@ -585,7 +585,7 @@ export function deploymentBrief(order: ClientOrder): string {
     "1. Create an isolated Supabase project for this client and apply migrations 0001–0009 in order.",
     "2. Create the Cloudflare Pages project and DNS record for the client domain.",
     "3. Clone the golden master build; keep client-only code under src/custom.",
-    "4. Build with the client's VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_MASTER_LICENSE_URL and VITE_MASTER_LICENSE_ANON_KEY.",
+    "4. Build with the client's VITE_SUPABASE_URL, VITE_SUPABASE_ANON_KEY, VITE_MASTER_LICENSE_URL and VITE_MASTER_LICENSE_ANON_KEY. For TAW also set VITE_TAW_INSTALLATION_ID to the installation ID above; the client never enters a licence in the app.",
     "5. Create the owner Supabase Auth user with the initial login above, then create the workshop with the installation ID.",
     "6. Deploy the frontend, verify /manifest.webmanifest, /sw.js, the public check-in and the login screen.",
     "7. Register or update the client installation in the portal with the same installation ID and selected modules.",

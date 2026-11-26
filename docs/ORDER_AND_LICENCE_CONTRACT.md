@@ -60,8 +60,10 @@ the installation ID stored on both rows.
 Rules:
 
 - The installation ID is generated in the portal, not chosen by the client.
-- The same ID must be written to the client's own database and shown in
-  **Settings → Licence** before the first licence poll.
+- The same ID must be written to the client's own database and baked into the
+  deployed build (`VITE_TAW_INSTALLATION_ID` for TAW) before the first licence
+  poll. The client never enters or selects a licence inside the app; the owner
+  only signs in and completes initial setup.
 - The public order page must never accept an arbitrary installation ID. It only
   records the requested product; provisioning assigns the ID.
 - For ScanPlan and TAW, `modules` is always `[]`. Their activation unlocks the
@@ -213,7 +215,9 @@ Consequences:
   product's own key).
 - Copy: trial is still active, full access continues, activate to avoid
   interruption and keep the purchased modules.
-- **Activate now** opens **Settings → Licence**.
+- For Torque ERP, **Activate now** opens **Settings → Licence**. For TAW there
+  is no licence form; the message explains that RAVBsoft activates the copy from
+  the portal and the client takes no action.
 
 ### 5.4 One-time activation thank-you
 
@@ -282,12 +286,14 @@ Both repositories need the following, adapted to their own settings shape:
    `Active`.
 4. **Activation timestamp** — when the remote status becomes `Active`, set
    `licenseActivatedAt` and clear the acknowledgement.
-5. **Day-15 prompt** — owner-only, daily with a 24-hour snooze, linking to the
-   product's Licence screen.
+5. **Day-15 prompt** — owner-only, daily with a 24-hour snooze. Torque ERP links
+   to its Licence screen; TAW only informs the owner that RAVBsoft will activate
+   the copy from the portal.
 6. **Thank-you** — one-time per `licenseActivatedAt`, listing the product's
    licensed features (ScanPlan/TAW: all features).
-7. **Settings summary** — show the licensed modules/features and the installation
-   ID in the Licence tab.
+7. **Settings summary** — Torque ERP shows licensed modules in the Licence tab.
+   TAW Settings is read-only workspace status; the installation ID comes from
+   the deployment, not from a form.
 8. **No order UI inside the client app** — orders live only on the portal and the
    public `/start` page.
 
