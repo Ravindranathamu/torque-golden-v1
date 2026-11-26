@@ -2842,7 +2842,7 @@ export function SettingsPage() {
               </div>
             </div>
 
-            {localDemoControlsAllowed ? (
+            {localDemoControlsAllowed && (
               <div className="card">
                 <div className="card-head">
                   <div>
@@ -2873,39 +2873,6 @@ export function SettingsPage() {
                     The reset clears check-ins, jobs, tasks, parts, credits, expenses, ledger,
                     marketing and notifications. Staff, workers, inventory, suppliers and settings
                     are kept.
-                  </div>
-                </div>
-              </div>
-            ) : publicDemoAccessEnabled() || settings.demoMode ? (
-              <div className="card">
-                <div className="card-head">
-                  <div>
-                    <h3>Demo & reset</h3>
-                    <p>Reset controls are not available in demo mode.</p>
-                  </div>
-                  <Lock size={18} className="muted" />
-                </div>
-                <div className="card-body">
-                  <div className="tiny muted">
-                    {publicDemoAccessEnabled()
-                      ? "The public demo is time-limited by RAVBsoft. Clearing browser data will not restart or extend it."
-                      : "This workshop is running as a local demo. Reset controls are hidden to keep the showcase data intact."}
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="card">
-                <div className="card-head">
-                  <div>
-                    <h3>Demo & reset</h3>
-                    <p>Local demo controls are not available on licensed installations.</p>
-                  </div>
-                  <Lock size={18} className="muted" />
-                </div>
-                <div className="card-body">
-                  <div className="tiny muted">
-                    Demo restore and operational reset are disabled here. Workshop records and
-                    licence status are managed by the connected RAVBsoft cloud installation.
                   </div>
                 </div>
               </div>
