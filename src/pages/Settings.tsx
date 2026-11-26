@@ -51,6 +51,7 @@ import {
   TRIAL_DAYS,
 } from "../lib/licence";
 import { readLicenceCache } from "../lib/licenceSync";
+import { publicDemoAccessEnabled } from "../lib/demoAccess";
 import { FEATURE_FLAGS, MODULE_PRESETS, featureFlagsFor } from "../lib/features";
 import { checkInUrl as buildCheckInUrl, dateOnly, money, shortDate, waLink } from "../lib/utils";
 import { printPrinterTest } from "../lib/invoice";
@@ -129,6 +130,8 @@ export function SettingsPage() {
   const location = useLocation();
   const settings = state.settings;
   const demoControlsAllowed = cloudStatus === "disabled";
+  const localDemoControlsAllowed =
+    demoControlsAllowed && !settings.demoMode && !publicDemoAccessEnabled();
   const requestedTab = (location.state as { tab?: SettingsTab } | null)?.tab;
   const [tab, setTab] = useState<SettingsTab>(requestedTab ?? "profile");
 
@@ -539,8 +542,8 @@ export function SettingsPage() {
   }
 
   function runConfirmedAction() {
-    if (!demoControlsAllowed) {
-      push("Demo and reset controls are disabled on licensed cloud installations.", "error");
+    if (!localDemoControlsAllowed) {
+      push("Reset controls are disabled on demo and licensed installations.", "error");
       setConfirmAction(null);
       return;
     }
@@ -2839,7 +2842,7 @@ export function SettingsPage() {
               </div>
             </div>
 
-            {demoControlsAllowed ? (
+            {localDemoControlsAllowed ? (
               <div className="card">
                 <div className="card-head">
                   <div>
@@ -2855,7 +2858,7 @@ export function SettingsPage() {
                   </div>
                   <div className="kv">
                     <span>Mode</span>
-                    <span>{settings.demoMode ? "Demo workshop" : "Custom workshop"}</span>
+                    <span>Custom workshop</span>
                   </div>
                   <div className="divider" />
                   <button className="btn btn-secondary" onClick={() => setConfirmAction("demo")}>
@@ -2870,6 +2873,23 @@ export function SettingsPage() {
                     The reset clears check-ins, jobs, tasks, parts, credits, expenses, ledger,
                     marketing and notifications. Staff, workers, inventory, suppliers and settings
                     are kept.
+                  </div>
+                </div>
+              </div>
+            ) : publicDemoAccessEnabled() || settings.demoMode ? (
+              <div className="card">
+                <div className="card-head">
+                  <div>
+                    <h3>Demo & reset</h3>
+                    <p>Reset controls are not available in demo mode.</p>
+                  </div>
+                  <Lock size={18} className="muted" />
+                </div>
+                <div className="card-body">
+                  <div className="tiny muted">
+                    {publicDemoAccessEnabled()
+                      ? "The public demo is time-limited by RAVBsoft. Clearing browser data will not restart or extend it."
+                      : "This workshop is running as a local demo. Reset controls are hidden to keep the showcase data intact."}
                   </div>
                 </div>
               </div>

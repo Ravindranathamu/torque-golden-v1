@@ -7,6 +7,7 @@ The public demo at `https://ravsoft-portal.pages.dev/dashboard` now uses a serve
 - The first visitor who opens the demo starts a global seven-day window.
 - The start timestamp is stored in the master Supabase project, not the browser.
 - Clearing browser storage, reinstalling the PWA, or running setup again cannot restart the window.
+- The **Clear operational data** and **Restore demo workshop** buttons are hidden in demo mode.
 - After seven days, every visitor sees **Demo access ended**.
 - Real client builds are unaffected because they have their own client Supabase project.
 

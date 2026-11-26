@@ -106,6 +106,7 @@ import {
 import { defaultFeatureFlags, featureFlagsFor } from "../lib/features";
 import { mergeNotificationPreferences } from "../lib/notifications";
 import { licenceServerConfigured, pollRemoteLicence } from "../lib/licenceSync";
+import { publicDemoAccessEnabled } from "../lib/demoAccess";
 import {
   useCloudSync,
   type CloudActionResult,
@@ -7594,41 +7595,51 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const resetAll = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
-    setState((prev) => ({
-      ...prev,
-      checkIns: [],
-      jobCards: [],
-      tasks: [],
-      parts: [],
-      supplierCreditNotes: [],
-      customerCredits: [],
-      expenses: [],
-      ledger: [],
-      marketing: [],
-      notifications: [],
-      appointments: [],
-      estimates: [],
-      advancePayments: [],
-      insuranceJobs: [],
-      attendance: [],
-      staffLoans: [],
-      payslips: [],
-      wagePayouts: [],
-      serviceRecords: [],
-      bankAccounts: [],
-      bankTransactions: [],
-      pettyCash: [],
-      customerCheques: [],
-      supplierCheques: [],
-      creditPayments: [],
-      supplierReturns: [],
-      stockMovements: [],
-      workshopLoans: [],
-      workshopLoanPayments: [],
-      currentUserId: null,
-    }));
-  }, []);
+    if (cloud.status !== "disabled" || publicDemoAccessEnabled()) {
+      console.warn("Operational reset is disabled on cloud and public demo installations.");
+      return;
+    }
+    setState((prev) => {
+      if (prev.settings.demoMode) {
+        console.warn("Operational reset is disabled in demo mode.");
+        return prev;
+      }
+      localStorage.removeItem(STORAGE_KEY);
+      return {
+        ...prev,
+        checkIns: [],
+        jobCards: [],
+        tasks: [],
+        parts: [],
+        supplierCreditNotes: [],
+        customerCredits: [],
+        expenses: [],
+        ledger: [],
+        marketing: [],
+        notifications: [],
+        appointments: [],
+        estimates: [],
+        advancePayments: [],
+        insuranceJobs: [],
+        attendance: [],
+        staffLoans: [],
+        payslips: [],
+        wagePayouts: [],
+        serviceRecords: [],
+        bankAccounts: [],
+        bankTransactions: [],
+        pettyCash: [],
+        customerCheques: [],
+        supplierCheques: [],
+        creditPayments: [],
+        supplierReturns: [],
+        stockMovements: [],
+        workshopLoans: [],
+        workshopLoanPayments: [],
+        currentUserId: null,
+      };
+    });
+  }, [cloud.status]);
 
   const importState = useCallback((next: AppState) => {
     setState({ ...normaliseState(next), currentUserId: null });
